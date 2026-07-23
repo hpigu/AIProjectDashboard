@@ -1,6 +1,5 @@
 spring:
   main:
-    banner-mode: off
     web-application-type: servlet
   application:
     name: project-board
@@ -22,15 +21,13 @@ spring:
   ai:
     mcp:
       server:
-        stdio: true
+        protocol: STREAMABLE
         name: project-board
-        version: 1.0.0
+        version: 2.0.0
 
 server:
   port: ${BOARD_PORT:8080}
 
 logging:
-  pattern:
-    console: ""
   file:
     name: ${BOARD_LOG_FILE:/Users/daniel/專案/AgentDashboard/logs/board.log}

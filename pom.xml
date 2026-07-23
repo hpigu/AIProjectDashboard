@@ -7,19 +7,19 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.5</version>
+        <version>3.5.16</version>
         <relativePath/>
     </parent>
 
     <groupId>dev.aiboard</groupId>
     <artifactId>ai-project-board-backend</artifactId>
-    <version>1.0.0</version>
+    <version>2.0.0</version>
     <name>ai-project-board-backend</name>
-    <description>AI Project Board MCP Server + REST/SSE</description>
+    <description>AI Project Board MCP Server (Streamable HTTP) + REST/SSE</description>
 
     <properties>
         <java.version>21</java.version>
-        <spring-ai.version>1.0.9</spring-ai.version>
+        <spring-ai.version>1.1.8</spring-ai.version>
     </properties>
 
     <dependencyManagement>
@@ -37,7 +37,7 @@
     <dependencies>
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-mcp-server</artifactId>
+            <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
         </dependency>
 
         <dependency>
@@ -74,7 +74,7 @@
     </dependencies>
 
     <build>
-        <finalName>ai-project-board-backend-1.0.0</finalName>
+        <finalName>${project.artifactId}-${project.version}</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
