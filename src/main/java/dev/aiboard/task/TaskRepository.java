@@ -13,6 +13,14 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     List<Task> findByProjectIdAndStatusOrderBySortOrderAsc(Long projectId, String status);
 
+    @Query("SELECT t FROM Task t WHERE t.projectId = :projectId "
+            + "AND (:status IS NULL OR t.status = :status) "
+            + "AND (:category IS NULL OR t.category = :category) "
+            + "ORDER BY t.sortOrder ASC")
+    List<Task> findByProjectIdAndOptionalFilters(@Param("projectId") Long projectId,
+                                                  @Param("status") String status,
+                                                  @Param("category") String category);
+
     @Query("SELECT COALESCE(MAX(t.sortOrder), -1) FROM Task t WHERE t.projectId = :projectId")
     int findMaxSortOrder(@Param("projectId") Long projectId);
 

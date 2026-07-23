@@ -72,14 +72,18 @@ public class ProjectBoardTools {
 
     @Tool(name = "list_tasks",
             description = "查詢某專案目前的任務清單與進度。當使用者詢問專案進度、還有什麼要做、"
-                    + "或你需要了解目前狀態才能繼續規劃時呼叫。")
+                    + "或你需要了解目前狀態才能繼續規劃時呼叫。"
+                    + "帶入 category 可只列出特定類型的任務，例如 BACKEND。"
+                    + "你被指派某個角色時，用它來確認還有哪些屬於你的工作。")
     public String listTasks(
             @ToolParam(description = "專案 ID") Long projectId,
             @ToolParam(description = "任務狀態篩選：TODO / IN_PROGRESS / DONE / BLOCKED，不填代表全部",
-                    required = false) String status) {
+                    required = false) String status,
+            @ToolParam(description = "任務分類篩選：BACKEND / FRONTEND / INFRA / DOC / TEST / OTHER，不填代表全部",
+                    required = false) String category) {
         ProjectService.ProjectDto project = projectService.getById(projectId);
         List<TaskService.TaskDto> allTasks = taskService.listTasks(projectId, null);
-        List<TaskService.TaskDto> filtered = taskService.listTasks(projectId, status);
+        List<TaskService.TaskDto> filtered = taskService.listTasks(projectId, status, category);
 
         long doneCount = allTasks.stream().filter(t -> "DONE".equals(t.status())).count();
 
@@ -93,8 +97,8 @@ public class ProjectBoardTools {
         for (var entry : byStatus.entrySet()) {
             sb.append("### %s (%d)\n".formatted(entry.getKey(), entry.getValue().size()));
             for (TaskService.TaskDto task : entry.getValue()) {
-                String category = task.category() != null ? " [%s]".formatted(task.category()) : "";
-                sb.append("- #%d %s%s\n".formatted(task.id(), task.title(), category));
+                String categoryLabel = task.category() != null ? " [%s]".formatted(task.category()) : "";
+                sb.append("- #%d %s%s\n".formatted(task.id(), task.title(), categoryLabel));
             }
         }
 

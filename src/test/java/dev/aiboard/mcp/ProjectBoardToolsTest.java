@@ -77,8 +77,12 @@ class ProjectBoardToolsTest {
                 new TaskService.TaskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0),
                 new TaskService.TaskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1)
         ));
+        when(taskService.listTasks(projectId, null, null)).thenReturn(List.of(
+                new TaskService.TaskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0),
+                new TaskService.TaskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1)
+        ));
 
-        String result = tools.listTasks(projectId, null);
+        String result = tools.listTasks(projectId, null, null);
 
         assertThat(result).contains("## 個人記帳 App（#12）");
         assertThat(result).contains("進度：1/2 完成");
@@ -86,6 +90,26 @@ class ProjectBoardToolsTest {
         assertThat(result).contains("- #1 需求釐清 [DOC]");
         assertThat(result).contains("### TODO (1)");
         assertThat(result).contains("- #2 建立 schema [BACKEND]");
+    }
+
+    @Test
+    void listTasks_withCategoryFilter_onlyShowsMatchingTasks() {
+        Long projectId = 12L;
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
+        when(taskService.listTasks(projectId, null)).thenReturn(List.of(
+                new TaskService.TaskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0),
+                new TaskService.TaskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1)
+        ));
+        when(taskService.listTasks(projectId, null, "TEST")).thenReturn(List.of(
+                new TaskService.TaskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1)
+        ));
+
+        String result = tools.listTasks(projectId, null, "TEST");
+
+        assertThat(result).contains("進度：1/2 完成");
+        assertThat(result).contains("- #2 撰寫測試 [TEST]");
+        assertThat(result).doesNotContain("需求釐清");
     }
 
     @Test

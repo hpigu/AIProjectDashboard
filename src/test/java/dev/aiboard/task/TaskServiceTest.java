@@ -112,27 +112,42 @@ class TaskServiceTest {
         Long projectId = 12L;
         doNothing().when(projectService).assertExists(projectId);
         Task task = new Task(projectId, "任務 A", null, "BACKEND", 0);
-        when(taskRepository.findByProjectIdAndStatusOrderBySortOrderAsc(projectId, "TODO"))
+        when(taskRepository.findByProjectIdAndOptionalFilters(projectId, "TODO", null))
                 .thenReturn(List.of(task));
 
         List<TaskService.TaskDto> results = taskService.listTasks(projectId, "todo");
 
         assertThat(results).hasSize(1);
         assertThat(results.get(0).title()).isEqualTo("任務 A");
-        verify(taskRepository).findByProjectIdAndStatusOrderBySortOrderAsc(projectId, "TODO");
+        verify(taskRepository).findByProjectIdAndOptionalFilters(projectId, "TODO", null);
     }
 
     @Test
     void listTasks_withoutStatusFilter_returnsAll() {
         Long projectId = 12L;
         doNothing().when(projectService).assertExists(projectId);
-        when(taskRepository.findByProjectIdOrderBySortOrderAsc(projectId))
+        when(taskRepository.findByProjectIdAndOptionalFilters(projectId, null, null))
                 .thenReturn(List.of(new Task(projectId, "A", null, null, 0)));
 
         List<TaskService.TaskDto> results = taskService.listTasks(projectId, null);
 
         assertThat(results).hasSize(1);
-        verify(taskRepository).findByProjectIdOrderBySortOrderAsc(projectId);
+        verify(taskRepository).findByProjectIdAndOptionalFilters(projectId, null, null);
+    }
+
+    @Test
+    void listTasks_withCategoryFilter_delegatesToRepositoryFilter() {
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExists(projectId);
+        Task task = new Task(projectId, "任務 B", null, "TEST", 0);
+        when(taskRepository.findByProjectIdAndOptionalFilters(projectId, null, "TEST"))
+                .thenReturn(List.of(task));
+
+        List<TaskService.TaskDto> results = taskService.listTasks(projectId, null, "test");
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).category()).isEqualTo("TEST");
+        verify(taskRepository).findByProjectIdAndOptionalFilters(projectId, null, "TEST");
     }
 
     @Test

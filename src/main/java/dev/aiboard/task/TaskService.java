@@ -95,10 +95,14 @@ public class TaskService {
     }
 
     public List<TaskDto> listTasks(Long projectId, String status) {
+        return listTasks(projectId, status, null);
+    }
+
+    public List<TaskDto> listTasks(Long projectId, String status, String category) {
         projectService.assertExists(projectId);
-        List<Task> tasks = (status == null || status.isBlank())
-                ? taskRepository.findByProjectIdOrderBySortOrderAsc(projectId)
-                : taskRepository.findByProjectIdAndStatusOrderBySortOrderAsc(projectId, status.trim().toUpperCase());
+        String normalizedStatus = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
+        String normalizedCategory = (category == null || category.isBlank()) ? null : category.trim().toUpperCase();
+        List<Task> tasks = taskRepository.findByProjectIdAndOptionalFilters(projectId, normalizedStatus, normalizedCategory);
         return tasks.stream().map(this::toDto).toList();
     }
 

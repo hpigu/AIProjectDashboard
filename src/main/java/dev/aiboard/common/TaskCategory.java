@@ -5,6 +5,7 @@ public enum TaskCategory {
     FRONTEND,
     INFRA,
     DOC,
+    TEST,
     OTHER;
 
     public static TaskCategory fromStringOrOther(String value) {
