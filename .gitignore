@@ -5,3 +5,6 @@ logs/
 *.iml
 .vscode/
 .claude/settings.local.json
+.claude/worktrees/
+.codex/
+AGENTS.md
