@@ -1,0 +1,45 @@
+:root {
+  /* 底色：深靛藍灰，不用純黑（純黑在長時間注視下對比過硬） */
+  --ground:   #12151C;
+  --surface:  #1B202A;
+  --line:     #2C3441;
+  --text:     #E4E8EF;
+  --muted:    #8A93A5;
+
+  /* 狀態色：直接取自 andon 燈號慣例，非任意配色 */
+  --st-todo:     #6B7A99;  /* 待命，低彩度 */
+  --st-progress: #F2A93B;  /* 運轉中，琥珀 */
+  --st-blocked:  #E05252;  /* 停線，紅 */
+  --st-done:     #3FB98A;  /* 完成，綠 */
+
+  --font-display: 'Archivo', sans-serif;
+  --font-body: 'IBM Plex Sans', sans-serif;
+  --font-data: 'IBM Plex Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-body);
+  height: 100%;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--st-progress);
+  outline-offset: 2px;
+}

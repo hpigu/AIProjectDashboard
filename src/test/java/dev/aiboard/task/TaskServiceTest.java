@@ -1,0 +1,207 @@
+package dev.aiboard.task;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import dev.aiboard.common.BoardException;
+import dev.aiboard.event.BoardEvent;
+import dev.aiboard.event.BoardEventPublisher;
+import dev.aiboard.project.ProjectService;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class TaskServiceTest {
+
+    @Mock
+    private TaskRepository taskRepository;
+
+    @Mock
+    private TaskLogRepository taskLogRepository;
+
+    @Mock
+    private ProjectService projectService;
+
+    @Mock
+    private BoardEventPublisher eventPublisher;
+
+    private TaskService taskService;
+
+    @BeforeEach
+    void setUp() {
+        taskService = new TaskService(taskRepository, taskLogRepository, projectService, eventPublisher);
+    }
+
+    @Test
+    void createTasks_batchCreatesWithContinuedSortOrderAndLogs() {
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExists(projectId);
+        when(taskRepository.findMaxSortOrder(projectId)).thenReturn(2);
+        when(taskRepository.save(any(Task.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<TaskService.TaskInput> inputs = List.of(
+                new TaskService.TaskInput("建立資料庫 schema", null, "BACKEND"),
+                new TaskService.TaskInput("實作交易 CRUD API", "含分頁", "BACKEND"),
+                new TaskService.TaskInput("不合法分類任務", null, "NOT_A_CATEGORY")
+        );
+
+        List<TaskService.TaskDto> results = taskService.createTasks(projectId, inputs);
+
+        assertThat(results).hasSize(3);
+        assertThat(results.get(0).sortOrder()).isEqualTo(3);
+        assertThat(results.get(1).sortOrder()).isEqualTo(4);
+        assertThat(results.get(2).sortOrder()).isEqualTo(5);
+        assertThat(results.get(2).category()).isEqualTo("OTHER");
+
+        verify(taskRepository, times(3)).save(any(Task.class));
+        verify(taskLogRepository, times(3)).save(any(TaskLog.class));
+
+        ArgumentCaptor<TaskLog> logCaptor = ArgumentCaptor.forClass(TaskLog.class);
+        verify(taskLogRepository, times(3)).save(logCaptor.capture());
+        assertThat(logCaptor.getAllValues())
+                .allSatisfy(log -> {
+                    assertThat(log.getFromStatus()).isNull();
+                    assertThat(log.getToStatus()).isEqualTo(TaskStatus.TODO.name());
+                });
+    }
+
+    @Test
+    void createTasks_whenProjectDoesNotExist_throwsAndDoesNotSaveAnything() {
+        Long projectId = 999L;
+        doThrow(new BoardException("找不到專案：#999")).when(projectService).assertExists(projectId);
+
+        List<TaskService.TaskInput> inputs = List.of(new TaskService.TaskInput("任務", null, null));
+
+        assertThatThrownBy(() -> taskService.createTasks(projectId, inputs))
+                .isInstanceOf(BoardException.class);
+
+        verify(taskRepository, times(0)).save(any(Task.class));
+        verify(taskLogRepository, times(0)).save(any(TaskLog.class));
+    }
+
+    @Test
+    void createTasks_whenInputsEmpty_throwsIllegalArgumentException() {
+        assertThatThrownBy(() -> taskService.createTasks(12L, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void createTasks_whenTitleBlank_throwsIllegalArgumentException() {
+        List<TaskService.TaskInput> inputs = List.of(new TaskService.TaskInput("  ", null, null));
+
+        assertThatThrownBy(() -> taskService.createTasks(12L, inputs))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void listTasks_withStatusFilter_delegatesToRepositoryFilter() {
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExists(projectId);
+        Task task = new Task(projectId, "任務 A", null, "BACKEND", 0);
+        when(taskRepository.findByProjectIdAndStatusOrderBySortOrderAsc(projectId, "TODO"))
+                .thenReturn(List.of(task));
+
+        List<TaskService.TaskDto> results = taskService.listTasks(projectId, "todo");
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).title()).isEqualTo("任務 A");
+        verify(taskRepository).findByProjectIdAndStatusOrderBySortOrderAsc(projectId, "TODO");
+    }
+
+    @Test
+    void listTasks_withoutStatusFilter_returnsAll() {
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExists(projectId);
+        when(taskRepository.findByProjectIdOrderBySortOrderAsc(projectId))
+                .thenReturn(List.of(new Task(projectId, "A", null, null, 0)));
+
+        List<TaskService.TaskDto> results = taskService.listTasks(projectId, null);
+
+        assertThat(results).hasSize(1);
+        verify(taskRepository).findByProjectIdOrderBySortOrderAsc(projectId);
+    }
+
+    @Test
+    void updateStatus_legalTransition_writesLogAndPublishesEvent() {
+        Long taskId = 4L;
+        Long projectId = 12L;
+        Task task = new Task(projectId, "實作交易 CRUD API", null, "BACKEND", 0);
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(3L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(8L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
+
+        TaskService.TaskStatusChangeResult result = taskService.updateStatus(taskId, "IN_PROGRESS", null);
+
+        assertThat(result.changed()).isTrue();
+        assertThat(result.from()).isEqualTo(TaskStatus.TODO);
+        assertThat(result.to()).isEqualTo(TaskStatus.IN_PROGRESS);
+        assertThat(task.getStatus()).isEqualTo("IN_PROGRESS");
+
+        ArgumentCaptor<TaskLog> logCaptor = ArgumentCaptor.forClass(TaskLog.class);
+        verify(taskLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getFromStatus()).isEqualTo("TODO");
+        assertThat(logCaptor.getValue().getToStatus()).isEqualTo("IN_PROGRESS");
+
+        ArgumentCaptor<BoardEvent> eventCaptor = ArgumentCaptor.forClass(BoardEvent.class);
+        verify(eventPublisher).publish(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().type()).isEqualTo("task.status_changed");
+    }
+
+    @Test
+    void updateStatus_sameStatus_isNoOpAndDoesNotWriteLogOrPublish() {
+        Long taskId = 4L;
+        Long projectId = 12L;
+        Task task = new Task(projectId, "實作交易 CRUD API", null, "BACKEND", 0);
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(8L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
+
+        TaskService.TaskStatusChangeResult result = taskService.updateStatus(taskId, "TODO", null);
+
+        assertThat(result.changed()).isFalse();
+        verify(taskLogRepository, never()).save(any(TaskLog.class));
+        verify(eventPublisher, never()).publish(any(BoardEvent.class));
+    }
+
+    @Test
+    void updateStatus_illegalTransition_throwsBoardExceptionWithStatusesInMessage() {
+        Long taskId = 4L;
+        Long projectId = 12L;
+        Task task = new Task(projectId, "實作交易 CRUD API", null, "BACKEND", 0);
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateStatus(taskId, "DONE", null))
+                .isInstanceOf(BoardException.class)
+                .hasMessageContaining("TODO")
+                .hasMessageContaining("DONE");
+
+        verify(taskLogRepository, never()).save(any(TaskLog.class));
+        verify(eventPublisher, never()).publish(any(BoardEvent.class));
+    }
+
+    @Test
+    void updateStatus_whenTaskDoesNotExist_throwsBoardException() {
+        when(taskRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> taskService.updateStatus(999L, "DONE", null))
+                .isInstanceOf(BoardException.class);
+    }
+}

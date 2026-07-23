@@ -1,0 +1,36 @@
+spring:
+  main:
+    banner-mode: off
+    web-application-type: servlet
+  application:
+    name: project-board
+  datasource:
+    url: ${BOARD_DB_URL:jdbc:h2:file:/Users/daniel/專案/AgentDashboard/data/board;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${BOARD_DB_USER:sa}
+    password: ${BOARD_DB_PASSWORD:}
+    driver-class-name: org.h2.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  ai:
+    mcp:
+      server:
+        stdio: true
+        name: project-board
+        version: 1.0.0
+
+server:
+  port: ${BOARD_PORT:8080}
+
+logging:
+  pattern:
+    console: ""
+  file:
+    name: ${BOARD_LOG_FILE:/Users/daniel/專案/AgentDashboard/logs/board.log}
