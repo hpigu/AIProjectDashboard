@@ -36,7 +36,7 @@ const LevelOne = {
   emits: ['select'],
   template: `
     <div v-if="projects.length === 0" class="empty-state">
-      還沒有專案。在 Claude Desktop 裡說「幫我規劃一個⋯⋯」就會出現在這裡。
+      還沒有專案。在 Claude Code 或 Codex 裡說「幫我規劃一個⋯⋯」就會出現在這裡。
     </div>
     <div v-else>
       <button
