@@ -7,14 +7,14 @@ Chat 規劃專案
     │  create_project / create_tasks
     ▼
 ┌─────────────────────────┐
-│   AI Project Board       │   單一 Spring Boot 行程
-│   Streamable HTTP :8080  │   ├─ MCP server（/mcp）
+│   AI Project Board      │   單一 Spring Boot 行程
+│   Streamable HTTP :8080 │   ├─ MCP server（/mcp）
 └─────────────────────────┘   ├─ 唯讀 REST API + SSE
     ▲            ▲            └─ Vue 3 CDN 看板
     │ 認領        │ 認領
 「個人記帳 App」  「SMTP 監控工具」
 ┌──────────┐  ┌──────────┐
-│Claude Code│  │Codex CLI │
+│Claude Code│ │Codex CLI │
 └──────────┘  └──────────┘
 ```
 
