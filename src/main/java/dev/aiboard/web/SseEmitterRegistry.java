@@ -25,6 +25,11 @@ public class SseEmitterRegistry {
         emitter.onCompletion(() -> emitters.remove(emitter));
         emitter.onTimeout(() -> emitters.remove(emitter));
         emitter.onError(e -> emitters.remove(emitter));
+        try {
+            emitter.send(SseEmitter.event().name("heartbeat").data(Map.of()));
+        } catch (IOException e) {
+            emitters.remove(emitter);
+        }
         return emitter;
     }
 
