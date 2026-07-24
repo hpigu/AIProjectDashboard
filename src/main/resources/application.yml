@@ -4,7 +4,7 @@ spring:
   application:
     name: project-board
   datasource:
-    url: ${BOARD_DB_URL:jdbc:h2:file:/Users/daniel/專案/AgentDashboard/data/board;DB_CLOSE_ON_EXIT=FALSE}
+    url: ${BOARD_DB_URL:jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE}
     username: ${BOARD_DB_USER:sa}
     password: ${BOARD_DB_PASSWORD:}
     driver-class-name: org.h2.Driver
@@ -30,4 +30,4 @@ server:
 
 logging:
   file:
-    name: ${BOARD_LOG_FILE:/Users/daniel/專案/AgentDashboard/logs/board.log}
+    name: ${BOARD_LOG_FILE:./logs/board.log}
