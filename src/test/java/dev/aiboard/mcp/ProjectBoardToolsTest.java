@@ -10,6 +10,7 @@ import dev.aiboard.task.TaskService;
 import dev.aiboard.task.TaskStatus;
 
 import java.util.List;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
@@ -74,12 +75,12 @@ class ProjectBoardToolsTest {
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
         when(taskService.listTasks(projectId, null)).thenReturn(List.of(
-                new TaskService.TaskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0),
-                new TaskService.TaskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1)
+                taskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0, "docs"),
+                taskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1, null)
         ));
         when(taskService.listTasks(projectId, null, null)).thenReturn(List.of(
-                new TaskService.TaskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0),
-                new TaskService.TaskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1)
+                taskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0, "docs"),
+                taskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1, null)
         ));
 
         String result = tools.listTasks(projectId, null, null);
@@ -87,7 +88,7 @@ class ProjectBoardToolsTest {
         assertThat(result).contains("## 個人記帳 App（#12）");
         assertThat(result).contains("進度：1/2 完成");
         assertThat(result).contains("### DONE (1)");
-        assertThat(result).contains("- #1 需求釐清 [DOC]");
+        assertThat(result).contains("- #1 需求釐清 [DOC] @docs");
         assertThat(result).contains("### TODO (1)");
         assertThat(result).contains("- #2 建立 schema [BACKEND]");
     }
@@ -98,11 +99,11 @@ class ProjectBoardToolsTest {
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
         when(taskService.listTasks(projectId, null)).thenReturn(List.of(
-                new TaskService.TaskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0),
-                new TaskService.TaskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1)
+                taskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0, "docs"),
+                taskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1, null)
         ));
         when(taskService.listTasks(projectId, null, "TEST")).thenReturn(List.of(
-                new TaskService.TaskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1)
+                taskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1, null)
         ));
 
         String result = tools.listTasks(projectId, null, "TEST");
@@ -114,7 +115,8 @@ class ProjectBoardToolsTest {
 
     @Test
     void updateTaskStatus_whenChanged_returnsTransitionMessage() {
-        var taskDto = new TaskService.TaskDto(4L, 12L, "實作交易 CRUD API", null, "IN_PROGRESS", "BACKEND", 1);
+        var taskDto = taskDto(4L, 12L, "實作交易 CRUD API", null,
+                "IN_PROGRESS", "BACKEND", 1, "backend-dev");
         var projectDto = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
         var result = new TaskService.TaskStatusChangeResult(
                 taskDto, TaskStatus.IN_PROGRESS, TaskStatus.DONE, true, projectDto, 3L, 8L);
@@ -127,7 +129,8 @@ class ProjectBoardToolsTest {
 
     @Test
     void updateTaskStatus_whenNoOp_returnsUnchangedMessage() {
-        var taskDto = new TaskService.TaskDto(4L, 12L, "實作交易 CRUD API", null, "TODO", "BACKEND", 1);
+        var taskDto = taskDto(4L, 12L, "實作交易 CRUD API", null,
+                "TODO", "BACKEND", 1, null);
         var projectDto = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
         var result = new TaskService.TaskStatusChangeResult(
                 taskDto, TaskStatus.TODO, TaskStatus.TODO, false, projectDto, 0L, 8L);
@@ -136,5 +139,66 @@ class ProjectBoardToolsTest {
         String message = tools.updateTaskStatus(4L, "TODO", null);
 
         assertThat(message).isEqualTo("#4 實作交易 CRUD API：狀態已是 TODO，未變更");
+    }
+
+    @Test
+    void claimNextTask_whenClaimed_formatsTaskDetails() {
+        var project = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
+        var task = taskDto(14L, 12L, "實作交易 CRUD API", "含分頁與驗收條件",
+                "IN_PROGRESS", "BACKEND", 1, "backend-dev");
+        when(taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev"))
+                .thenReturn(TaskService.ClaimNextTaskResult.claimed(project, task, "BACKEND"));
+
+        String result = tools.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
+
+        assertThat(result).isEqualTo(
+                "已認領 #14「實作交易 CRUD API」[BACKEND]\n"
+                        + "專案：個人記帳 App（#12）\n描述／驗收條件：含分頁與驗收條件");
+    }
+
+    @Test
+    void claimNextTask_whenNoDescription_promptsToConfirmAcceptanceCriteria() {
+        var project = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
+        var task = taskDto(14L, 12L, "實作交易 CRUD API", null,
+                "IN_PROGRESS", "BACKEND", 1, "backend-dev");
+        when(taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev"))
+                .thenReturn(TaskService.ClaimNextTaskResult.claimed(project, task, "BACKEND"));
+
+        String result = tools.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
+
+        assertThat(result).contains("描述／驗收條件：（無，開工前建議跟使用者確認驗收條件）");
+    }
+
+    @Test
+    void claimNextTask_whenNoTask_returnsNormalMessage() {
+        var project = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
+        when(taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev"))
+                .thenReturn(TaskService.ClaimNextTaskResult.noTask(project, "BACKEND"));
+
+        assertThat(tools.claimNextTask("個人記帳 App", "BACKEND", "backend-dev"))
+                .isEqualTo("BACKEND 目前沒有待辦任務。");
+    }
+
+    @Test
+    void claimNextTask_whenProjectMissing_listsExistingProjects() {
+        var projects = List.of(
+                new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE"),
+                new ProjectService.ProjectDto(15L, "SMTP 監控工具", null, "ACTIVE"));
+        when(taskService.claimNextTask("個人記帳", "BACKEND", "backend-dev"))
+                .thenReturn(TaskService.ClaimNextTaskResult.projectNotFound(projects, "BACKEND"));
+
+        String result = tools.claimNextTask("個人記帳", "BACKEND", "backend-dev");
+
+        assertThat(result).contains("找不到專案「個人記帳」")
+                .contains("#12 個人記帳 App")
+                .contains("#15 SMTP 監控工具");
+    }
+
+    private static TaskService.TaskDto taskDto(Long id, Long projectId, String title,
+                                                String description, String status,
+                                                String category, Integer sortOrder,
+                                                String assignee) {
+        return new TaskService.TaskDto(id, projectId, title, description, status, category,
+                sortOrder, assignee, assignee == null ? null : LocalDateTime.now());
     }
 }

@@ -31,13 +31,15 @@ public class BoardQuery {
         }
         for (TaskService.TaskDto task : tasks) {
             columns.computeIfAbsent(task.status(), s -> new java.util.ArrayList<>())
-                    .add(new TaskCard(task.id(), task.title(), task.category(), task.sortOrder()));
+                    .add(new TaskCard(task.id(), task.title(), task.category(), task.sortOrder(),
+                            task.assignee()));
         }
 
         return new BoardView(project.id(), project.name(), project.description(), columns);
     }
 
-    public record TaskCard(Long id, String title, String category, Integer sortOrder) {
+    public record TaskCard(Long id, String title, String category, Integer sortOrder,
+                           String assignee) {
     }
 
     public record BoardView(Long id, String name, String description, Map<String, List<TaskCard>> columns) {

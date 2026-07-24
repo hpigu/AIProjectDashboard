@@ -36,7 +36,10 @@ public class ProjectBoardTools {
 
     @Tool(name = "create_tasks",
             description = "一次把多個任務加進指定專案的看板。當你完成專案拆解、要把待辦事項記錄下來時呼叫。"
-                    + "一次呼叫請帶入所有任務，不要一個一個呼叫。")
+                    + "一次呼叫請帶入所有任務，不要一個一個呼叫。"
+                    + "description 建議寫成「描述 + 驗收條件」兩段，"
+                    + "例如「實作交易 CRUD API\n驗收條件：四個端點都有、金額不接受負數」，"
+                    + "認領任務的 agent 只看得到這個欄位，寫清楚才知道何時算做完。")
     public String createTasks(
             @ToolParam(description = "專案 ID") Long projectId,
             @ToolParam(description = "任務清單，至少 1 筆，最多 50 筆") List<TaskInputPayload> tasks) {
@@ -52,9 +55,10 @@ public class ProjectBoardTools {
     }
 
     @Tool(name = "update_task_status",
-            description = "更新單一任務的狀態。開始處理某個任務時先標記 IN_PROGRESS，"
+            description = "更新單一任務的狀態。TODO 任務請先用 claim_next_task 認領，"
                     + "完成後標記 DONE，遇到阻礙標記 BLOCKED 並在 note 說明原因。"
-                    + "請在實際開始／完成工作的當下呼叫，不要等到最後才一次補登。")
+                    + "改回 TODO 會一併清空 assignee 與 claimed_at。"
+                    + "請在實際完成／卡住／歸還工作的當下呼叫，不要等到最後才一次補登。")
     public String updateTaskStatus(
             @ToolParam(description = "任務 ID") Long taskId,
             @ToolParam(description = "目標狀態：TODO / IN_PROGRESS / DONE / BLOCKED") String status,
@@ -68,6 +72,37 @@ public class ProjectBoardTools {
         return "#%d %s：%s → %s\n專案「%s」進度 %d/%d"
                 .formatted(task.id(), task.title(), result.from(), result.to(),
                         result.project().name(), result.doneCount(), result.totalCount());
+    }
+
+    @Tool(name = "claim_next_task",
+            description = "認領指定專案、指定類別中最優先的一個待辦任務。此工具會原子性地"
+                    + "把任務標記為 IN_PROGRESS 並記錄認領者，因此不會有兩個 agent"
+                    + "拿到同一個任務。認領成功後立即開始執行該任務。")
+    public String claimNextTask(
+            @ToolParam(description = "專案名稱，精確比對但不分大小寫") String projectName,
+            @ToolParam(description = "任務分類：BACKEND / FRONTEND / TEST / INFRA / DOC / OTHER")
+                    String category,
+            @ToolParam(description = "認領者角色名，例如 backend-dev") String assignee) {
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask(projectName, category, assignee);
+        if (!result.projectFound()) {
+            String projects = result.availableProjects().isEmpty()
+                    ? "（看板上目前沒有專案）"
+                    : result.availableProjects().stream()
+                            .map(p -> "#%d %s".formatted(p.id(), p.name()))
+                            .collect(Collectors.joining("、"));
+            return "找不到專案「%s」。看板上目前有：\n%s".formatted(projectName, projects);
+        }
+        if (!result.claimed()) {
+            return "%s 目前沒有待辦任務。".formatted(result.category());
+        }
+
+        TaskService.TaskDto task = result.task();
+        String description = task.description() == null || task.description().isBlank()
+                ? "（無，開工前建議跟使用者確認驗收條件）" : task.description();
+        return "已認領 #%d「%s」[%s]\n專案：%s（#%d）\n描述／驗收條件：%s"
+                .formatted(task.id(), task.title(), task.category(),
+                        result.project().name(), result.project().id(), description);
     }
 
     @Tool(name = "list_tasks",
@@ -98,7 +133,9 @@ public class ProjectBoardTools {
             sb.append("### %s (%d)\n".formatted(entry.getKey(), entry.getValue().size()));
             for (TaskService.TaskDto task : entry.getValue()) {
                 String categoryLabel = task.category() != null ? " [%s]".formatted(task.category()) : "";
-                sb.append("- #%d %s%s\n".formatted(task.id(), task.title(), categoryLabel));
+                String assigneeLabel = task.assignee() != null ? " @" + task.assignee() : "";
+                sb.append("- #%d %s%s%s\n"
+                        .formatted(task.id(), task.title(), categoryLabel, assigneeLabel));
             }
         }
 

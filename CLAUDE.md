@@ -1,305 +1,116 @@
-# AI Project Board — MCP Server + 唯讀 Web 看板
+# AI Project Board — R5 開發規則
 
-Claude Code（多個並行 session）透過 Streamable HTTP 把 AI 規劃出來的專案與任務
-寫進資料庫看板；同一個行程也用內嵌 Tomcat 提供唯讀 REST API + SSE，給一個零建置
-的 Vue 3 前端即時顯示進度。
+本 repo 是一個集中式 AI 專案看板。單一 Spring Boot 行程同時提供：
 
-## 架構：單一常駐行程，Streamable HTTP transport（R4 起）
+- Streamable HTTP MCP server：`http://127.0.0.1:8080/mcp`
+- 唯讀 REST API 與 SSE
+- 零建置 Vue 3 CDN 看板
 
-R1/R2 用 stdio，每個 MCP client 各自 spawn 一個 server 行程——多 agent 協作時
-第二個 client 連進來就會撞上 H2 file lock 直接啟動失敗。R4 換成
-**Streamable HTTP**（`spring-ai-starter-mcp-server-webmvc`，
-`spring.ai.mcp.server.protocol: STREAMABLE`，端點 `/mcp`），單一行程手動啟動、
-常駐執行，任意數量的 client 都能同時連進來呼叫工具。已用「三個並行 HTTP 請求
-同時對 `/mcp` 發 `initialize`」與「三個獨立 Claude Code session 同時呼叫
-`list_tasks`」驗證過。
+一個看板服務所有專案。使用者明示專案名稱，client 透過
+`claim_next_task(projectName, category, assignee)` 原子認領工作；不得用 git
+remote 或目前目錄猜測專案。
 
-**不再由 Claude Desktop / Claude Code 自動 spawn**，改成：
+## 啟動與連線
 
 ```bash
 ./mvnw clean package
 java -jar target/ai-project-board-backend-2.0.0.jar
 ```
 
-行程必須手動啟動且保持常駐，8080 這個正式看板行程結束畫面就跟著沒了。
-
-`BoardEventPublisher` 介面只有 `InProcessEventPublisher`（包
-`ApplicationEventPublisher`）一種實作，R2 討論的雙行程/outbox 方案已隨 stdio
-一起淘汰，不需要再考慮。
-
-### Claude Code 接線
+正式服務固定使用 `:8080` 與預設 `data/board`。開發驗證不得連入正式資料庫，
+必須外部化 port、資料庫與 log：
 
 ```bash
-claude mcp add --transport http board http://127.0.0.1:8080/mcp --scope project
+BOARD_PORT=18080 \
+BOARD_DB_URL='jdbc:h2:file:./data/dev-r5;DB_CLOSE_ON_EXIT=FALSE' \
+BOARD_LOG_FILE='./logs/dev-r5.log' \
+java -jar target/ai-project-board-backend-2.0.0.jar
 ```
 
-`--scope project` 寫入 repo 根目錄的 `.mcp.json`（已提交），worktree 建立時
-自動繼承，不必逐一設定。
+Codex 全域 MCP：
 
-### Claude Desktop 接線（選配，規劃討論用）
-
-Claude Desktop 只認 stdio 型設定，連不上 `http://127.0.0.1:8080/mcp`，需要
-`mcp-remote` 橋接：
-
-```json
-{
-  "mcpServers": {
-    "board": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://127.0.0.1:8080/mcp", "--allow-http"]
-    }
-  }
-}
+```toml
+[mcp_servers.board]
+url = "http://127.0.0.1:8080/mcp"
 ```
 
-寫進 `~/Library/Application Support/Claude/claude_desktop_config.json`，
-完全重啟 Claude Desktop 生效。**這條路徑是選配，本輪驗收不依賴它。**
+## MCP 工具與認領協定
 
-## Worktree 佈局與 port / 資料庫分配（最容易忘）
+- `create_project`、`create_tasks`：chat 規劃階段建立看板內容。
+- `list_tasks`：列出任務、category 與 assignee。
+- `claim_next_task`：依專案名稱與 category 認領 `sort_order` 最小的 TODO。
+- `update_task_status`：完成、阻塞或歸還任務；回 TODO 時清空認領資料。
 
-```
-AgentDashboard/                main         :8080  ./data/board       ← 正式看板
-AgentDashboard-wt/backend/     feat/backend  :8081  ./data/dev-backend  agent 測試用
-AgentDashboard-wt/frontend/    feat/frontend :8082  ./data/dev-frontend agent 測試用
-AgentDashboard-wt/qa/          feat/qa       :8083  ./data/dev-qa       agent 測試用
-```
+認領必須使用條件式 UPDATE，不得改成先查後存或悲觀鎖：
 
-建立指令：
-
-```bash
-cd AgentDashboard
-git worktree add ../AgentDashboard-wt/backend  -b feat/backend
-git worktree add ../AgentDashboard-wt/frontend -b feat/frontend
-git worktree add ../AgentDashboard-wt/qa       -b feat/qa
+```sql
+UPDATE task
+   SET status = 'IN_PROGRESS',
+       assignee = :assignee,
+       claimed_at = :now,
+       updated_at = :now
+ WHERE id = :id
+   AND status = 'TODO'
 ```
 
-**⚠️ `8080` 與 `./data/board` 屬於正式看板，任何 agent 在任何情況下都不得佔用
-或連入。** agent 在自己的 worktree 啟動應用測試時，必須帶上對應的環境變數：
+影響一筆才算成功；零筆代表任務已被搶走，重新取候選任務，最多三次。
+`SseEmitterRegistry` 使用 `@TransactionalEventListener(AFTER_COMMIT)`，不得在
+交易提交前向瀏覽器發出狀態事件。
 
-```bash
-BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-backend;DB_CLOSE_ON_EXIT=FALSE' \
-  ./mvnw spring-boot:run
-```
+狀態與認領資料必須符合：
 
-不帶這兩個環境變數啟動，預設會搶 8080 跟 `./data/board`，直接把正式看板弄掛。
+- `TODO`：`assignee`、`claimed_at` 都是 NULL。
+- `IN_PROGRESS`：兩者都有值。
+- `BLOCKED`、`DONE`：保留原認領者。
 
-`.gitignore` 已包含整個 `data/`、`logs/`、`target/`（不是特定副檔名），三個
-worktree 的測試資料庫才不會互相污染或進版控。
+`task` 沒有獨立的「驗收條件」欄位。規劃階段用 `create_tasks` 時，
+`description` 建議寫成「描述 + 驗收條件」兩段（例如
+`實作交易 CRUD API\n驗收條件：四個端點都有、金額不接受負數`）——
+`claim_next_task` 認領成功時會把整個 `description` 印給 agent，
+這是 agent 唯一看得到的任務細節來源，寫清楚才知道何時算做完。
+這是規劃慣例，不是 schema 要求。
 
-**subagent 不會有自己的工作目錄**，與父 session 共用 cwd——「多個 subagent
-自動各跑一個 worktree」做不到。多 agent 協作的實際運作方式是三個獨立的
-Claude Code session，各自開在自己的 worktree：
+## 分層
 
-```
-終端機 1: cd AgentDashboard-wt/backend  && claude
-終端機 2: cd AgentDashboard-wt/frontend && claude
-終端機 3: cd AgentDashboard-wt/qa       && claude
-```
+- `mcp/` 只依賴 Service，負責工具參數、呼叫與文字格式，不注入 Repository。
+- Service 不得依賴 MCP 型別；業務規則與交易都在 Service。
+- `web/` 是唯讀 read model，可直接查 Repository；禁止新增 POST/PUT/DELETE。
+- Entity 不可外洩到 MCP 或 web 回傳，跨層使用 record DTO。
+- migration 使用標準 SQL；主鍵 BIGINT、時間 TIMESTAMP。
 
-## 路徑所有權（合併前不撞車的關鍵）
+## 前端
 
-| 檔案/目錄 | 誰能改 |
-|---|---|
-| `src/main/java/**`、`src/main/resources/db/migration/**` | backend-dev |
-| `src/main/resources/static/**` | frontend-dev |
-| `src/test/**` | qa |
-| `pom.xml`、`application.yml`、`CLAUDE.md`、`.claude/agents/**` | **只有 PM** |
+前端固定是 Vue 3 global CDN + `index.html`、`app.js`、`tokens.css`，不引入 npm、
+Vite、SFC、TypeScript、Pinia 或 Router。維持 Andon 狀態板風格、既有字體與
+design tokens。IN_PROGRESS 與 BLOCKED 卡片用 `--muted`、IBM Plex Mono 顯示
+`@assignee`。
 
-agent 需要動到「只有 PM」那幾個檔案時，一律標記 BLOCKED + note 說明需求，
-不要自己動手——這是刻意的瓶頸，這幾個檔案的改動會影響所有人。
+`TransitionGroup` 必須保留：
 
-合併前用 `git diff --name-only main..feat/backend` 檢查路徑，出現不屬於該
-agent 的路徑就退回重做。
+- `.column-body { position: relative; }`
+- `.task-leave-active { position: absolute; }`
+- `<level-two :key="currentProjectId">`
 
-## `.claude/agents/` 三份定義
-
-`backend-dev.md` / `frontend-dev.md` / `qa.md` 提交進版控，所有 worktree
-共享。各自的 `tools:` frontmatter 明寫了 `mcp__board__list_tasks`、
-`mcp__board__update_task_status` 等——**明寫 `tools` 時 subagent 不會自動繼承
-MCP 工具，必須手動列出要用的 `mcp__<server>__<tool>`**，已用「在 backend
-worktree 開新 session、叫用 backend-dev、呼叫 `mcp__board__list_tasks`」驗證
-過確實能看到工具。
-
-新增/修改 agent 定義後，務必比照同樣的方式實測一次，別假設 tools 清單會自動
-生效。
-
-## 看板整合協定
-
-```
-PM 規劃 → create_tasks（含 category）
-    ↓
-PM 手動派工：告訴對應 worktree 的 session「處理 #12」
-    ↓
-agent: list_tasks 讀取細節（可帶 category 篩選只看自己的任務）
-    ↓
-agent: update_task_status(#12, IN_PROGRESS)   ← 看板亮起琥珀色
-    ↓
-agent 實作、commit
-    ↓
-agent: update_task_status(#12, DONE)          ← 看板移到 DONE 欄
-      或 update_task_status(#12, BLOCKED, note) ← 看板轉紅並排到最前
-```
-
-subagent 之間不能互相對話，跨 agent 溝通全部走看板：frontend 需要新 API、
-qa 發現 bug、任何人需要改共用檔案，一律標記 BLOCKED 或建立新任務，不要自己
-動手改不屬於自己的路徑。BLOCKED 專案在 Level 1 排最前並轉紅，PM 不用盯三個
-終端機，看瀏覽器就知道進度。
-
-## 資料庫：H2
-
-Flyway 自 10.x 起已完全移除 SQLite 支援，改用 H2（file 模式）：對 Flyway、
-標準 SQL 語法的支援完整，SQL 方言也更貼近 MySQL。Migration 只用標準 SQL 的
-`GENERATED BY DEFAULT AS IDENTITY`。日後若要換 MySQL，理論上只需改
-`application.yml` 與 `V1__init_schema.sql`，Service 與 Repository 一行都
-不用動。
-
-`TaskCategory` 現有值：`BACKEND` / `FRONTEND` / `INFRA` / `DOC` / `TEST` /
-`OTHER`。`category` 欄位是 VARCHAR，新增分類不需要 migration。
-
-## 設定一律外部化
-
-`application.yml` 裡**不得出現任何寫死的路徑、port、或連線字串**，一律
-`${VAR:預設值}` 形式：
-
-```yaml
-spring:
-  datasource:
-    url: ${BOARD_DB_URL:jdbc:h2:file:/絕對路徑/data/board;DB_CLOSE_ON_EXIT=FALSE}
-    username: ${BOARD_DB_USER:sa}
-    password: ${BOARD_DB_PASSWORD:}
-server:
-  port: ${BOARD_PORT:8080}
-logging:
-  file:
-    name: ${BOARD_LOG_FILE:/絕對路徑/logs/board.log}
-```
-
-`BOARD_DB_URL` / `BOARD_LOG_FILE` 的**預設值**必須是絕對路徑，不能用相對路徑
-（`./data/...`）——R1 時期實測過，子行程工作目錄不保證是專案根目錄，相對路徑
-解析到無寫入權限的地方會讓例外訊息污染 stdout（R4 換成 HTTP transport 後
-stdout 已經不是協定通道，但預設值仍維持絕對路徑，避免同樣的權限問題換個地方
-重演）。換機器、換帳號、或搬動專案資料夾時，同步修改這兩個預設值並重新
-`./mvnw clean package`。
-
-## 專案結構
-
-```
-src/main/java/dev/aiboard/
-├── DashboardApplication.java
-├── config/        McpToolConfig
-├── mcp/           ProjectBoardTools（create_project / create_tasks / list_tasks / update_task_status）
-├── project/       Project, ProjectRepository, ProjectService
-├── task/          Task, TaskLog, TaskStatus, TaskRepository, TaskLogRepository, TaskService
-├── common/        BoardException, TaskCategory
-├── event/         BoardEvent, BoardEventPublisher, InProcessEventPublisher
-└── web/           ProjectQuery, ProjectListController, BoardQuery, BoardController,
-                   EventStreamController, SseEmitterRegistry
-src/main/resources/
-├── application.yml
-├── db/migration/
-└── static/        index.html, tokens.css, app.js（Vue 3 CDN，無建置）
-.claude/agents/     backend-dev.md, frontend-dev.md, qa.md
-```
-
-`groupId` 為 `dev.aiboard`，`artifactId` 為 `ai-project-board-backend`，
-jar 檔名 `ai-project-board-backend-${version}.jar`（`finalName` 用
-`${project.artifactId}-${project.version}`，版本升級時自動同步，不必手動改）。
-
-## 唯讀原則
-
-**`web/` 層不得新增任何寫入端點。** `/api/projects`、`/api/projects/{id}/board`、
-`/api/projects/{id}/tasks/{taskId}/history`、`/api/events`（SSE）全部是
-`GET`，沒有任何 POST/PUT/DELETE。所有寫入只能經由 MCP tool。
-
-## 分層規則
-
-- `mcp/`（`ProjectBoardTools`）只能依賴 `*/Service`，**不得注入 Repository**，
-  不得寫任何業務邏輯，只做參數解析、呼叫 Service、把結果轉成回傳字串。
-- `Service` 之間可互相呼叫，但 `TaskService` 不得反向依賴 `ProjectService`
-  以外的東西。
-- `Service` 層不得出現任何 MCP 相關型別，必須能在沒有 MCP 的情況下被單元測試
-  呼叫（`ProjectServiceTest` / `TaskServiceTest` 皆為純 Mockito 單元測試）。
-- `web/` 層的 `ProjectQuery` / `BoardQuery` 是唯讀查詢類別，可以直接注入
-  Repository，因為這裡本質是 read model，不是業務邏輯。
-- Entity 不外洩到 `mcp/` 或 `web/`，Service 一律回傳 record DTO。
-- Migration 只用標準 SQL；日期時間欄位一律 `TIMESTAMP`，主鍵一律 `BIGINT`。
-
-## 狀態轉移矩陣（`TaskStatus.canTransitionTo`）
-
-```
-TODO        -> IN_PROGRESS, BLOCKED
-IN_PROGRESS -> DONE, BLOCKED
-BLOCKED     -> IN_PROGRESS, TODO
-DONE        -> IN_PROGRESS
-```
-
-同狀態轉同狀態視為合法 no-op。不合法轉移拋 `BoardException`，訊息明確列出
-目前狀態與嘗試的目標狀態。全覆蓋測試見 `TaskStatusTest`。
-
-## SSE emitter 生命週期
-
-`SseEmitterRegistry`（`web/` 套件）維護行程內單例的 `CopyOnWriteArrayList`。
-
-- `SseEmitter` timeout 設 `0L`（不逾時）
-- 每 15 秒排程送一次 `heartbeat`（`@Scheduled(fixedRate = 15_000)`）
-- `onCompletion` / `onTimeout` / `onError` 三個 callback 都會把 emitter 從
-  集合移除，`send()` 拋 `IOException` 時也會移除
-- **不做事件重播**，前端重連後直接重抓一次 `/api/projects`（及當前
-  `/board`）即可
-
-## 前端：零建置 CDN 版
-
-**不要主動引入 npm、Vite、SFC、TypeScript、Pinia、Vue Router 或任何前端建置
-步驟。** 這是刻意的決定：
-
-- Vue 3 用 `<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js">`
-  的 global build，`Vue.createApp({...}).mount('#app')` + in-DOM template
-- 用 Vue 而非純 vanilla 的唯一理由是 `<TransitionGroup>`
-- 全部邏輯在單一 `src/main/resources/static/app.js`
-
-**`TransitionGroup` 的兩個踩雷點（已修過，別重踩）**：
-
-1. `.task-leave-active { position: absolute; }` 必須搭配父容器
-   `position: relative`（見 `.column-body`）。
-2. Level 2（`LevelTwo` 元件）**必須**用 `:key="currentProjectId"` 強制在
-   切換不同專案時整個重新掛載。
-
-## Design tokens：`src/main/resources/static/tokens.css`
-
-Andon 狀態板美學，不是 Trello 風格的拖拉看板。**不要把顏色改成通用的
-Material/Tailwind 預設色，不要換成 Inter 或系統預設字體。** TEST 分類沿用
-`--muted`，不新增顏色——`.task-category` 本來就是統一用 muted 灰色顯示所有
-分類標籤，不按分類上色。
-
-## 常用指令
-
-建置：
-
-```bash
-./mvnw clean package
-```
-
-跑測試：
+## 測試
 
 ```bash
 ./mvnw test
+./mvnw clean package
 ```
 
-啟動正式看板（手動、常駐，8080）：
+認領功能至少覆蓋：大小寫不敏感的專案查找、不存在時列出專案、無任務正常回傳、
+CAS 失敗重試、兩個執行緒不會認領同一任務、回 TODO 清空認領資料、REST 回傳
+assignee、MCP 文字格式。
 
-```bash
-java -jar target/ai-project-board-backend-2.0.0.jar
-```
+## 已知限制
 
-agent 在自己 worktree 啟動測試（範例為 backend，frontend/qa 對應改 port 與 DB）：
+`project.name` 的 UNIQUE constraint 是資料庫層級、大小寫敏感；`create_project`
+與 `claim_next_task` 的查找則是 `findByNameIgnoreCase`（大小寫不敏感）。
+極端並發下（兩個請求同時以「個人記帳App」「個人記帳app」呼叫 `create_project`）
+理論上可能建出兩筆大小寫不同但語意重複的專案，之後 `findByNameIgnoreCase`
+只會查到其中一筆。機率低、非本輪重點，暫不修，記錄於此供之後參考。
 
-```bash
-BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-backend;DB_CLOSE_ON_EXIT=FALSE' \
-  java -jar target/ai-project-board-backend-2.0.0.jar
-```
+## 本輪不做
 
-## 本輪（R4）明確不做
-
-Agent Teams（`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`）、agent 之間的直接訊息
-傳遞、自動派工/`claim_next_task`、Docker、MySQL、雲端部署、跨機器資料同步、
-自動合併/CI pipeline、超過三個 agent。以上皆為後續 round 的範圍。
+不做自動 repo 綁定、worktree/分支隔離、同角色多工人、動態 agent、Docker、
+雲端部署、任務依賴或自動建立專案與任務。

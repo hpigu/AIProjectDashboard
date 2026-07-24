@@ -35,6 +35,12 @@ public class Task {
     @Column(name = "sort_order", nullable = false)
     private Integer sortOrder = 0;
 
+    @Column(length = 60)
+    private String assignee;
+
+    @Column(name = "claimed_at")
+    private LocalDateTime claimedAt;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -84,6 +90,14 @@ public class Task {
         return sortOrder;
     }
 
+    public String getAssignee() {
+        return assignee;
+    }
+
+    public LocalDateTime getClaimedAt() {
+        return claimedAt;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
@@ -94,6 +108,10 @@ public class Task {
 
     public void changeStatus(TaskStatus newStatus) {
         this.status = newStatus.name();
+        if (newStatus == TaskStatus.TODO) {
+            this.assignee = null;
+            this.claimedAt = null;
+        }
         this.updatedAt = LocalDateTime.now();
     }
 }

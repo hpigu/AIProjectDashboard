@@ -10,9 +10,12 @@ import dev.aiboard.project.ProjectService;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.time.LocalDateTime;
 
 @Service
 public class TaskService {
+
+    private static final int CLAIM_RETRY_LIMIT = 3;
 
     private final TaskRepository taskRepository;
     private final TaskLogRepository taskLogRepository;
@@ -67,6 +70,12 @@ public class TaskService {
                     "不合法的狀態轉移：#%d 目前是 %s，無法轉移至 %s".formatted(taskId, current, target));
         }
 
+        if (current == TaskStatus.TODO && target == TaskStatus.IN_PROGRESS
+                && task.getAssignee() == null) {
+            throw new BoardException("任務 #" + taskId
+                    + " 尚未認領；請使用 claim_next_task 開始 TODO 任務");
+        }
+
         boolean changed = current != target;
         if (changed) {
             task.changeStatus(target);
@@ -106,6 +115,40 @@ public class TaskService {
         return tasks.stream().map(this::toDto).toList();
     }
 
+    @Transactional
+    public ClaimNextTaskResult claimNextTask(String projectName, String categoryRaw, String assigneeRaw) {
+        TaskCategory category = parseClaimCategory(categoryRaw);
+        String assignee = normalizeAssignee(assigneeRaw);
+        var project = projectService.findByNameIgnoreCase(projectName);
+        if (project.isEmpty()) {
+            return ClaimNextTaskResult.projectNotFound(projectService.listProjects(), category.name());
+        }
+
+        for (int attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt++) {
+            var candidate = taskRepository
+                    .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                            project.get().id(), category.name(), TaskStatus.TODO.name());
+            if (candidate.isEmpty()) {
+                return ClaimNextTaskResult.noTask(project.get(), category.name());
+            }
+
+            LocalDateTime claimedAt = LocalDateTime.now();
+            int updated = taskRepository.claimIfTodo(candidate.get().getId(), assignee, claimedAt);
+            if (updated == 1) {
+                Task claimed = taskRepository.findById(candidate.get().getId())
+                        .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidate.get().getId()));
+                taskLogRepository.save(new TaskLog(claimed.getId(), TaskStatus.TODO.name(),
+                        TaskStatus.IN_PROGRESS.name(), "認領者：" + assignee));
+                eventPublisher.publish(BoardEvent.taskStatusChanged(
+                        claimed.getProjectId(), claimed.getId(), TaskStatus.TODO.name(),
+                        TaskStatus.IN_PROGRESS.name(), claimed.getUpdatedAt().toString()));
+                return ClaimNextTaskResult.claimed(project.get(), toDto(claimed), category.name());
+            }
+        }
+
+        return ClaimNextTaskResult.noTask(project.get(), category.name());
+    }
+
     public long countByProjectId(Long projectId) {
         return taskRepository.countByProjectId(projectId);
     }
@@ -129,14 +172,64 @@ public class TaskService {
 
     private TaskDto toDto(Task task) {
         return new TaskDto(task.getId(), task.getProjectId(), task.getTitle(), task.getDescription(),
-                task.getStatus(), task.getCategory(), task.getSortOrder());
+                task.getStatus(), task.getCategory(), task.getSortOrder(),
+                task.getAssignee(), task.getClaimedAt());
+    }
+
+    private TaskCategory parseClaimCategory(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalArgumentException("任務分類不可為空白");
+        }
+        try {
+            return TaskCategory.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("不合法的任務分類：" + raw);
+        }
+    }
+
+    private String normalizeAssignee(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalArgumentException("認領者不可為空白");
+        }
+        String assignee = raw.trim();
+        if (assignee.length() > 60) {
+            throw new IllegalArgumentException("認領者名稱不可超過 60 字");
+        }
+        return assignee;
     }
 
     public record TaskInput(String title, String description, String category) {
     }
 
     public record TaskDto(Long id, Long projectId, String title, String description, String status,
-                           String category, Integer sortOrder) {
+                           String category, Integer sortOrder, String assignee,
+                           LocalDateTime claimedAt) {
+    }
+
+    public record ClaimNextTaskResult(ProjectService.ProjectDto project, TaskDto task,
+                                      List<ProjectService.ProjectDto> availableProjects,
+                                      String category) {
+        public static ClaimNextTaskResult claimed(ProjectService.ProjectDto project, TaskDto task,
+                                                   String category) {
+            return new ClaimNextTaskResult(project, task, List.of(), category);
+        }
+
+        public static ClaimNextTaskResult noTask(ProjectService.ProjectDto project, String category) {
+            return new ClaimNextTaskResult(project, null, List.of(), category);
+        }
+
+        public static ClaimNextTaskResult projectNotFound(
+                List<ProjectService.ProjectDto> availableProjects, String category) {
+            return new ClaimNextTaskResult(null, null, availableProjects, category);
+        }
+
+        public boolean projectFound() {
+            return project != null;
+        }
+
+        public boolean claimed() {
+            return task != null;
+        }
     }
 
     public record TaskLogDto(Long id, Long taskId, String fromStatus, String toStatus, String note,

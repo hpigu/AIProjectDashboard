@@ -13,6 +13,7 @@ import dev.aiboard.project.ProjectService;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -154,7 +155,9 @@ class TaskServiceTest {
     void updateStatus_legalTransition_writesLogAndPublishesEvent() {
         Long taskId = 4L;
         Long projectId = 12L;
-        Task task = new Task(projectId, "實作交易 CRUD API", null, "BACKEND", 0);
+        Task task = claimedTask(projectId, taskId, "實作交易 CRUD API",
+                "BACKEND", 0, "backend-dev");
+        setField(task, "status", "BLOCKED");
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
         when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(3L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(8L);
@@ -164,13 +167,13 @@ class TaskServiceTest {
         TaskService.TaskStatusChangeResult result = taskService.updateStatus(taskId, "IN_PROGRESS", null);
 
         assertThat(result.changed()).isTrue();
-        assertThat(result.from()).isEqualTo(TaskStatus.TODO);
+        assertThat(result.from()).isEqualTo(TaskStatus.BLOCKED);
         assertThat(result.to()).isEqualTo(TaskStatus.IN_PROGRESS);
         assertThat(task.getStatus()).isEqualTo("IN_PROGRESS");
 
         ArgumentCaptor<TaskLog> logCaptor = ArgumentCaptor.forClass(TaskLog.class);
         verify(taskLogRepository).save(logCaptor.capture());
-        assertThat(logCaptor.getValue().getFromStatus()).isEqualTo("TODO");
+        assertThat(logCaptor.getValue().getFromStatus()).isEqualTo("BLOCKED");
         assertThat(logCaptor.getValue().getToStatus()).isEqualTo("IN_PROGRESS");
 
         ArgumentCaptor<BoardEvent> eventCaptor = ArgumentCaptor.forClass(BoardEvent.class);
@@ -218,5 +221,128 @@ class TaskServiceTest {
 
         assertThatThrownBy(() -> taskService.updateStatus(999L, "DONE", null))
                 .isInstanceOf(BoardException.class);
+    }
+
+    @Test
+    void claimNextTask_claimsFirstTodoAndWritesLogAndEvent() {
+        Long projectId = 12L;
+        Task candidate = taskWithId(projectId, 14L, "實作交易 CRUD API", "BACKEND", 0);
+        Task claimed = claimedTask(projectId, 14L, "實作交易 CRUD API", "BACKEND",
+                0, "backend-dev");
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
+        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                projectId, "BACKEND", "TODO")).thenReturn(Optional.of(candidate));
+        when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(taskRepository.findById(14L)).thenReturn(Optional.of(claimed));
+
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask("個人記帳 App", "backend", "backend-dev");
+
+        assertThat(result.claimed()).isTrue();
+        assertThat(result.task().assignee()).isEqualTo("backend-dev");
+        assertThat(result.task().status()).isEqualTo("IN_PROGRESS");
+        verify(taskLogRepository).save(any(TaskLog.class));
+        verify(eventPublisher).publish(any(BoardEvent.class));
+    }
+
+    @Test
+    void claimNextTask_retriesWhenCandidateLosesRace() {
+        Long projectId = 12L;
+        Task first = taskWithId(projectId, 14L, "第一筆", "BACKEND", 0);
+        Task second = taskWithId(projectId, 15L, "第二筆", "BACKEND", 1);
+        Task claimed = claimedTask(projectId, 15L, "第二筆", "BACKEND", 1, "backend-dev");
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
+        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                projectId, "BACKEND", "TODO")).thenReturn(Optional.of(first), Optional.of(second));
+        when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                .thenReturn(0);
+        when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(taskRepository.findById(15L)).thenReturn(Optional.of(claimed));
+
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
+
+        assertThat(result.task().id()).isEqualTo(15L);
+        verify(taskRepository, times(2))
+                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                        projectId, "BACKEND", "TODO");
+    }
+
+    @Test
+    void claimNextTask_whenProjectMissing_returnsProjectList() {
+        when(projectService.findByNameIgnoreCase("不存在")).thenReturn(Optional.empty());
+        when(projectService.listProjects()).thenReturn(List.of(
+                new ProjectService.ProjectDto(1L, "現有專案", null, "ACTIVE")));
+
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask("不存在", "DOC", "docs");
+
+        assertThat(result.projectFound()).isFalse();
+        assertThat(result.availableProjects()).extracting(ProjectService.ProjectDto::name)
+                .containsExactly("現有專案");
+        verify(taskRepository, never())
+                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                        any(), any(), any());
+    }
+
+    @Test
+    void updateStatus_toTodo_clearsClaimMetadata() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "任務", "BACKEND", 0, "backend-dev");
+        setField(task, "status", "BLOCKED");
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
+
+        taskService.updateStatus(4L, "TODO", "歸還");
+
+        assertThat(task.getStatus()).isEqualTo("TODO");
+        assertThat(task.getAssignee()).isNull();
+        assertThat(task.getClaimedAt()).isNull();
+    }
+
+    @Test
+    void updateStatus_unclaimedTodoCannotStartWithoutClaimTool() {
+        Task task = taskWithId(12L, 4L, "任務", "BACKEND", 0);
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "IN_PROGRESS", null))
+                .isInstanceOf(BoardException.class)
+                .hasMessageContaining("claim_next_task");
+    }
+
+    private static Task taskWithId(Long projectId, Long id, String title,
+                                   String category, int sortOrder) {
+        Task task = new Task(projectId, title, null, category, sortOrder);
+        setField(task, "id", id);
+        return task;
+    }
+
+    private static Task claimedTask(Long projectId, Long id, String title,
+                                    String category, int sortOrder, String assignee) {
+        Task task = taskWithId(projectId, id, title, category, sortOrder);
+        setField(task, "status", "IN_PROGRESS");
+        setField(task, "assignee", assignee);
+        setField(task, "claimedAt", LocalDateTime.now());
+        return task;
+    }
+
+    private static void setField(Task task, String fieldName, Object value) {
+        try {
+            var field = Task.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(task, value);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

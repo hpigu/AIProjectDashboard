@@ -31,8 +31,9 @@ class BoardControllerTest {
     @Test
     void getBoard_allFourColumnKeysPresentEvenWhenEmpty() throws Exception {
         Map<String, List<BoardQuery.TaskCard>> columns = Map.of(
-                "TODO", List.of(new BoardQuery.TaskCard(5L, "建立 schema", "BACKEND", 3)),
-                "IN_PROGRESS", List.of(),
+                "TODO", List.of(new BoardQuery.TaskCard(5L, "建立 schema", "BACKEND", 3, null)),
+                "IN_PROGRESS", List.of(
+                        new BoardQuery.TaskCard(6L, "實作 API", "BACKEND", 4, "backend-dev")),
                 "BLOCKED", List.of(),
                 "DONE", List.of()
         );
@@ -45,7 +46,7 @@ class BoardControllerTest {
                 .andExpect(jsonPath("$.columns.TODO").isArray())
                 .andExpect(jsonPath("$.columns.TODO[0].id").value(5))
                 .andExpect(jsonPath("$.columns.IN_PROGRESS").isArray())
-                .andExpect(jsonPath("$.columns.IN_PROGRESS").isEmpty())
+                .andExpect(jsonPath("$.columns.IN_PROGRESS[0].assignee").value("backend-dev"))
                 .andExpect(jsonPath("$.columns.BLOCKED").isArray())
                 .andExpect(jsonPath("$.columns.BLOCKED").isEmpty())
                 .andExpect(jsonPath("$.columns.DONE").isArray())

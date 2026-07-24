@@ -165,6 +165,10 @@ const LevelTwo = {
               <div class="task-id">#{{ task.id }}</div>
               <div>{{ task.title }}</div>
               <div v-if="task.category" class="task-category">{{ task.category }}</div>
+              <div
+                v-if="task.assignee && ['IN_PROGRESS', 'BLOCKED'].includes(status)"
+                class="task-assignee"
+              >@{{ task.assignee }}</div>
             </div>
           </transition-group>
         </div>

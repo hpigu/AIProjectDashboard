@@ -1,17 +1,29 @@
 package dev.aiboard.task;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 public interface TaskRepository extends JpaRepository<Task, Long> {
 
     List<Task> findByProjectIdOrderBySortOrderAsc(Long projectId);
 
     List<Task> findByProjectIdAndStatusOrderBySortOrderAsc(Long projectId, String status);
+
+    Optional<Task> findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+            Long projectId, String category, String status);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Task t SET t.status = 'IN_PROGRESS', t.assignee = :assignee, "
+            + "t.claimedAt = :claimedAt, t.updatedAt = :claimedAt "
+            + "WHERE t.id = :taskId AND t.status = 'TODO'")
+    int claimIfTodo(@Param("taskId") Long taskId, @Param("assignee") String assignee,
+                    @Param("claimedAt") LocalDateTime claimedAt);
 
     @Query("SELECT t FROM Task t WHERE t.projectId = :projectId "
             + "AND (:status IS NULL OR t.status = :status) "
