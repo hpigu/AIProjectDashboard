@@ -3,22 +3,22 @@
 本機 MCP server：AI coding agent 工作時把進度寫進看板，瀏覽器即時看到所有專案的狀態，不用盯著多個終端機。
 
 ```mermaid
-flowchart TB
+flowchart LR
     Chat["Chat 規劃專案<br/>create_project / create_tasks"]
+    ClaudeCode["Claude Code<br/>（認領「個人記帳 App」）"]
+    Codex["Codex CLI<br/>（認領「SMTP 監控工具」）"]
 
     subgraph Board["AI Project Board（單一 Spring Boot 行程）"]
+        direction TB
         MCP["MCP server（/mcp）<br/>Streamable HTTP :8080"]
         REST["唯讀 REST API + SSE"]
         UI["Vue 3 CDN 看板"]
+        MCP -.唯讀查詢.-> REST -.推送.-> UI
     end
 
-    ClaudeCode["Claude Code"]
-    Codex["Codex CLI"]
-
     Chat -->|建立專案／任務| MCP
-    ClaudeCode -->|認領「個人記帳 App」| MCP
-    Codex -->|認領「SMTP 監控工具」| MCP
-    REST -.唯讀查詢.-> UI
+    ClaudeCode -->|認領任務| MCP
+    Codex -->|認領任務| MCP
 ```
 
 <details>
@@ -42,7 +42,7 @@ Chat 規劃專案
 
 </details>
 
-在 chat 裡規劃專案、拆成任務卡片；到任一個專案的 repo 裡跟 Claude Code 或 Codex 說「認領 {專案名} 的任務」，對應職能的 agent（backend / frontend / qa / infra / docs）各自去看板認領一筆屬於自己類別的任務並開工；瀏覽器開著看板即時反映狀態變化，不用重整頁面。
+在 chat 裡規劃專案、拆成任務卡片；到任一個專案的 repo 裡跟 Claude Code 或 Codex 說「認領 {專案名} 的任務」，對應職能的 agent（backend / frontend / qa / infra / docs，設定方式見下方「角色 agent」）各自去看板認領一筆屬於自己類別的任務並開工；瀏覽器開著看板即時反映狀態變化，不用重整頁面。
 
 ## 需求
 
@@ -115,7 +115,35 @@ REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}
 
 ## 角色 agent
 
-`~/.claude/agents/`（Claude Code）與 `~/.codex/AGENTS.md`（Codex）各定義五個角色：`backend-dev`、`frontend-dev`、`qa`、`infra`、`docs`，分別對應上面五種 `category`。每個角色只認領自己類別的任務、只碰自己職責內的檔案；同一類別同時只有一個角色在跑。`OTHER` 類別不配專屬角色，由主 session 處理。
+`OTHER` 以外的五個 `category`（`BACKEND`、`FRONTEND`、`TEST`、`INFRA`、`DOC`）
+各自對應一個角色（`backend-dev`、`frontend-dev`、`qa`、`infra`、`docs`），負責
+呼叫 `claim_next_task` 認領自己類別的任務並開工；`OTHER` 不配專屬角色，由主
+session 處理。
+
+**這些角色定義不在本 repo 裡，是使用者自己機器上的全域設定**，clone 這個
+repo 不會自動取得——想用這套多 agent 認領流程，需要自己建立：
+
+- Claude Code：在 `~/.claude/agents/` 底下為每個角色各建一個 `*.md`（[subagent
+  格式文件](https://docs.claude.com/en/docs/claude-code/sub-agents)），例如
+  `~/.claude/agents/backend-dev.md`：
+
+  ```markdown
+  ---
+  name: backend-dev
+  description: 執行看板上 category 為 BACKEND 的任務。
+  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__board__claim_next_task, mcp__board__update_task_status
+  ---
+  你是後端工程師。呼叫 claim_next_task(projectName, "BACKEND", "backend-dev") 認領任務並開工，
+  完成後更新為 DONE，卡住則更新為 BLOCKED 並在 note 說明原因。
+  ```
+
+- Codex CLI：在 `~/.codex/AGENTS.md` 用同樣邏輯寫五個角色段落（Codex 沒有各角色
+  獨立檔案的機制，習慣上集中寫在一份 `AGENTS.md`）。
+
+每個角色只認領自己類別的任務、只碰自己職責內的檔案；同一類別同時只有一個角色
+在跑。這一套是本專案作者自己機器上的慣例，不是看板功能的必要條件——只用
+MCP 工具（`create_project`／`create_tasks`／`claim_next_task`／...）手動跟
+Claude Code 或 Codex 互動，一樣能完整使用看板。
 
 ## 目錄結構
 
