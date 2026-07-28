@@ -35,12 +35,22 @@ public class TaskService {
         if (inputs == null || inputs.isEmpty()) {
             throw new IllegalArgumentException("任務清單不可為空");
         }
+        if (inputs.size() > 50) {
+            throw new IllegalArgumentException("一次最多建立 50 筆任務");
+        }
         for (TaskInput input : inputs) {
+            if (input == null) {
+                throw new IllegalArgumentException("任務內容不可為 null");
+            }
             if (input.title() == null || input.title().isBlank()) {
                 throw new IllegalArgumentException("任務標題不可為空白");
             }
+            if (input.title().trim().length() > 300) {
+                throw new IllegalArgumentException("任務標題不可超過 300 字");
+            }
         }
-        projectService.assertExists(projectId);
+        // Serialize sort-order allocation per project.
+        projectService.assertExistsForUpdate(projectId);
 
         int startSortOrder = taskRepository.findMaxSortOrder(projectId) + 1;
 
@@ -48,8 +58,8 @@ public class TaskService {
         for (int i = 0; i < inputs.size(); i++) {
             TaskInput input = inputs.get(i);
             TaskCategory category = TaskCategory.fromStringOrOther(input.category());
-            Task task = new Task(projectId, input.title(), input.description(),
-                    category == null ? null : category.name(), startSortOrder + i);
+            Task task = new Task(projectId, input.title().trim(), input.description(),
+                    category.name(), startSortOrder + i);
             Task saved = taskRepository.save(task);
             taskLogRepository.save(new TaskLog(saved.getId(), null, TaskStatus.TODO.name(), null));
             results.add(toDto(saved));
@@ -70,10 +80,14 @@ public class TaskService {
                     "不合法的狀態轉移：#%d 目前是 %s，無法轉移至 %s".formatted(taskId, current, target));
         }
 
-        if (current == TaskStatus.TODO && target == TaskStatus.IN_PROGRESS
-                && task.getAssignee() == null) {
+        if (target == TaskStatus.IN_PROGRESS
+                && (task.getAssignee() == null || task.getClaimedAt() == null)) {
             throw new BoardException("任務 #" + taskId
-                    + " 尚未認領；請使用 claim_next_task 開始 TODO 任務");
+                    + " 尚未認領；請使用 claim_next_task 開始任務");
+        }
+        if (current == TaskStatus.TODO && target == TaskStatus.BLOCKED
+                && task.getAssignee() == null) {
+            throw new BoardException("未認領的 TODO 任務不能標記為 BLOCKED");
         }
 
         boolean changed = current != target;
@@ -126,7 +140,7 @@ public class TaskService {
 
         for (int attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt++) {
             var candidate = taskRepository
-                    .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                    .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                             project.get().id(), category.name(), TaskStatus.TODO.name());
             if (candidate.isEmpty()) {
                 return ClaimNextTaskResult.noTask(project.get(), category.name());

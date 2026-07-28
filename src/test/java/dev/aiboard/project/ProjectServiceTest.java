@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import dev.aiboard.event.BoardEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.Optional;
 import java.util.List;
@@ -23,38 +23,38 @@ class ProjectServiceTest {
     private ProjectRepository projectRepository;
 
     @Mock
-    private BoardEventPublisher eventPublisher;
+    private ProjectCreationExecutor projectCreationExecutor;
 
     private ProjectService projectService;
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        projectService = new ProjectService(projectRepository, eventPublisher);
+        projectService = new ProjectService(projectRepository, projectCreationExecutor);
     }
 
     @Test
     void createProject_whenNameIsNew_savesAndReturnsNotExisted() {
-        when(projectRepository.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.empty());
+        when(projectRepository.findByNormalizedName("個人記帳 app")).thenReturn(Optional.empty());
         Project saved = new Project("個人記帳 App", "記錄收支");
-        when(projectRepository.save(any(Project.class))).thenReturn(saved);
+        when(projectCreationExecutor.create("個人記帳 App", "記錄收支")).thenReturn(saved);
 
         ProjectService.ProjectCreationResult result = projectService.createProject("個人記帳 App", "記錄收支");
 
         assertThat(result.alreadyExisted()).isFalse();
         assertThat(result.project().name()).isEqualTo("個人記帳 App");
-        verify(projectRepository).save(any(Project.class));
+        verify(projectCreationExecutor).create("個人記帳 App", "記錄收支");
     }
 
     @Test
     void createProject_whenNameAlreadyExists_returnsExistingWithoutSaving() {
         Project existing = new Project("個人記帳 App", "記錄收支");
-        when(projectRepository.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(existing));
+        when(projectRepository.findByNormalizedName("個人記帳 app")).thenReturn(Optional.of(existing));
 
         ProjectService.ProjectCreationResult result = projectService.createProject("個人記帳 App", "不同描述");
 
         assertThat(result.alreadyExisted()).isTrue();
         assertThat(result.project().name()).isEqualTo("個人記帳 App");
-        verify(projectRepository, never()).save(any(Project.class));
+        verify(projectCreationExecutor, never()).create(any(), any());
     }
 
     @Test
@@ -70,14 +70,35 @@ class ProjectServiceTest {
     }
 
     @Test
+    void createProject_whenNameExceedsTwoHundredCharacters_throwsIllegalArgumentException() {
+        assertThatThrownBy(() -> projectService.createProject("x".repeat(201), "desc"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("200");
+    }
+
+    @Test
     void findByNameIgnoreCase_trimsAndDelegatesToCaseInsensitiveLookup() {
         Project existing = new Project("SMTP Tool", null);
-        when(projectRepository.findByNameIgnoreCase("smtp tool")).thenReturn(Optional.of(existing));
+        when(projectRepository.findByNormalizedName("smtp tool")).thenReturn(Optional.of(existing));
 
         var result = projectService.findByNameIgnoreCase("  smtp tool ");
 
         assertThat(result).isPresent();
         assertThat(result.orElseThrow().name()).isEqualTo("SMTP Tool");
+    }
+
+    @Test
+    void createProject_whenConcurrentInsertWins_returnsExistingProject() {
+        Project existing = new Project("Demo", null);
+        when(projectRepository.findByNormalizedName("demo"))
+                .thenReturn(Optional.empty(), Optional.of(existing));
+        when(projectCreationExecutor.create("Demo", null))
+                .thenThrow(new DataIntegrityViolationException("duplicate"));
+
+        ProjectService.ProjectCreationResult result = projectService.createProject("Demo", null);
+
+        assertThat(result.alreadyExisted()).isTrue();
+        assertThat(result.project().name()).isEqualTo("Demo");
     }
 
     @Test

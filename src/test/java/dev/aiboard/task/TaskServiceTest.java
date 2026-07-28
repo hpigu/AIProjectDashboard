@@ -50,7 +50,7 @@ class TaskServiceTest {
     @Test
     void createTasks_batchCreatesWithContinuedSortOrderAndLogs() {
         Long projectId = 12L;
-        doNothing().when(projectService).assertExists(projectId);
+        doNothing().when(projectService).assertExistsForUpdate(projectId);
         when(taskRepository.findMaxSortOrder(projectId)).thenReturn(2);
         when(taskRepository.save(any(Task.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -83,7 +83,7 @@ class TaskServiceTest {
     @Test
     void createTasks_whenProjectDoesNotExist_throwsAndDoesNotSaveAnything() {
         Long projectId = 999L;
-        doThrow(new BoardException("找不到專案：#999")).when(projectService).assertExists(projectId);
+        doThrow(new BoardException("找不到專案：#999")).when(projectService).assertExistsForUpdate(projectId);
 
         List<TaskService.TaskInput> inputs = List.of(new TaskService.TaskInput("任務", null, null));
 
@@ -106,6 +106,38 @@ class TaskServiceTest {
 
         assertThatThrownBy(() -> taskService.createTasks(12L, inputs))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void createTasks_whenCategoryMissing_usesOther() {
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExistsForUpdate(projectId);
+        when(taskRepository.findMaxSortOrder(projectId)).thenReturn(-1);
+        when(taskRepository.save(any(Task.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<TaskService.TaskDto> results = taskService.createTasks(projectId,
+                List.of(new TaskService.TaskInput("待分類任務", null, null)));
+
+        assertThat(results.getFirst().category()).isEqualTo("OTHER");
+    }
+
+    @Test
+    void createTasks_whenMoreThanFifty_throwsIllegalArgumentException() {
+        List<TaskService.TaskInput> inputs = java.util.stream.IntStream.range(0, 51)
+                .mapToObj(i -> new TaskService.TaskInput("任務 " + i, null, "OTHER"))
+                .toList();
+
+        assertThatThrownBy(() -> taskService.createTasks(12L, inputs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("50");
+    }
+
+    @Test
+    void createTasks_whenTitleExceedsThreeHundredCharacters_throwsIllegalArgumentException() {
+        assertThatThrownBy(() -> taskService.createTasks(12L,
+                List.of(new TaskService.TaskInput("x".repeat(301), null, "OTHER"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("300");
     }
 
     @Test
@@ -231,7 +263,7 @@ class TaskServiceTest {
                 0, "backend-dev");
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
-        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", "TODO")).thenReturn(Optional.of(candidate));
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
@@ -256,7 +288,7 @@ class TaskServiceTest {
         Task claimed = claimedTask(projectId, 15L, "第二筆", "BACKEND", 1, "backend-dev");
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
-        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", "TODO")).thenReturn(Optional.of(first), Optional.of(second));
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
@@ -271,7 +303,7 @@ class TaskServiceTest {
 
         assertThat(result.task().id()).isEqualTo(15L);
         verify(taskRepository, times(2))
-                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                         projectId, "BACKEND", "TODO");
     }
 
@@ -288,7 +320,7 @@ class TaskServiceTest {
         assertThat(result.availableProjects()).extracting(ProjectService.ProjectDto::name)
                 .containsExactly("現有專案");
         verify(taskRepository, never())
-                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                         any(), any(), any());
     }
 
@@ -318,6 +350,27 @@ class TaskServiceTest {
         assertThatThrownBy(() -> taskService.updateStatus(4L, "IN_PROGRESS", null))
                 .isInstanceOf(BoardException.class)
                 .hasMessageContaining("claim_next_task");
+    }
+
+    @Test
+    void updateStatus_unclaimedBlockedTaskCannotBypassClaimTool() {
+        Task task = taskWithId(12L, 4L, "任務", "BACKEND", 0);
+        setField(task, "status", "BLOCKED");
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "IN_PROGRESS", null))
+                .isInstanceOf(BoardException.class)
+                .hasMessageContaining("claim_next_task");
+    }
+
+    @Test
+    void updateStatus_unclaimedTodoCannotBeBlocked() {
+        Task task = taskWithId(12L, 4L, "任務", "BACKEND", 0);
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "BLOCKED", null))
+                .isInstanceOf(BoardException.class)
+                .hasMessageContaining("不能標記為 BLOCKED");
     }
 
     private static Task taskWithId(Long projectId, Long id, String title,

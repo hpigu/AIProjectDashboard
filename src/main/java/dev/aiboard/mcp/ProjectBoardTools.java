@@ -2,7 +2,9 @@ package dev.aiboard.mcp;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
+import dev.aiboard.common.BoardException;
 import dev.aiboard.project.ProjectService;
 import dev.aiboard.task.TaskService;
 
@@ -39,10 +41,14 @@ public class ProjectBoardTools {
                     + "一次呼叫請帶入所有任務，不要一個一個呼叫。"
                     + "description 建議寫成「描述 + 驗收條件」兩段，"
                     + "例如「實作交易 CRUD API\n驗收條件：四個端點都有、金額不接受負數」，"
-                    + "認領任務的 agent 只看得到這個欄位，寫清楚才知道何時算做完。")
+                    + "認領任務的 agent 只看得到這個欄位，寫清楚才知道何時算做完。"
+                    + "category 未填、空白或不合法時會歸類為 OTHER。")
     public String createTasks(
             @ToolParam(description = "專案 ID") Long projectId,
             @ToolParam(description = "任務清單，至少 1 筆，最多 50 筆") List<TaskInputPayload> tasks) {
+        if (tasks == null) {
+            throw new IllegalArgumentException("任務清單不可為空");
+        }
         List<TaskService.TaskInput> inputs = tasks.stream()
                 .map(t -> new TaskService.TaskInput(t.title(), t.description(), t.category()))
                 .toList();
@@ -55,7 +61,7 @@ public class ProjectBoardTools {
     }
 
     @Tool(name = "update_task_status",
-            description = "更新單一任務的狀態。TODO 任務請先用 claim_next_task 認領，"
+            description = "更新單一任務的狀態。任務必須先用 claim_next_task 認領，才能進入 IN_PROGRESS；"
                     + "完成後標記 DONE，遇到阻礙標記 BLOCKED 並在 note 說明原因。"
                     + "改回 TODO 會一併清空 assignee 與 claimed_at。"
                     + "請在實際完成／卡住／歸還工作的當下呼叫，不要等到最後才一次補登。")
@@ -63,7 +69,12 @@ public class ProjectBoardTools {
             @ToolParam(description = "任務 ID") Long taskId,
             @ToolParam(description = "目標狀態：TODO / IN_PROGRESS / DONE / BLOCKED") String status,
             @ToolParam(description = "變更原因，BLOCKED 時強烈建議填寫", required = false) String note) {
-        TaskService.TaskStatusChangeResult result = taskService.updateStatus(taskId, status, note);
+        TaskService.TaskStatusChangeResult result;
+        try {
+            result = taskService.updateStatus(taskId, status, note);
+        } catch (OptimisticLockingFailureException e) {
+            throw new BoardException("任務 #" + taskId + " 已被其他 agent 更新，請重新讀取後再操作");
+        }
         TaskService.TaskDto task = result.task();
 
         if (!result.changed()) {

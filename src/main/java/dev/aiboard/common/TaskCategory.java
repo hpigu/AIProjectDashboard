@@ -9,8 +9,8 @@ public enum TaskCategory {
     OTHER;
 
     public static TaskCategory fromStringOrOther(String value) {
-        if (value == null) {
-            return null;
+        if (value == null || value.isBlank()) {
+            return OTHER;
         }
         try {
             return TaskCategory.valueOf(value.trim().toUpperCase());

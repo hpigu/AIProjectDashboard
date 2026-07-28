@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 
 @Entity
 @Table(name = "project")
@@ -19,6 +20,9 @@ public class Project {
 
     @Column(nullable = false, unique = true, length = 200)
     private String name;
+
+    @Column(name = "normalized_name", nullable = false, unique = true, length = 200)
+    private String normalizedName;
 
     @Column(columnDefinition = "TEXT")
     private String description;
@@ -36,7 +40,8 @@ public class Project {
     }
 
     public Project(String name, String description) {
-        this.name = name;
+        this.name = name.trim();
+        this.normalizedName = normalizeName(name);
         this.description = description;
         LocalDateTime now = LocalDateTime.now();
         this.createdAt = now;
@@ -49,6 +54,10 @@ public class Project {
 
     public String getName() {
         return name;
+    }
+
+    public String getNormalizedName() {
+        return normalizedName;
     }
 
     public String getDescription() {
@@ -65,5 +74,9 @@ public class Project {
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public static String normalizeName(String name) {
+        return name.trim().toLowerCase(Locale.ROOT);
     }
 }

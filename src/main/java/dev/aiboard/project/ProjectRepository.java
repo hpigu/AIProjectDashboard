@@ -1,14 +1,21 @@
 package dev.aiboard.project;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import jakarta.persistence.LockModeType;
 import java.util.Optional;
 import java.util.List;
 
 public interface ProjectRepository extends JpaRepository<Project, Long> {
 
-    // 查找大小寫不敏感，但 DB 的 UNIQUE(name) 仍大小寫敏感——已知的極端並發限制，見 CLAUDE.md「已知限制」。
-    Optional<Project> findByNameIgnoreCase(String name);
+    Optional<Project> findByNormalizedName(String normalizedName);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM Project p WHERE p.id = :id")
+    Optional<Project> findByIdForUpdate(@Param("id") Long id);
 
     List<Project> findAllByOrderByIdAsc();
 }

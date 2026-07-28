@@ -15,12 +15,12 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     List<Task> findByProjectIdAndStatusOrderBySortOrderAsc(Long projectId, String status);
 
-    Optional<Task> findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAsc(
+    Optional<Task> findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
             Long projectId, String category, String status);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Task t SET t.status = 'IN_PROGRESS', t.assignee = :assignee, "
-            + "t.claimedAt = :claimedAt, t.updatedAt = :claimedAt "
+            + "t.claimedAt = :claimedAt, t.updatedAt = :claimedAt, t.version = t.version + 1 "
             + "WHERE t.id = :taskId AND t.status = 'TODO'")
     int claimIfTodo(@Param("taskId") Long taskId, @Param("assignee") String assignee,
                     @Param("claimedAt") LocalDateTime claimedAt);

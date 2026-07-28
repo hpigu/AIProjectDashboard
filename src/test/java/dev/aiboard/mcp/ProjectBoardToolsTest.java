@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.OptimisticLockingFailureException;
 import dev.aiboard.project.ProjectService;
 import dev.aiboard.task.TaskService;
 import dev.aiboard.task.TaskStatus;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -67,6 +69,13 @@ class ProjectBoardToolsTest {
         String result = tools.createTasks(projectId, payloads);
 
         assertThat(result).isEqualTo("已新增 2 筆任務至「個人記帳 App」（#12），目前共 8 筆待辦。");
+    }
+
+    @Test
+    void createTasks_whenPayloadIsNull_returnsClearValidationError() {
+        assertThatThrownBy(() -> tools.createTasks(12L, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("任務清單");
     }
 
     @Test
@@ -139,6 +148,16 @@ class ProjectBoardToolsTest {
         String message = tools.updateTaskStatus(4L, "TODO", null);
 
         assertThat(message).isEqualTo("#4 實作交易 CRUD API：狀態已是 TODO，未變更");
+    }
+
+    @Test
+    void updateTaskStatus_whenConcurrentWriteWins_returnsClearBusinessError() {
+        when(taskService.updateStatus(4L, "DONE", null))
+                .thenThrow(new OptimisticLockingFailureException("conflict"));
+
+        assertThatThrownBy(() -> tools.updateTaskStatus(4L, "DONE", null))
+                .isInstanceOf(dev.aiboard.common.BoardException.class)
+                .hasMessageContaining("重新讀取");
     }
 
     @Test

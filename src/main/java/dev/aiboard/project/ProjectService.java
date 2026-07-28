@@ -2,10 +2,7 @@ package dev.aiboard.project;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import dev.aiboard.common.BoardException;
-import dev.aiboard.event.BoardEvent;
-import dev.aiboard.event.BoardEventPublisher;
 
 import java.util.List;
 import java.util.Optional;
@@ -14,33 +11,37 @@ import java.util.Optional;
 public class ProjectService {
 
     private final ProjectRepository projectRepository;
-    private final BoardEventPublisher eventPublisher;
+    private final ProjectCreationExecutor projectCreationExecutor;
 
-    public ProjectService(ProjectRepository projectRepository, BoardEventPublisher eventPublisher) {
+    public ProjectService(ProjectRepository projectRepository,
+                          ProjectCreationExecutor projectCreationExecutor) {
         this.projectRepository = projectRepository;
-        this.eventPublisher = eventPublisher;
+        this.projectCreationExecutor = projectCreationExecutor;
     }
 
-    @Transactional
     public ProjectCreationResult createProject(String name, String description) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("專案名稱不可為空白");
         }
         String trimmedName = name.trim();
+        if (trimmedName.length() > 200) {
+            throw new IllegalArgumentException("專案名稱不可超過 200 字");
+        }
+        String normalizedName = Project.normalizeName(trimmedName);
 
-        return projectRepository.findByNameIgnoreCase(trimmedName)
+        return projectRepository.findByNormalizedName(normalizedName)
                 .map(existing -> new ProjectCreationResult(toDto(existing), true))
-                .orElseGet(() -> createNew(trimmedName, description));
+                .orElseGet(() -> createNew(trimmedName, normalizedName, description));
     }
 
-    private ProjectCreationResult createNew(String trimmedName, String description) {
+    private ProjectCreationResult createNew(String trimmedName, String normalizedName,
+                                            String description) {
         try {
-            Project saved = projectRepository.save(new Project(trimmedName, description));
-            eventPublisher.publish(BoardEvent.projectCreated(saved.getId(), saved.getName()));
+            Project saved = projectCreationExecutor.create(trimmedName, description);
             return new ProjectCreationResult(toDto(saved), false);
         } catch (DataIntegrityViolationException e) {
-            // Concurrent create_project call with the same name won the race; fall back to idempotent lookup.
-            return projectRepository.findByNameIgnoreCase(trimmedName)
+            // The insert runs in its own transaction, so this lookup is safe after a concurrent conflict.
+            return projectRepository.findByNormalizedName(normalizedName)
                     .map(existing -> new ProjectCreationResult(toDto(existing), true))
                     .orElseThrow(() -> e);
         }
@@ -56,7 +57,7 @@ public class ProjectService {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("專案名稱不可為空白");
         }
-        return projectRepository.findByNameIgnoreCase(name.trim()).map(this::toDto);
+        return projectRepository.findByNormalizedName(Project.normalizeName(name)).map(this::toDto);
     }
 
     public List<ProjectDto> listProjects() {
@@ -67,6 +68,11 @@ public class ProjectService {
         if (!projectRepository.existsById(projectId)) {
             throw new BoardException("找不到專案：#" + projectId);
         }
+    }
+
+    public void assertExistsForUpdate(Long projectId) {
+        projectRepository.findByIdForUpdate(projectId)
+                .orElseThrow(() -> new BoardException("找不到專案：#" + projectId));
     }
 
     private ProjectDto toDto(Project project) {
