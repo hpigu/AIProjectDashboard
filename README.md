@@ -2,6 +2,8 @@
 
 本機 MCP server：AI coding agent 工作時把進度寫進看板，瀏覽器即時看到所有專案的狀態，不用盯著多個終端機。
 
+![Demo](docs/demo.gif)
+
 ```mermaid
 flowchart LR
     Chat["Chat 規劃專案<br/>create_project / create_tasks"]
@@ -103,13 +105,22 @@ url = "http://127.0.0.1:8080/mcp"
 
 | 工具 | 用途 |
 |---|---|
-| `create_project(name, description?)` | 建立專案，名稱重複時回傳既有專案（冪等） |
-| `create_tasks(projectId, tasks[])` | 一次寫入多筆任務，含 `category` |
+| `create_project(name, description?)` | 建立專案；名稱去除首尾空白且不分大小寫判重，重複時回傳既有專案 |
+| `create_tasks(projectId, tasks[])` | 一次寫入 1–50 筆任務；標題最多 300 字 |
 | `list_tasks(projectId, status?, category?)` | 查詢任務清單與進度，可依狀態／類別篩選 |
 | `claim_next_task(projectName, category, assignee)` | 原子認領指定專案、指定類別中最早的一筆待辦任務 |
 | `update_task_status(taskId, status, note?)` | 完成／阻塞／歸還任務 |
 
 `category`：`BACKEND` / `FRONTEND` / `TEST` / `INFRA` / `DOC` / `OTHER`。
+未填、空白或不在清單內的值會正規化為 `OTHER`，因此不會產生無法認領的任務。
+
+任務必須透過 `claim_next_task` 認領後才能進入 `IN_PROGRESS`；未認領的 `TODO`
+也不能直接標記為 `BLOCKED`。改回 `TODO` 會清除 `assignee` 與 `claimed_at`，
+之後必須重新認領。任務狀態使用 optimistic locking，若其他 agent 已先更新同一
+任務，後提交的操作會失敗；重新讀取看板後再操作即可。
+
+同一專案的批次建立會序列化排序編號配置，`claim_next_task` 則以
+`sort_order`、`id` 依序選擇任務，避免並行寫入造成不確定的認領順序。
 
 REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}/tasks/{taskId}/history`、`/api/events` SSE）全部唯讀，只給前端用，所有寫入一律經由 MCP。
 
@@ -163,7 +174,7 @@ src/main/java/dev/aiboard/
 └── common/     # 共用例外與列舉（TaskCategory 等）
 src/main/resources/
 ├── application.yml
-├── db/migration/   # Flyway migration（V1、V3）
+├── db/migration/   # Flyway migration（V1、V3、V4）
 └── static/         # Vue 3 CDN 前端（index.html / app.js / tokens.css）
 ```
 
