@@ -169,6 +169,11 @@ const LevelTwo = {
                 v-if="task.assignee && ['IN_PROGRESS', 'BLOCKED'].includes(status)"
                 class="task-assignee"
               >@{{ task.assignee }}</div>
+              <div
+                v-if="task.waitingFor && task.waitingFor.length"
+                class="task-waiting"
+                :title="'前置任務完成前不會被認領'"
+              >等待 {{ task.waitingFor.map(id => '#' + id).join('、') }}</div>
             </div>
           </transition-group>
         </div>

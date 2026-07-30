@@ -273,6 +273,35 @@ public class TaskService {
                 .toList();
     }
 
+    /**
+     * 一次查出多個任務各自「還在等哪些前置任務 id」，避免逐筆查詢。
+     * 沒有未完成前置的任務不會出現在結果中。
+     */
+    public java.util.Map<Long, List<Long>> getBlockingPrerequisiteIds(List<Long> taskIds) {
+        if (taskIds == null || taskIds.isEmpty()) {
+            return java.util.Map.of();
+        }
+        List<TaskDependency> dependencies = taskDependencyRepository.findByTaskIdIn(taskIds);
+        if (dependencies.isEmpty()) {
+            return java.util.Map.of();
+        }
+        java.util.Set<Long> unfinished = taskRepository
+                .findAllById(dependencies.stream().map(TaskDependency::getDependsOnTaskId).toList())
+                .stream()
+                .filter(t -> !TaskStatus.DONE.name().equals(t.getStatus()))
+                .map(Task::getId)
+                .collect(java.util.stream.Collectors.toSet());
+
+        java.util.Map<Long, List<Long>> blocking = new java.util.LinkedHashMap<>();
+        for (TaskDependency dependency : dependencies) {
+            if (unfinished.contains(dependency.getDependsOnTaskId())) {
+                blocking.computeIfAbsent(dependency.getTaskId(), k -> new ArrayList<>())
+                        .add(dependency.getDependsOnTaskId());
+            }
+        }
+        return blocking;
+    }
+
     public long countByProjectId(Long projectId) {
         return taskRepository.countByProjectId(projectId);
     }

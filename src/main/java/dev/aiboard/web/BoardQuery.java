@@ -25,6 +25,9 @@ public class BoardQuery {
         ProjectService.ProjectDto project = projectService.getById(projectId);
         List<TaskService.TaskDto> tasks = taskService.listTasks(projectId, null);
 
+        Map<Long, List<Long>> blocking = taskService.getBlockingPrerequisiteIds(
+                tasks.stream().map(TaskService.TaskDto::id).toList());
+
         Map<String, List<TaskCard>> columns = new LinkedHashMap<>();
         for (String status : COLUMNS) {
             columns.put(status, new java.util.ArrayList<>());
@@ -32,14 +35,19 @@ public class BoardQuery {
         for (TaskService.TaskDto task : tasks) {
             columns.computeIfAbsent(task.status(), s -> new java.util.ArrayList<>())
                     .add(new TaskCard(task.id(), task.title(), task.category(), task.sortOrder(),
-                            task.assignee()));
+                            task.assignee(),
+                            blocking.getOrDefault(task.id(), List.of())));
         }
 
         return new BoardView(project.id(), project.name(), project.description(), columns);
     }
 
     public record TaskCard(Long id, String title, String category, Integer sortOrder,
-                           String assignee) {
+                           String assignee, List<Long> waitingFor) {
+        public TaskCard(Long id, String title, String category, Integer sortOrder,
+                        String assignee) {
+            this(id, title, category, sortOrder, assignee, List.of());
+        }
     }
 
     public record BoardView(Long id, String name, String description, Map<String, List<TaskCard>> columns) {
