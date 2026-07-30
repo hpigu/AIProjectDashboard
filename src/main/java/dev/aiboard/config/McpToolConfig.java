@@ -5,14 +5,17 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import dev.aiboard.mcp.ProjectBoardTools;
+import dev.aiboard.mcp.RoleTools;
 
 @Configuration
 public class McpToolConfig {
 
+    /** 新增 @Tool 類別時務必一併加進來，否則工具不會出現在 MCP 端點上。 */
     @Bean
-    public ToolCallbackProvider projectBoardToolCallbackProvider(ProjectBoardTools projectBoardTools) {
+    public ToolCallbackProvider projectBoardToolCallbackProvider(ProjectBoardTools projectBoardTools,
+                                                                  RoleTools roleTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(projectBoardTools)
+                .toolObjects(projectBoardTools, roleTools)
                 .build();
     }
 }
