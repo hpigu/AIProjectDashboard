@@ -327,7 +327,8 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", "TODO")).thenReturn(List.of(candidate));
-        when(taskDependencyRepository.findBlockedTaskIds(List.of(14L))).thenReturn(List.of());
+        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
+                .thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
                 .thenReturn(1);
@@ -354,7 +355,7 @@ class TaskServiceTest {
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", "TODO"))
                 .thenReturn(List.of(first, second), List.of(second));
-        when(taskDependencyRepository.findBlockedTaskIds(any())).thenReturn(List.of());
+        when(taskDependencyRepository.findUnfinishedPrerequisites(any())).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
                 .thenReturn(0);
@@ -377,13 +378,14 @@ class TaskServiceTest {
         Long projectId = 12L;
         Task blocked = taskWithId(projectId, 14L, "改後端", "BACKEND", 0);
         Task free = taskWithId(projectId, 15L, "無相依", "BACKEND", 1);
+        Task prerequisite = taskWithId(projectId, 9L, "設定環境", "INFRA", 0);
         Task claimed = claimedTask(projectId, 15L, "無相依", "BACKEND", 1, "backend-dev");
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", "TODO")).thenReturn(List.of(blocked, free));
-        when(taskDependencyRepository.findBlockedTaskIds(List.of(14L, 15L)))
-                .thenReturn(List.of(14L));
+        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L, 15L)))
+                .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
                 .thenReturn(1);
@@ -406,9 +408,8 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", "TODO")).thenReturn(List.of(blocked));
-        when(taskDependencyRepository.findBlockedTaskIds(List.of(14L))).thenReturn(List.of(14L));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(14L))
-                .thenReturn(List.of(prerequisite));
+        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
+                .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
 
         TaskService.ClaimNextTaskResult result =
                 taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
@@ -416,9 +417,11 @@ class TaskServiceTest {
         assertThat(result.claimed()).isFalse();
         assertThat(result.blockedByDependency()).isTrue();
         assertThat(result.blockedCandidates()).hasSize(1);
-        assertThat(result.blockedCandidates().get(0))
-                .contains("#14 改後端")
-                .contains("#9 設定環境");
+        TaskService.BlockedCandidate candidate = result.blockedCandidates().getFirst();
+        assertThat(candidate.task().id()).isEqualTo(14L);
+        assertThat(candidate.task().title()).isEqualTo("改後端");
+        assertThat(candidate.waitingFor()).extracting(TaskService.TaskDto::id)
+                .containsExactly(9L);
         verify(taskRepository, never()).claimIfTodo(any(), any(), any(LocalDateTime.class));
     }
 
@@ -538,6 +541,22 @@ class TaskServiceTest {
         assertThatThrownBy(() -> taskService.updateStatus(4L, "BLOCKED", null))
                 .isInstanceOf(BoardException.class)
                 .hasMessageContaining("不能標記為 BLOCKED");
+    }
+
+    /** 組出 findUnfinishedPrerequisites 的投影列：taskId 還在等 prerequisite。 */
+    private static TaskDependencyRepository.UnfinishedPrerequisite prerequisiteOf(
+            Long taskId, Task prerequisite) {
+        return new TaskDependencyRepository.UnfinishedPrerequisite() {
+            @Override
+            public Long getTaskId() {
+                return taskId;
+            }
+
+            @Override
+            public Task getPrerequisite() {
+                return prerequisite;
+            }
+        };
     }
 
     private static Task taskWithId(Long projectId, Long id, String title,

@@ -82,8 +82,11 @@ class TaskClaimConcurrencyTest {
 
         assertThat(blocked.claimed()).isFalse();
         assertThat(blocked.blockedByDependency()).isTrue();
-        assertThat(blocked.blockedCandidates()).anySatisfy(
-                text -> assertThat(text).contains("改後端").contains("設定環境"));
+        assertThat(blocked.blockedCandidates()).anySatisfy(candidate -> {
+            assertThat(candidate.task().title()).isEqualTo("改後端");
+            assertThat(candidate.waitingFor()).extracting(TaskService.TaskDto::title)
+                    .containsExactly("設定環境");
+        });
 
         // 前置任務走完整流程到 DONE，被卡住的任務才應該解鎖。
         TaskService.ClaimNextTaskResult infra =

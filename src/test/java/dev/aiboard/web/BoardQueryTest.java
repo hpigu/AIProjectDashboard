@@ -39,8 +39,9 @@ class BoardQueryTest {
         when(taskService.listTasks(projectId, null)).thenReturn(List.of(
                 taskDto(9L, projectId, "設定環境", "TODO", "INFRA", 0),
                 taskDto(14L, projectId, "改後端", "TODO", "BACKEND", 1)));
-        when(taskService.getBlockingPrerequisiteIds(List.of(9L, 14L)))
-                .thenReturn(Map.of(14L, List.of(9L)));
+        when(taskService.getUnfinishedPrerequisites(List.of(9L, 14L)))
+                .thenReturn(Map.of(14L, List.of(
+                        taskDto(9L, projectId, "設定環境", "TODO", "INFRA", 0))));
 
         BoardQuery.BoardView board = boardQuery.getBoard(projectId);
 
@@ -57,7 +58,7 @@ class BoardQueryTest {
                 new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
         when(taskService.listTasks(projectId, null)).thenReturn(List.of(
                 taskDto(9L, projectId, "獨立任務", "TODO", "BACKEND", 0)));
-        when(taskService.getBlockingPrerequisiteIds(List.of(9L))).thenReturn(Map.of());
+        when(taskService.getUnfinishedPrerequisites(List.of(9L))).thenReturn(Map.of());
 
         BoardQuery.BoardView board = boardQuery.getBoard(projectId);
 

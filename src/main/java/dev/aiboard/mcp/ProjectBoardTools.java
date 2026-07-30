@@ -102,19 +102,14 @@ public class ProjectBoardTools {
         TaskService.ClaimNextTaskResult result =
                 taskService.claimNextTask(projectName, category, assignee);
         if (!result.projectFound()) {
-            String projects = result.availableProjects().isEmpty()
-                    ? "（看板上目前沒有專案）"
-                    : result.availableProjects().stream()
-                            .map(p -> "#%d %s".formatted(p.id(), p.name()))
-                            .collect(Collectors.joining("、"));
-            return "找不到專案「%s」。看板上目前有：\n%s".formatted(projectName, projects);
+            return projectNotFoundMessage(projectName, result.availableProjects());
         }
         if (result.blockedByDependency()) {
             return ("%s 還有待辦任務，但全部都在等前置任務完成：\n%s\n\n"
                     + "請等前置任務標記 DONE 後再認領。")
                     .formatted(result.category(),
                             result.blockedCandidates().stream()
-                                    .map(s -> "- " + s)
+                                    .map(ProjectBoardTools::describeBlockedCandidate)
                                     .collect(Collectors.joining("\n")));
         }
         if (!result.claimed()) {
@@ -151,12 +146,7 @@ public class ProjectBoardTools {
         TaskService.ProjectTasksResult result =
                 taskService.listTasksByProjectRef(projectId, projectName, status, category);
         if (!result.projectFound()) {
-            String projects = result.availableProjects().isEmpty()
-                    ? "（看板上目前沒有專案）"
-                    : result.availableProjects().stream()
-                            .map(p -> "#%d %s".formatted(p.id(), p.name()))
-                            .collect(Collectors.joining("、"));
-            return "找不到專案「%s」。看板上目前有：\n%s".formatted(projectName, projects);
+            return projectNotFoundMessage(projectName, result.availableProjects());
         }
 
         ProjectService.ProjectDto project = result.project();
@@ -173,22 +163,20 @@ public class ProjectBoardTools {
                 .collect(Collectors.groupingBy(TaskService.TaskDto::status, java.util.LinkedHashMap::new, Collectors.toList()));
 
         boolean withDescription = Boolean.TRUE.equals(includeDescription);
+        // 一次查完所有任務的未完成前置，避免逐筆查詢。
+        var waitingByTask = taskService.getUnfinishedPrerequisites(
+                filtered.stream().map(TaskService.TaskDto::id).toList());
 
         for (var entry : byStatus.entrySet()) {
             sb.append("### %s (%d)\n".formatted(entry.getKey(), entry.getValue().size()));
             for (TaskService.TaskDto task : entry.getValue()) {
                 String categoryLabel = task.category() != null ? " [%s]".formatted(task.category()) : "";
                 String assigneeLabel = task.assignee() != null ? " @" + task.assignee() : "";
-                String waitingLabel = "";
-                if ("TODO".equals(task.status())) {
-                    List<TaskService.TaskDto> waiting =
-                            taskService.getUnfinishedPrerequisites(task.id());
-                    if (!waiting.isEmpty()) {
-                        waitingLabel = waiting.stream()
-                                .map(w -> "#" + w.id())
-                                .collect(Collectors.joining("、", " ⏳ 等待 ", ""));
-                    }
-                }
+                List<TaskService.TaskDto> waiting =
+                        waitingByTask.getOrDefault(task.id(), List.of());
+                String waitingLabel = waiting.isEmpty() ? "" : waiting.stream()
+                        .map(w -> "#" + w.id())
+                        .collect(Collectors.joining("、", " ⏳ 等待 ", ""));
                 sb.append("- #%d %s%s%s%s\n"
                         .formatted(task.id(), task.title(), categoryLabel, assigneeLabel,
                                 waitingLabel));
@@ -199,6 +187,25 @@ public class ProjectBoardTools {
         }
 
         return sb.toString();
+    }
+
+    private static String projectNotFoundMessage(String projectName,
+                                                  List<ProjectService.ProjectDto> availableProjects) {
+        String projects = availableProjects.isEmpty()
+                ? "（看板上目前沒有專案）"
+                : availableProjects.stream()
+                        .map(p -> "#%d %s".formatted(p.id(), p.name()))
+                        .collect(Collectors.joining("、"));
+        return "找不到專案「%s」。看板上目前有：\n%s".formatted(projectName, projects);
+    }
+
+    /** 「- #12 標題（等待：#8 設定環境）」，讓認領者知道卡在哪。 */
+    private static String describeBlockedCandidate(TaskService.BlockedCandidate candidate) {
+        String waiting = candidate.waitingFor().stream()
+                .map(w -> "#%d %s".formatted(w.id(), w.title()))
+                .collect(Collectors.joining("、"));
+        return "- #%d %s（等待：%s）"
+                .formatted(candidate.task().id(), candidate.task().title(), waiting);
     }
 
     private static String indentDescription(String description) {

@@ -31,9 +31,9 @@ class BoardControllerTest {
     @Test
     void getBoard_allFourColumnKeysPresentEvenWhenEmpty() throws Exception {
         Map<String, List<BoardQuery.TaskCard>> columns = Map.of(
-                "TODO", List.of(new BoardQuery.TaskCard(5L, "建立 schema", "BACKEND", 3, null)),
+                "TODO", List.of(new BoardQuery.TaskCard(5L, "建立 schema", "BACKEND", 3, null, List.of())),
                 "IN_PROGRESS", List.of(
-                        new BoardQuery.TaskCard(6L, "實作 API", "BACKEND", 4, "backend-dev")),
+                        new BoardQuery.TaskCard(6L, "實作 API", "BACKEND", 4, "backend-dev", List.of(5L))),
                 "BLOCKED", List.of(),
                 "DONE", List.of()
         );

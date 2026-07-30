@@ -9,7 +9,9 @@ import dev.aiboard.event.BoardEventPublisher;
 import dev.aiboard.project.ProjectService;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.time.LocalDateTime;
 
 @Service
@@ -73,17 +75,18 @@ public class TaskService {
         }
 
         // 相依關係在所有任務都有 id 之後才建立，批次內序號才解析得了。
+        List<TaskDependency> dependencies = new ArrayList<>();
         for (int i = 0; i < inputs.size(); i++) {
             TaskInput input = inputs.get(i);
             Long taskId = createdIds.get(i);
             for (Integer index : input.dependsOnIndexes()) {
-                taskDependencyRepository.save(
-                        new TaskDependency(taskId, createdIds.get(index - 1)));
+                dependencies.add(new TaskDependency(taskId, createdIds.get(index - 1)));
             }
             for (Long dependsOnId : input.dependsOnTaskIds()) {
-                taskDependencyRepository.save(new TaskDependency(taskId, dependsOnId));
+                dependencies.add(new TaskDependency(taskId, dependsOnId));
             }
         }
+        taskDependencyRepository.saveAll(dependencies);
 
         eventPublisher.publish(BoardEvent.tasksCreated(projectId, results.size()));
         return results;
@@ -224,15 +227,19 @@ public class TaskService {
             }
 
             // 前置任務尚未 DONE 的候選一律跳過，讓沒有相依的任務可以先做。
-            List<Long> blocked = taskDependencyRepository.findBlockedTaskIds(
+            // 同一份查詢結果也用來說明「在等誰」，不必為此再查一次。
+            Map<Long, List<TaskDto>> waiting = getUnfinishedPrerequisites(
                     candidates.stream().map(Task::getId).toList());
             Task candidate = candidates.stream()
-                    .filter(t -> !blocked.contains(t.getId()))
+                    .filter(t -> !waiting.containsKey(t.getId()))
                     .findFirst()
                     .orElse(null);
             if (candidate == null) {
                 return ClaimNextTaskResult.allBlocked(project.get(), category.name(),
-                        describeBlockedCandidates(candidates));
+                        candidates.stream()
+                                .map(t -> new BlockedCandidate(toDto(t),
+                                        waiting.getOrDefault(t.getId(), List.of())))
+                                .toList());
             }
 
             LocalDateTime claimedAt = LocalDateTime.now();
@@ -252,54 +259,20 @@ public class TaskService {
         return ClaimNextTaskResult.noTask(project.get(), category.name());
     }
 
-    /** 產生「#12 標題（等待 #8 前置任務）」形式的說明，讓呼叫者知道卡在哪。 */
-    private List<String> describeBlockedCandidates(List<Task> candidates) {
-        return candidates.stream()
-                .map(task -> {
-                    List<Task> waiting = taskDependencyRepository.findUnfinishedPrerequisites(task.getId());
-                    String waitingLabel = waiting.stream()
-                            .map(w -> "#%d %s".formatted(w.getId(), w.getTitle()))
-                            .reduce((a, b) -> a + "、" + b)
-                            .orElse("");
-                    return "#%d %s（等待：%s）".formatted(task.getId(), task.getTitle(), waitingLabel);
-                })
-                .toList();
-    }
-
-    /** 查詢指定任務尚未完成的前置任務。 */
-    public List<TaskDto> getUnfinishedPrerequisites(Long taskId) {
-        return taskDependencyRepository.findUnfinishedPrerequisites(taskId).stream()
-                .map(this::toDto)
-                .toList();
-    }
-
     /**
-     * 一次查出多個任務各自「還在等哪些前置任務 id」，避免逐筆查詢。
-     * 沒有未完成前置的任務不會出現在結果中。
+     * 一次查出多個任務各自還在等哪些尚未完成的前置任務。
+     * 沒有未完成前置的任務不會出現在結果中，因此空 Map 代表全部可認領。
      */
-    public java.util.Map<Long, List<Long>> getBlockingPrerequisiteIds(List<Long> taskIds) {
+    public Map<Long, List<TaskDto>> getUnfinishedPrerequisites(List<Long> taskIds) {
         if (taskIds == null || taskIds.isEmpty()) {
-            return java.util.Map.of();
+            return Map.of();
         }
-        List<TaskDependency> dependencies = taskDependencyRepository.findByTaskIdIn(taskIds);
-        if (dependencies.isEmpty()) {
-            return java.util.Map.of();
+        Map<Long, List<TaskDto>> waiting = new LinkedHashMap<>();
+        for (var row : taskDependencyRepository.findUnfinishedPrerequisites(taskIds)) {
+            waiting.computeIfAbsent(row.getTaskId(), k -> new ArrayList<>())
+                    .add(toDto(row.getPrerequisite()));
         }
-        java.util.Set<Long> unfinished = taskRepository
-                .findAllById(dependencies.stream().map(TaskDependency::getDependsOnTaskId).toList())
-                .stream()
-                .filter(t -> !TaskStatus.DONE.name().equals(t.getStatus()))
-                .map(Task::getId)
-                .collect(java.util.stream.Collectors.toSet());
-
-        java.util.Map<Long, List<Long>> blocking = new java.util.LinkedHashMap<>();
-        for (TaskDependency dependency : dependencies) {
-            if (unfinished.contains(dependency.getDependsOnTaskId())) {
-                blocking.computeIfAbsent(dependency.getTaskId(), k -> new ArrayList<>())
-                        .add(dependency.getDependsOnTaskId());
-            }
-        }
-        return blocking;
+        return waiting;
     }
 
     public long countByProjectId(Long projectId) {
@@ -376,9 +349,13 @@ public class TaskService {
                            LocalDateTime claimedAt) {
     }
 
+    /** 被前置卡住的候選任務，以及它還在等哪些未完成的前置。 */
+    public record BlockedCandidate(TaskDto task, List<TaskDto> waitingFor) {
+    }
+
     public record ClaimNextTaskResult(ProjectService.ProjectDto project, TaskDto task,
                                       List<ProjectService.ProjectDto> availableProjects,
-                                      String category, List<String> blockedCandidates) {
+                                      String category, List<BlockedCandidate> blockedCandidates) {
         public static ClaimNextTaskResult claimed(ProjectService.ProjectDto project, TaskDto task,
                                                    String category) {
             return new ClaimNextTaskResult(project, task, List.of(), category, List.of());
@@ -390,7 +367,7 @@ public class TaskService {
 
         /** 該 category 還有 TODO，但全部都在等前置任務完成。 */
         public static ClaimNextTaskResult allBlocked(ProjectService.ProjectDto project, String category,
-                                                      List<String> blockedCandidates) {
+                                                      List<BlockedCandidate> blockedCandidates) {
             return new ClaimNextTaskResult(project, null, List.of(), category, blockedCandidates);
         }
 
@@ -408,7 +385,7 @@ public class TaskService {
         }
 
         public boolean blockedByDependency() {
-            return task == null && !blockedCandidates.isEmpty();
+            return !blockedCandidates.isEmpty();
         }
     }
 
