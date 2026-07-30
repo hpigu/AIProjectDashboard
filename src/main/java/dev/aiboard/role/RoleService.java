@@ -129,6 +129,41 @@ public class RoleService {
         return UpsertRoleResult.created(toDto(saved), project);
     }
 
+    /**
+     * 只在角色尚未存在時建立，已存在就原樣保留。
+     * 供啟動時匯入初始指引用：看板上的內容是正本，使用者透過 upsert_role
+     * 調整過的指引不該被重啟覆寫回程式碼裡的版本。
+     */
+    @Transactional
+    public UpsertRoleResult createRoleIfAbsent(String name, String category, String instructions,
+                                                String projectName) {
+        String normalizedName = normalizeName(name);
+        if (instructions == null || instructions.isBlank()) {
+            throw new IllegalArgumentException("角色指引 instructions 不可為空白");
+        }
+
+        Long projectId = null;
+        ProjectService.ProjectDto project = null;
+        if (projectName != null && !projectName.isBlank()) {
+            var found = projectService.findByNameIgnoreCase(projectName);
+            if (found.isEmpty()) {
+                return UpsertRoleResult.projectNotFound(projectService.listProjects());
+            }
+            project = found.get();
+            projectId = project.id();
+        }
+
+        Optional<Role> existing = projectId == null
+                ? roleRepository.findByNameAndProjectIdIsNull(normalizedName)
+                : roleRepository.findByNameAndProjectId(normalizedName, projectId);
+        if (existing.isPresent()) {
+            return UpsertRoleResult.kept(toDto(existing.get()), project);
+        }
+
+        Role saved = roleRepository.save(new Role(normalizedName, category, instructions, projectId));
+        return UpsertRoleResult.created(toDto(saved), project);
+    }
+
     private List<String> listAllRoleNames() {
         List<Role> generic = roleRepository.findAllByProjectIdIsNull();
         List<String> names = new ArrayList<>();
@@ -206,6 +241,11 @@ public class RoleService {
         }
 
         public static UpsertRoleResult updated(RoleDto role, ProjectService.ProjectDto project) {
+            return new UpsertRoleResult(role, false, project, List.of(), false);
+        }
+
+        /** 角色已存在、內容原樣保留（createRoleIfAbsent 用）。 */
+        public static UpsertRoleResult kept(RoleDto role, ProjectService.ProjectDto project) {
             return new UpsertRoleResult(role, false, project, List.of(), false);
         }
 

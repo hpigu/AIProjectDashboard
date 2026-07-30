@@ -15,9 +15,13 @@ import java.util.List;
  * AgentDashboard 專屬層（project_id = 該專案 id）放寫死本 repo 的路徑所有權、
  * 埠號與 commit 規則。
  *
- * 使用 {@link RoleService#upsertRole} 的 upsert 語意：同名同範圍已存在就更新為
- * 這裡定義的最新內容，不存在才新增，因此無論 migration 重跑幾次或應用重啟幾次，
- * 每個角色在每個範圍都只會有一筆，不會重複匯入。
+ * 使用 {@link RoleService#createRoleIfAbsent}：**只在角色尚未存在時建立**，
+ * 已存在就原樣保留。看板上的內容才是正本——使用者透過 upsert_role 或未來的
+ * 看板 UI 調整過的指引，不該因為重啟就被覆寫回這裡的版本。
+ * 因此重啟幾次都不會重複匯入，也不會蓋掉線上調整。
+ *
+ * 反過來說，改動這個檔案裡的常數只會影響「還沒有該角色的看板」。
+ * 要把新版指引推到既有看板，請呼叫 upsert_role。
  *
  * AgentDashboard 專案本身若尚不存在（例如全新的測試資料庫），專屬層會被跳過，
  * 不視為錯誤，通用層仍會照常匯入。
@@ -45,10 +49,9 @@ public class RoleSeeder implements ApplicationRunner {
     }
 
     private void seedGenericRoles() {
-        for (RoleSeed seed : GENERIC_SEEDS) {
-            roleService.upsertRole(seed.name(), seed.category(), seed.instructions(), null);
-        }
-        log.info("已匯入 {} 個通用角色指引", GENERIC_SEEDS.size());
+        int created = seedAll(GENERIC_SEEDS, null);
+        log.info("通用角色指引：新建 {} 筆，已存在保留 {} 筆",
+                created, GENERIC_SEEDS.size() - created);
     }
 
     private void seedAgentDashboardOverrides() {
@@ -57,11 +60,21 @@ public class RoleSeeder implements ApplicationRunner {
             log.info("看板上尚無「{}」專案，略過專屬指引匯入", AGENT_DASHBOARD_PROJECT_NAME);
             return;
         }
-        for (RoleSeed seed : AGENT_DASHBOARD_SEEDS) {
-            roleService.upsertRole(seed.name(), seed.category(), seed.instructions(),
-                    AGENT_DASHBOARD_PROJECT_NAME);
+        int created = seedAll(AGENT_DASHBOARD_SEEDS, AGENT_DASHBOARD_PROJECT_NAME);
+        log.info("AgentDashboard 專屬角色指引：新建 {} 筆，已存在保留 {} 筆",
+                created, AGENT_DASHBOARD_SEEDS.size() - created);
+    }
+
+    private int seedAll(List<RoleSeed> seeds, String projectName) {
+        int created = 0;
+        for (RoleSeed seed : seeds) {
+            var result = roleService.createRoleIfAbsent(
+                    seed.name(), seed.category(), seed.instructions(), projectName);
+            if (result.created()) {
+                created++;
+            }
         }
-        log.info("已匯入 {} 個 AgentDashboard 專屬角色指引覆寫", AGENT_DASHBOARD_SEEDS.size());
+        return created;
     }
 
     private record RoleSeed(String name, String category, String instructions) {
