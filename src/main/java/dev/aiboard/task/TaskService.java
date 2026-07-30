@@ -19,13 +19,16 @@ public class TaskService {
 
     private final TaskRepository taskRepository;
     private final TaskLogRepository taskLogRepository;
+    private final TaskDependencyRepository taskDependencyRepository;
     private final ProjectService projectService;
     private final BoardEventPublisher eventPublisher;
 
     public TaskService(TaskRepository taskRepository, TaskLogRepository taskLogRepository,
+                        TaskDependencyRepository taskDependencyRepository,
                         ProjectService projectService, BoardEventPublisher eventPublisher) {
         this.taskRepository = taskRepository;
         this.taskLogRepository = taskLogRepository;
+        this.taskDependencyRepository = taskDependencyRepository;
         this.projectService = projectService;
         this.eventPublisher = eventPublisher;
     }
@@ -54,7 +57,10 @@ public class TaskService {
 
         int startSortOrder = taskRepository.findMaxSortOrder(projectId) + 1;
 
+        validateDependencies(projectId, inputs);
+
         List<TaskDto> results = new ArrayList<>(inputs.size());
+        List<Long> createdIds = new ArrayList<>(inputs.size());
         for (int i = 0; i < inputs.size(); i++) {
             TaskInput input = inputs.get(i);
             TaskCategory category = TaskCategory.fromStringOrOther(input.category());
@@ -62,10 +68,58 @@ public class TaskService {
                     category.name(), startSortOrder + i);
             Task saved = taskRepository.save(task);
             taskLogRepository.save(new TaskLog(saved.getId(), null, TaskStatus.TODO.name(), null));
+            createdIds.add(saved.getId());
             results.add(toDto(saved));
         }
+
+        // 相依關係在所有任務都有 id 之後才建立，批次內序號才解析得了。
+        for (int i = 0; i < inputs.size(); i++) {
+            TaskInput input = inputs.get(i);
+            Long taskId = createdIds.get(i);
+            for (Integer index : input.dependsOnIndexes()) {
+                taskDependencyRepository.save(
+                        new TaskDependency(taskId, createdIds.get(index - 1)));
+            }
+            for (Long dependsOnId : input.dependsOnTaskIds()) {
+                taskDependencyRepository.save(new TaskDependency(taskId, dependsOnId));
+            }
+        }
+
         eventPublisher.publish(BoardEvent.tasksCreated(projectId, results.size()));
         return results;
+    }
+
+    private void validateDependencies(Long projectId, List<TaskInput> inputs) {
+        for (int i = 0; i < inputs.size(); i++) {
+            TaskInput input = inputs.get(i);
+            int position = i + 1;
+
+            for (Integer index : input.dependsOnIndexes()) {
+                if (index == null || index < 1 || index > inputs.size()) {
+                    throw new IllegalArgumentException(
+                            "第 %d 筆任務的前置序號 %s 超出本批次範圍（1～%d）"
+                                    .formatted(position, index, inputs.size()));
+                }
+                if (index == position) {
+                    throw new IllegalArgumentException("第 %d 筆任務不可依賴自己".formatted(position));
+                }
+                if (index > position) {
+                    throw new IllegalArgumentException(
+                            "第 %d 筆任務的前置序號 %d 排在自己之後；前置任務必須先建立"
+                                    .formatted(position, index));
+                }
+            }
+
+            for (Long dependsOnId : input.dependsOnTaskIds()) {
+                Task prerequisite = taskRepository.findById(dependsOnId)
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "第 %d 筆任務的前置任務 #%d 不存在".formatted(position, dependsOnId)));
+                if (!prerequisite.getProjectId().equals(projectId)) {
+                    throw new IllegalArgumentException(
+                            "第 %d 筆任務的前置任務 #%d 屬於其他專案".formatted(position, dependsOnId));
+                }
+            }
+        }
     }
 
     @Transactional
@@ -162,18 +216,30 @@ public class TaskService {
         }
 
         for (int attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt++) {
-            var candidate = taskRepository
-                    .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+            List<Task> candidates = taskRepository
+                    .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                             project.get().id(), category.name(), TaskStatus.TODO.name());
-            if (candidate.isEmpty()) {
+            if (candidates.isEmpty()) {
                 return ClaimNextTaskResult.noTask(project.get(), category.name());
             }
 
+            // 前置任務尚未 DONE 的候選一律跳過，讓沒有相依的任務可以先做。
+            List<Long> blocked = taskDependencyRepository.findBlockedTaskIds(
+                    candidates.stream().map(Task::getId).toList());
+            Task candidate = candidates.stream()
+                    .filter(t -> !blocked.contains(t.getId()))
+                    .findFirst()
+                    .orElse(null);
+            if (candidate == null) {
+                return ClaimNextTaskResult.allBlocked(project.get(), category.name(),
+                        describeBlockedCandidates(candidates));
+            }
+
             LocalDateTime claimedAt = LocalDateTime.now();
-            int updated = taskRepository.claimIfTodo(candidate.get().getId(), assignee, claimedAt);
+            int updated = taskRepository.claimIfTodo(candidate.getId(), assignee, claimedAt);
             if (updated == 1) {
-                Task claimed = taskRepository.findById(candidate.get().getId())
-                        .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidate.get().getId()));
+                Task claimed = taskRepository.findById(candidate.getId())
+                        .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidate.getId()));
                 taskLogRepository.save(new TaskLog(claimed.getId(), TaskStatus.TODO.name(),
                         TaskStatus.IN_PROGRESS.name(), "認領者：" + assignee));
                 eventPublisher.publish(BoardEvent.taskStatusChanged(
@@ -184,6 +250,27 @@ public class TaskService {
         }
 
         return ClaimNextTaskResult.noTask(project.get(), category.name());
+    }
+
+    /** 產生「#12 標題（等待 #8 前置任務）」形式的說明，讓呼叫者知道卡在哪。 */
+    private List<String> describeBlockedCandidates(List<Task> candidates) {
+        return candidates.stream()
+                .map(task -> {
+                    List<Task> waiting = taskDependencyRepository.findUnfinishedPrerequisites(task.getId());
+                    String waitingLabel = waiting.stream()
+                            .map(w -> "#%d %s".formatted(w.getId(), w.getTitle()))
+                            .reduce((a, b) -> a + "、" + b)
+                            .orElse("");
+                    return "#%d %s（等待：%s）".formatted(task.getId(), task.getTitle(), waitingLabel);
+                })
+                .toList();
+    }
+
+    /** 查詢指定任務尚未完成的前置任務。 */
+    public List<TaskDto> getUnfinishedPrerequisites(Long taskId) {
+        return taskDependencyRepository.findUnfinishedPrerequisites(taskId).stream()
+                .map(this::toDto)
+                .toList();
     }
 
     public long countByProjectId(Long projectId) {
@@ -235,7 +322,24 @@ public class TaskService {
         return assignee;
     }
 
-    public record TaskInput(String title, String description, String category) {
+    /**
+     * @param dependsOnIndexes 同批次內的前置任務，以 1-based 序號指定
+     *                         （規劃階段任務尚未有 id，只能用序號表達批次內相依）
+     * @param dependsOnTaskIds 看板上既有任務的 id，作為前置任務
+     */
+    public record TaskInput(String title, String description, String category,
+                             List<Integer> dependsOnIndexes, List<Long> dependsOnTaskIds) {
+        public TaskInput(String title, String description, String category) {
+            this(title, description, category, List.of(), List.of());
+        }
+
+        public List<Integer> dependsOnIndexes() {
+            return dependsOnIndexes == null ? List.of() : dependsOnIndexes;
+        }
+
+        public List<Long> dependsOnTaskIds() {
+            return dependsOnTaskIds == null ? List.of() : dependsOnTaskIds;
+        }
     }
 
     public record TaskDto(Long id, Long projectId, String title, String description, String status,
@@ -245,19 +349,25 @@ public class TaskService {
 
     public record ClaimNextTaskResult(ProjectService.ProjectDto project, TaskDto task,
                                       List<ProjectService.ProjectDto> availableProjects,
-                                      String category) {
+                                      String category, List<String> blockedCandidates) {
         public static ClaimNextTaskResult claimed(ProjectService.ProjectDto project, TaskDto task,
                                                    String category) {
-            return new ClaimNextTaskResult(project, task, List.of(), category);
+            return new ClaimNextTaskResult(project, task, List.of(), category, List.of());
         }
 
         public static ClaimNextTaskResult noTask(ProjectService.ProjectDto project, String category) {
-            return new ClaimNextTaskResult(project, null, List.of(), category);
+            return new ClaimNextTaskResult(project, null, List.of(), category, List.of());
+        }
+
+        /** 該 category 還有 TODO，但全部都在等前置任務完成。 */
+        public static ClaimNextTaskResult allBlocked(ProjectService.ProjectDto project, String category,
+                                                      List<String> blockedCandidates) {
+            return new ClaimNextTaskResult(project, null, List.of(), category, blockedCandidates);
         }
 
         public static ClaimNextTaskResult projectNotFound(
                 List<ProjectService.ProjectDto> availableProjects, String category) {
-            return new ClaimNextTaskResult(null, null, availableProjects, category);
+            return new ClaimNextTaskResult(null, null, availableProjects, category, List.of());
         }
 
         public boolean projectFound() {
@@ -266,6 +376,10 @@ public class TaskService {
 
         public boolean claimed() {
             return task != null;
+        }
+
+        public boolean blockedByDependency() {
+            return task == null && !blockedCandidates.isEmpty();
         }
     }
 

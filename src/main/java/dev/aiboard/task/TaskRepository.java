@@ -15,7 +15,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     List<Task> findByProjectIdAndStatusOrderBySortOrderAsc(Long projectId, String status);
 
-    Optional<Task> findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+    List<Task> findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
             Long projectId, String category, String status);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)

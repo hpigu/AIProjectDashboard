@@ -40,11 +40,15 @@ class TaskServiceTest {
     @Mock
     private BoardEventPublisher eventPublisher;
 
+    @Mock
+    private TaskDependencyRepository taskDependencyRepository;
+
     private TaskService taskService;
 
     @BeforeEach
     void setUp() {
-        taskService = new TaskService(taskRepository, taskLogRepository, projectService, eventPublisher);
+        taskService = new TaskService(taskRepository, taskLogRepository, taskDependencyRepository,
+                projectService, eventPublisher);
     }
 
     @Test
@@ -321,8 +325,9 @@ class TaskServiceTest {
                 0, "backend-dev");
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
-        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO")).thenReturn(Optional.of(candidate));
+        when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                projectId, "BACKEND", "TODO")).thenReturn(List.of(candidate));
+        when(taskDependencyRepository.findBlockedTaskIds(List.of(14L))).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
                 .thenReturn(1);
@@ -346,8 +351,10 @@ class TaskServiceTest {
         Task claimed = claimedTask(projectId, 15L, "第二筆", "BACKEND", 1, "backend-dev");
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
-        when(taskRepository.findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO")).thenReturn(Optional.of(first), Optional.of(second));
+        when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                projectId, "BACKEND", "TODO"))
+                .thenReturn(List.of(first, second), List.of(second));
+        when(taskDependencyRepository.findBlockedTaskIds(any())).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
                 .thenReturn(0);
@@ -361,8 +368,110 @@ class TaskServiceTest {
 
         assertThat(result.task().id()).isEqualTo(15L);
         verify(taskRepository, times(2))
-                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                         projectId, "BACKEND", "TODO");
+    }
+
+    @Test
+    void claimNextTask_skipsTaskWhosePrerequisiteIsUnfinished() {
+        Long projectId = 12L;
+        Task blocked = taskWithId(projectId, 14L, "改後端", "BACKEND", 0);
+        Task free = taskWithId(projectId, 15L, "無相依", "BACKEND", 1);
+        Task claimed = claimedTask(projectId, 15L, "無相依", "BACKEND", 1, "backend-dev");
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
+        when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                projectId, "BACKEND", "TODO")).thenReturn(List.of(blocked, free));
+        when(taskDependencyRepository.findBlockedTaskIds(List.of(14L, 15L)))
+                .thenReturn(List.of(14L));
+        when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(taskRepository.findById(15L)).thenReturn(Optional.of(claimed));
+
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
+
+        assertThat(result.task().id()).isEqualTo(15L);
+        verify(taskRepository, never()).claimIfTodo(
+                org.mockito.ArgumentMatchers.eq(14L), any(), any(LocalDateTime.class));
+    }
+
+    @Test
+    void claimNextTask_whenAllCandidatesBlocked_reportsWhatTheyAreWaitingFor() {
+        Long projectId = 12L;
+        Task blocked = taskWithId(projectId, 14L, "改後端", "BACKEND", 0);
+        Task prerequisite = taskWithId(projectId, 9L, "設定環境", "INFRA", 0);
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
+        when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                projectId, "BACKEND", "TODO")).thenReturn(List.of(blocked));
+        when(taskDependencyRepository.findBlockedTaskIds(List.of(14L))).thenReturn(List.of(14L));
+        when(taskDependencyRepository.findUnfinishedPrerequisites(14L))
+                .thenReturn(List.of(prerequisite));
+
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
+
+        assertThat(result.claimed()).isFalse();
+        assertThat(result.blockedByDependency()).isTrue();
+        assertThat(result.blockedCandidates()).hasSize(1);
+        assertThat(result.blockedCandidates().get(0))
+                .contains("#14 改後端")
+                .contains("#9 設定環境");
+        verify(taskRepository, never()).claimIfTodo(any(), any(), any(LocalDateTime.class));
+    }
+
+    @Test
+    void claimNextTask_whenNoTodoAtAll_isNotReportedAsBlocked() {
+        Long projectId = 12L;
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
+        when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                projectId, "BACKEND", "TODO")).thenReturn(List.of());
+
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
+
+        assertThat(result.claimed()).isFalse();
+        assertThat(result.blockedByDependency()).isFalse();
+    }
+
+    @Test
+    void createTasks_whenDependencyIndexOutOfRange_throws() {
+        doNothing().when(projectService).assertExistsForUpdate(12L);
+
+        List<TaskService.TaskInput> inputs = List.of(
+                new TaskService.TaskInput("第一筆", null, "BACKEND", List.of(5), List.of()));
+
+        assertThatThrownBy(() -> taskService.createTasks(12L, inputs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("超出本批次範圍");
+    }
+
+    @Test
+    void createTasks_whenDependencyPointsForward_throws() {
+        doNothing().when(projectService).assertExistsForUpdate(12L);
+
+        List<TaskService.TaskInput> inputs = List.of(
+                new TaskService.TaskInput("第一筆", null, "BACKEND", List.of(2), List.of()),
+                new TaskService.TaskInput("第二筆", null, "BACKEND", List.of(), List.of()));
+
+        assertThatThrownBy(() -> taskService.createTasks(12L, inputs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("排在自己之後");
+    }
+
+    @Test
+    void createTasks_whenDependencyIsSelf_throws() {
+        doNothing().when(projectService).assertExistsForUpdate(12L);
+
+        List<TaskService.TaskInput> inputs = List.of(
+                new TaskService.TaskInput("第一筆", null, "BACKEND", List.of(1), List.of()));
+
+        assertThatThrownBy(() -> taskService.createTasks(12L, inputs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不可依賴自己");
     }
 
     @Test
@@ -378,7 +487,7 @@ class TaskServiceTest {
         assertThat(result.availableProjects()).extracting(ProjectService.ProjectDto::name)
                 .containsExactly("現有專案");
         verify(taskRepository, never())
-                .findFirstByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                         any(), any(), any());
     }
 

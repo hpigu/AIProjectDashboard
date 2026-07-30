@@ -42,7 +42,11 @@ public class ProjectBoardTools {
                     + "description 建議寫成「描述 + 驗收條件」兩段，"
                     + "例如「實作交易 CRUD API\n驗收條件：四個端點都有、金額不接受負數」，"
                     + "認領任務的 agent 只看得到這個欄位，寫清楚才知道何時算做完。"
-                    + "category 未填、空白或不合法時會歸類為 OTHER。")
+                    + "category 未填、空白或不合法時會歸類為 OTHER。"
+                    + "任務有先後相依時（例如環境設定完成後才能改後端），"
+                    + "用 dependsOnIndexes 指定本批次內的前置任務序號（1 代表第一筆），"
+                    + "或用 dependsOnTaskIds 指定看板上既有任務的 id。"
+                    + "被前置卡住的任務不會被 claim_next_task 發放，直到前置任務都 DONE。")
     public String createTasks(
             @ToolParam(description = "專案 ID") Long projectId,
             @ToolParam(description = "任務清單，至少 1 筆，最多 50 筆") List<TaskInputPayload> tasks) {
@@ -50,7 +54,8 @@ public class ProjectBoardTools {
             throw new IllegalArgumentException("任務清單不可為空");
         }
         List<TaskService.TaskInput> inputs = tasks.stream()
-                .map(t -> new TaskService.TaskInput(t.title(), t.description(), t.category()))
+                .map(t -> new TaskService.TaskInput(t.title(), t.description(), t.category(),
+                        t.dependsOnIndexes(), t.dependsOnTaskIds()))
                 .toList();
         taskService.createTasks(projectId, inputs);
 
@@ -103,6 +108,14 @@ public class ProjectBoardTools {
                             .map(p -> "#%d %s".formatted(p.id(), p.name()))
                             .collect(Collectors.joining("、"));
             return "找不到專案「%s」。看板上目前有：\n%s".formatted(projectName, projects);
+        }
+        if (result.blockedByDependency()) {
+            return ("%s 還有待辦任務，但全部都在等前置任務完成：\n%s\n\n"
+                    + "請等前置任務標記 DONE 後再認領。")
+                    .formatted(result.category(),
+                            result.blockedCandidates().stream()
+                                    .map(s -> "- " + s)
+                                    .collect(Collectors.joining("\n")));
         }
         if (!result.claimed()) {
             return "%s 目前沒有待辦任務。".formatted(result.category());
@@ -166,8 +179,19 @@ public class ProjectBoardTools {
             for (TaskService.TaskDto task : entry.getValue()) {
                 String categoryLabel = task.category() != null ? " [%s]".formatted(task.category()) : "";
                 String assigneeLabel = task.assignee() != null ? " @" + task.assignee() : "";
-                sb.append("- #%d %s%s%s\n"
-                        .formatted(task.id(), task.title(), categoryLabel, assigneeLabel));
+                String waitingLabel = "";
+                if ("TODO".equals(task.status())) {
+                    List<TaskService.TaskDto> waiting =
+                            taskService.getUnfinishedPrerequisites(task.id());
+                    if (!waiting.isEmpty()) {
+                        waitingLabel = waiting.stream()
+                                .map(w -> "#" + w.id())
+                                .collect(Collectors.joining("、", " ⏳ 等待 ", ""));
+                    }
+                }
+                sb.append("- #%d %s%s%s%s\n"
+                        .formatted(task.id(), task.title(), categoryLabel, assigneeLabel,
+                                waitingLabel));
                 if (withDescription) {
                     sb.append(indentDescription(task.description()));
                 }
@@ -186,6 +210,18 @@ public class ProjectBoardTools {
                 .collect(Collectors.joining("\n", "", "\n"));
     }
 
-    public record TaskInputPayload(String title, String description, String category) {
+    public record TaskInputPayload(String title, String description, String category,
+                                    List<Integer> dependsOnIndexes, List<Long> dependsOnTaskIds) {
+        public TaskInputPayload(String title, String description, String category) {
+            this(title, description, category, List.of(), List.of());
+        }
+
+        public List<Integer> dependsOnIndexes() {
+            return dependsOnIndexes == null ? List.of() : dependsOnIndexes;
+        }
+
+        public List<Long> dependsOnTaskIds() {
+            return dependsOnTaskIds == null ? List.of() : dependsOnTaskIds;
+        }
     }
 }
