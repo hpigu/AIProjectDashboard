@@ -129,6 +129,29 @@ public class TaskService {
         return tasks.stream().map(this::toDto).toList();
     }
 
+    public ProjectTasksResult listTasksByProjectRef(Long projectId, String projectName,
+                                                     String status, String category) {
+        boolean hasId = projectId != null;
+        boolean hasName = projectName != null && !projectName.isBlank();
+        if (!hasId && !hasName) {
+            throw new IllegalArgumentException("projectId 與 projectName 至少需擇一提供");
+        }
+
+        ProjectService.ProjectDto project;
+        if (hasId) {
+            project = projectService.getById(projectId);
+        } else {
+            var found = projectService.findByNameIgnoreCase(projectName);
+            if (found.isEmpty()) {
+                return ProjectTasksResult.projectNotFound(projectService.listProjects());
+            }
+            project = found.get();
+        }
+
+        List<TaskDto> tasks = listTasks(project.id(), status, category);
+        return ProjectTasksResult.found(project, tasks);
+    }
+
     @Transactional
     public ClaimNextTaskResult claimNextTask(String projectName, String categoryRaw, String assigneeRaw) {
         TaskCategory category = parseClaimCategory(categoryRaw);
@@ -248,6 +271,21 @@ public class TaskService {
 
     public record TaskLogDto(Long id, Long taskId, String fromStatus, String toStatus, String note,
                               java.time.LocalDateTime createdAt) {
+    }
+
+    public record ProjectTasksResult(ProjectService.ProjectDto project, List<TaskDto> tasks,
+                                      List<ProjectService.ProjectDto> availableProjects) {
+        public static ProjectTasksResult found(ProjectService.ProjectDto project, List<TaskDto> tasks) {
+            return new ProjectTasksResult(project, tasks, List.of());
+        }
+
+        public static ProjectTasksResult projectNotFound(List<ProjectService.ProjectDto> availableProjects) {
+            return new ProjectTasksResult(null, List.of(), availableProjects);
+        }
+
+        public boolean projectFound() {
+            return project != null;
+        }
     }
 
     public record TaskStatusChangeResult(TaskDto task, TaskStatus from, TaskStatus to, boolean changed,

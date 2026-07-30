@@ -184,6 +184,64 @@ class TaskServiceTest {
     }
 
     @Test
+    void listTasksByProjectRef_byProjectId_returnsSameResultAsListTasks() {
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExists(projectId);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
+        Task task = new Task(projectId, "任務 A", null, "BACKEND", 0);
+        when(taskRepository.findByProjectIdAndOptionalFilters(projectId, null, null))
+                .thenReturn(List.of(task));
+
+        TaskService.ProjectTasksResult result =
+                taskService.listTasksByProjectRef(projectId, null, null, null);
+
+        assertThat(result.projectFound()).isTrue();
+        assertThat(result.project().id()).isEqualTo(projectId);
+        assertThat(result.tasks()).hasSize(1);
+        assertThat(result.tasks().get(0).title()).isEqualTo("任務 A");
+    }
+
+    @Test
+    void listTasksByProjectRef_byProjectName_resolvesToSameProject() {
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExists(projectId);
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
+        Task task = new Task(projectId, "任務 A", null, "BACKEND", 0);
+        when(taskRepository.findByProjectIdAndOptionalFilters(projectId, null, null))
+                .thenReturn(List.of(task));
+
+        TaskService.ProjectTasksResult result =
+                taskService.listTasksByProjectRef(null, "個人記帳 App", null, null);
+
+        assertThat(result.projectFound()).isTrue();
+        assertThat(result.project().id()).isEqualTo(projectId);
+        assertThat(result.tasks()).hasSize(1);
+    }
+
+    @Test
+    void listTasksByProjectRef_whenNeitherProvided_throwsIllegalArgumentException() {
+        assertThatThrownBy(() -> taskService.listTasksByProjectRef(null, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("projectId");
+    }
+
+    @Test
+    void listTasksByProjectRef_whenProjectNameMissing_returnsAvailableProjects() {
+        when(projectService.findByNameIgnoreCase("不存在")).thenReturn(Optional.empty());
+        when(projectService.listProjects()).thenReturn(List.of(
+                new ProjectService.ProjectDto(1L, "現有專案", null, "ACTIVE")));
+
+        TaskService.ProjectTasksResult result =
+                taskService.listTasksByProjectRef(null, "不存在", null, null);
+
+        assertThat(result.projectFound()).isFalse();
+        assertThat(result.availableProjects()).extracting(ProjectService.ProjectDto::name)
+                .containsExactly("現有專案");
+    }
+
+    @Test
     void updateStatus_legalTransition_writesLogAndPublishesEvent() {
         Long taskId = 4L;
         Long projectId = 12L;

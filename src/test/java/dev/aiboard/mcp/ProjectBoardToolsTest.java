@@ -81,18 +81,16 @@ class ProjectBoardToolsTest {
     @Test
     void listTasks_formatsMarkdownGroupedByStatus() {
         Long projectId = 12L;
-        when(projectService.getById(projectId))
-                .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
-        when(taskService.listTasks(projectId, null)).thenReturn(List.of(
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        List<TaskService.TaskDto> tasks = List.of(
                 taskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0, "docs"),
                 taskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1, null)
-        ));
-        when(taskService.listTasks(projectId, null, null)).thenReturn(List.of(
-                taskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0, "docs"),
-                taskDto(2L, projectId, "建立 schema", null, "TODO", "BACKEND", 1, null)
-        ));
+        );
+        when(taskService.listTasksByProjectRef(projectId, null, null, null))
+                .thenReturn(TaskService.ProjectTasksResult.found(project, tasks));
+        when(taskService.listTasks(projectId, null)).thenReturn(tasks);
 
-        String result = tools.listTasks(projectId, null, null);
+        String result = tools.listTasks(projectId, null, null, null, null);
 
         assertThat(result).contains("## 個人記帳 App（#12）");
         assertThat(result).contains("進度：1/2 完成");
@@ -105,21 +103,109 @@ class ProjectBoardToolsTest {
     @Test
     void listTasks_withCategoryFilter_onlyShowsMatchingTasks() {
         Long projectId = 12L;
-        when(projectService.getById(projectId))
-                .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(taskService.listTasksByProjectRef(projectId, null, null, "TEST"))
+                .thenReturn(TaskService.ProjectTasksResult.found(project, List.of(
+                        taskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1, null)
+                )));
         when(taskService.listTasks(projectId, null)).thenReturn(List.of(
                 taskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0, "docs"),
                 taskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1, null)
         ));
-        when(taskService.listTasks(projectId, null, "TEST")).thenReturn(List.of(
-                taskDto(2L, projectId, "撰寫測試", null, "TODO", "TEST", 1, null)
-        ));
 
-        String result = tools.listTasks(projectId, null, "TEST");
+        String result = tools.listTasks(projectId, null, null, "TEST", null);
 
         assertThat(result).contains("進度：1/2 完成");
         assertThat(result).contains("- #2 撰寫測試 [TEST]");
         assertThat(result).doesNotContain("需求釐清");
+    }
+
+    @Test
+    void listTasks_byProjectName_returnsSameResultAsById() {
+        Long projectId = 12L;
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        List<TaskService.TaskDto> tasks = List.of(
+                taskDto(1L, projectId, "需求釐清", null, "DONE", "DOC", 0, "docs")
+        );
+        when(taskService.listTasksByProjectRef(null, "個人記帳 App", null, null))
+                .thenReturn(TaskService.ProjectTasksResult.found(project, tasks));
+        when(taskService.listTasks(projectId, null)).thenReturn(tasks);
+
+        String result = tools.listTasks(null, "個人記帳 App", null, null, null);
+
+        assertThat(result).contains("## 個人記帳 App（#12）");
+        assertThat(result).contains("- #1 需求釐清 [DOC] @docs");
+    }
+
+    @Test
+    void listTasks_withIncludeDescription_showsDescriptionUnderEachTask() {
+        Long projectId = 12L;
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        List<TaskService.TaskDto> tasks = List.of(
+                taskDto(2L, projectId, "建立 schema", "建立交易資料表\n驗收條件：金額不接受負數",
+                        "TODO", "BACKEND", 1, null)
+        );
+        when(taskService.listTasksByProjectRef(projectId, null, null, null))
+                .thenReturn(TaskService.ProjectTasksResult.found(project, tasks));
+        when(taskService.listTasks(projectId, null)).thenReturn(tasks);
+
+        String result = tools.listTasks(projectId, null, null, null, true);
+
+        assertThat(result).contains("- #2 建立 schema [BACKEND]");
+        assertThat(result).contains("  建立交易資料表");
+        assertThat(result).contains("  驗收條件：金額不接受負數");
+    }
+
+    @Test
+    void listTasks_withoutIncludeDescription_outputUnchanged() {
+        Long projectId = 12L;
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        List<TaskService.TaskDto> tasks = List.of(
+                taskDto(2L, projectId, "建立 schema", "不應該出現的描述", "TODO", "BACKEND", 1, null)
+        );
+        when(taskService.listTasksByProjectRef(projectId, null, null, null))
+                .thenReturn(TaskService.ProjectTasksResult.found(project, tasks));
+        when(taskService.listTasks(projectId, null)).thenReturn(tasks);
+
+        String omitted = tools.listTasks(projectId, null, null, null, null);
+        String explicitFalse = tools.listTasks(projectId, null, null, null, false);
+
+        assertThat(omitted).doesNotContain("不應該出現的描述");
+        assertThat(omitted).isEqualTo(explicitFalse);
+    }
+
+    @Test
+    void listTasks_withIncludeDescription_handlesBlankDescription() {
+        Long projectId = 12L;
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        List<TaskService.TaskDto> tasks = List.of(
+                taskDto(1L, projectId, "沒有描述", null, "TODO", "BACKEND", 0, null),
+                taskDto(2L, projectId, "空白描述", "   ", "TODO", "BACKEND", 1, null)
+        );
+        when(taskService.listTasksByProjectRef(projectId, null, null, null))
+                .thenReturn(TaskService.ProjectTasksResult.found(project, tasks));
+        when(taskService.listTasks(projectId, null)).thenReturn(tasks);
+
+        String result = tools.listTasks(projectId, null, null, null, true);
+
+        assertThat(result).contains("- #1 沒有描述 [BACKEND]");
+        assertThat(result).contains("- #2 空白描述 [BACKEND]");
+        assertThat(result).contains("（無描述）");
+    }
+
+    @Test
+    void listTasks_whenProjectNameMissing_listsExistingProjects() {
+        var projects = List.of(
+                new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE"),
+                new ProjectService.ProjectDto(15L, "SMTP 監控工具", null, "ACTIVE"));
+        when(taskService.listTasksByProjectRef(null, "不存在", null, null))
+                .thenReturn(TaskService.ProjectTasksResult.projectNotFound(projects));
+
+        String result = tools.listTasks(null, "不存在", null, null, null);
+
+        assertThat(result).contains("找不到專案「不存在」")
+                .contains("#12 個人記帳 App")
+                .contains("#15 SMTP 監控工具");
     }
 
     @Test

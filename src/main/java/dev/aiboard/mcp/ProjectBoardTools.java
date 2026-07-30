@@ -119,17 +119,36 @@ public class ProjectBoardTools {
     @Tool(name = "list_tasks",
             description = "查詢某專案目前的任務清單與進度。當使用者詢問專案進度、還有什麼要做、"
                     + "或你需要了解目前狀態才能繼續規劃時呼叫。"
+                    + "projectId 與 projectName 請擇一提供；只知道專案名稱時用 projectName 即可，"
+                    + "名稱比對規則與 claim_next_task 相同：完整名稱、不分大小寫。"
                     + "帶入 category 可只列出特定類型的任務，例如 BACKEND。"
-                    + "你被指派某個角色時，用它來確認還有哪些屬於你的工作。")
+                    + "你被指派某個角色時，用它來確認還有哪些屬於你的工作。"
+                    + "要依任務內容決定分派或判斷先後順序時，帶入 includeDescription=true "
+                    + "取得每筆任務的描述與驗收條件。")
     public String listTasks(
-            @ToolParam(description = "專案 ID") Long projectId,
+            @ToolParam(description = "專案 ID，與 projectName 擇一提供", required = false) Long projectId,
+            @ToolParam(description = "專案名稱，精確比對但不分大小寫，與 projectId 擇一提供",
+                    required = false) String projectName,
             @ToolParam(description = "任務狀態篩選：TODO / IN_PROGRESS / DONE / BLOCKED，不填代表全部",
                     required = false) String status,
             @ToolParam(description = "任務分類篩選：BACKEND / FRONTEND / INFRA / DOC / TEST / OTHER，不填代表全部",
-                    required = false) String category) {
-        ProjectService.ProjectDto project = projectService.getById(projectId);
-        List<TaskService.TaskDto> allTasks = taskService.listTasks(projectId, null);
-        List<TaskService.TaskDto> filtered = taskService.listTasks(projectId, status, category);
+                    required = false) String category,
+            @ToolParam(description = "是否一併輸出每筆任務的描述與驗收條件，預設 false",
+                    required = false) Boolean includeDescription) {
+        TaskService.ProjectTasksResult result =
+                taskService.listTasksByProjectRef(projectId, projectName, status, category);
+        if (!result.projectFound()) {
+            String projects = result.availableProjects().isEmpty()
+                    ? "（看板上目前沒有專案）"
+                    : result.availableProjects().stream()
+                            .map(p -> "#%d %s".formatted(p.id(), p.name()))
+                            .collect(Collectors.joining("、"));
+            return "找不到專案「%s」。看板上目前有：\n%s".formatted(projectName, projects);
+        }
+
+        ProjectService.ProjectDto project = result.project();
+        List<TaskService.TaskDto> allTasks = taskService.listTasks(project.id(), null);
+        List<TaskService.TaskDto> filtered = result.tasks();
 
         long doneCount = allTasks.stream().filter(t -> "DONE".equals(t.status())).count();
 
@@ -140,6 +159,8 @@ public class ProjectBoardTools {
         var byStatus = filtered.stream()
                 .collect(Collectors.groupingBy(TaskService.TaskDto::status, java.util.LinkedHashMap::new, Collectors.toList()));
 
+        boolean withDescription = Boolean.TRUE.equals(includeDescription);
+
         for (var entry : byStatus.entrySet()) {
             sb.append("### %s (%d)\n".formatted(entry.getKey(), entry.getValue().size()));
             for (TaskService.TaskDto task : entry.getValue()) {
@@ -147,10 +168,22 @@ public class ProjectBoardTools {
                 String assigneeLabel = task.assignee() != null ? " @" + task.assignee() : "";
                 sb.append("- #%d %s%s%s\n"
                         .formatted(task.id(), task.title(), categoryLabel, assigneeLabel));
+                if (withDescription) {
+                    sb.append(indentDescription(task.description()));
+                }
             }
         }
 
         return sb.toString();
+    }
+
+    private static String indentDescription(String description) {
+        if (description == null || description.isBlank()) {
+            return "  （無描述）\n";
+        }
+        return description.lines()
+                .map(line -> line.isBlank() ? "" : "  " + line)
+                .collect(Collectors.joining("\n", "", "\n"));
     }
 
     public record TaskInputPayload(String title, String description, String category) {
