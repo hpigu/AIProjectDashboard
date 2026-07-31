@@ -110,6 +110,9 @@ url = "http://127.0.0.1:8080/mcp"
 | `list_tasks(projectId?/projectName?, status?, category?, includeDescription?)` | 查詢任務清單與進度；`projectId` 與 `projectName` 擇一，`includeDescription` 一併輸出描述與驗收條件 |
 | `claim_next_task(projectName, category, assignee)` | 原子認領指定專案、指定類別中最早且前置皆已完成的一筆待辦任務 |
 | `update_task_status(taskId, status, note?)` | 完成／阻塞／歸還任務 |
+| `list_roles(projectName?)` | 列出可用角色（名稱、分類、是通用指引還是專案覆寫）；帶 `projectName` 時同名角色以該專案的覆寫版取代通用版 |
+| `get_role(name, projectName?)` | 取得角色的完整工作指引；帶 `projectName` 時優先回傳該專案的覆寫版，沒有才回通用版，都沒有則列出現有角色供選 |
+| `upsert_role(name, category?, instructions, projectName?)` | 建立或更新角色指引；不帶 `projectName` 操作通用版，帶則操作該專案的覆寫版，同名同範圍再次呼叫是更新 |
 
 `category`：`BACKEND` / `FRONTEND` / `TEST` / `INFRA` / `DOC` / `OTHER`。
 未填、空白或不在清單內的值會正規化為 `OTHER`，因此不會產生無法認領的任務。
@@ -167,8 +170,28 @@ session 處理。
 leader 的驗收範圍有限：只驗「該動的有動、測試有跑、`BLOCKED` 有交代」，
 程式碼品質交給 `qa` 角色與既有測試。
 
-**這些角色定義不在本 repo 裡，是使用者自己機器上的全域設定**，clone 這個
-repo 不會自動取得——想用這套多 agent 認領流程，需要自己建立：
+### 兩層來源：檔案是薄殼，指引在看板
+
+角色的完整工作指引**存在看板的資料庫裡**（`role` 表），透過 `get_role` 取得，
+不是寫死在本 repo 或使用者機器的檔案中。指引分兩層，`get_role` 依優先序回傳
+整份（不會自動疊加，覆寫版必須包含通用版的全部內容加上專屬規則）：
+
+1. **通用層**（`project_id` 為 `NULL`）：跨專案都成立的角色職責、開工流程、
+   BLOCKED 判準。
+2. **專案覆寫層**（`project_id` 指定某專案）：該專案專屬的路徑所有權、埠號、
+   commit 規則等，優先於通用層。
+
+`get_role(name, projectName?)` 帶 `projectName` 時，若該專案有覆寫版就回傳
+覆寫版，否則退回通用版；都沒有則列出現有角色供選。`upsert_role` 可以建立/
+更新任一層；不帶 `projectName` 動的是通用版，帶了則只動該專案的覆寫版，不影
+響通用版或其他專案。看板首頁的「角色與指引」按鈕（呼叫唯讀的 `GET /api/roles
+?projectName=`）可以直接看到目前每個角色的完整指引與覆寫狀態。
+
+Claude Code / Codex 端只需要一份**薄殼**：先呼叫 `get_role` 拿最新指引來
+work，`get_role` 失敗或看板未啟動時才退回檔案內建的最小 fallback 規則（讀
+repo 的 `CLAUDE.md`/`AGENTS.md`、認領哪個 category、單件回報），不會因為看板
+連不上就停工。這一層薄殼檔案不進版控（見下方「AGENTS.md 不進版控」），clone
+這個 repo 不會自動取得——想用這套多 agent 認領流程，需要在自己機器上建立：
 
 - Claude Code：在 `~/.claude/agents/` 底下為每個角色各建一個 `*.md`（[subagent
   格式文件](https://docs.claude.com/en/docs/claude-code/sub-agents)），例如
@@ -178,9 +201,11 @@ repo 不會自動取得——想用這套多 agent 認領流程，需要自己�
   ---
   name: backend-dev
   description: 執行看板上 category 為 BACKEND 的任務。
-  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__board__claim_next_task, mcp__board__update_task_status
+  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__board__claim_next_task, mcp__board__update_task_status, mcp__board__get_role
   ---
-  你是後端工程師。呼叫 claim_next_task(projectName, "BACKEND", "backend-dev") 認領任務並開工，
+  你是後端工程師。呼叫 get_role("backend-dev", projectName) 取得最新指引並照做；
+  拿不到時退回：讀 repo 的 CLAUDE.md/AGENTS.md、呼叫
+  claim_next_task(projectName, "BACKEND", "backend-dev") 認領任務並開工，
   完成後更新為 DONE，卡住則更新為 BLOCKED 並在 note 說明原因。
   ```
 
@@ -192,13 +217,20 @@ repo 不會自動取得——想用這套多 agent 認領流程，需要自己�
 後另派，否則 agent 會把該類別的任務全部吃光，分波控制就失效了。
 
 這一套是本專案作者自己機器上的慣例，不是看板功能運作的必要條件：
-`claim_next_task` 是一般 MCP 工具，任何連上 `/mcp` 的 client（含主 session）
-都能直接呼叫，不需要先有 subagent 定義才能認領任務。
+`claim_next_task`、`get_role` 都是一般 MCP 工具，任何連上 `/mcp` 的 client
+（含主 session）都能直接呼叫，不需要先有 subagent 定義才能認領任務或讀指引。
 
-沒有建立這些角色時，你會失去的是分工，不是功能：assignee 名稱要自己在對話中
-指定（不會自動代入 `backend-dev` 這類名字），路徑權限邊界（例如「這個角色只
-能碰 `src/main/java/**`」）不會自動套用，而且只有一個主 session 在跑，無法把
-同一波裡沒有相依的任務分給不同角色同時開工。
+沒有建立這些角色檔案時，你會失去的是分工，不是功能：assignee 名稱要自己在
+對話中指定（不會自動代入 `backend-dev` 這類名字），而且只有一個主 session 在
+跑，無法把同一波裡沒有相依的任務分給不同角色同時開工。角色指引本身（`get_role`
+能查到什麼）不受影響，因為它存在看板資料庫，與這層檔案殼無關。
+
+### AGENTS.md 不進版控
+
+本 repo 根目錄的 `AGENTS.md` 記錄了給 agent 看的開發規則（埠號、資料庫、分派
+模式等），但列在 `.gitignore` 裡，是本機檔案、不進版控。之後把看板打包成
+plugin 散布時，這份檔案不會一起帶走；規劃階段性工作或替換機器時，記得
+`AGENTS.md` 需要另外處理（重新寫一份，或改放進看板的角色覆寫指引裡）。
 
 ## 目錄結構
 
