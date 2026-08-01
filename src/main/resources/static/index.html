@@ -275,6 +275,8 @@
       font-family: inherit;
     }
     .roles-btn:hover { border-color: var(--muted); }
+    /* 不覆蓋 :active 的話，按下瞬間會套用瀏覽器預設的淺色底，變成白底白字。 */
+    .roles-btn:active { background: var(--line); }
 
     .modal-backdrop {
       position: fixed;

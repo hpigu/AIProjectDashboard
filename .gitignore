@@ -4,12 +4,13 @@ logs/
 .idea/
 *.iml
 .vscode/
+# 使用者機器上的個人設定，不屬於這個 repo
 .claude/settings.local.json
 .claude/worktrees/
-.claude/agents/
-.codex/
-AGENTS.md
-CLAUDE.md
+
+# AGENTS.md / CLAUDE.md / .codex/ 是這個 repo 的開發規範（分層規則、認領 SQL、
+# 埠號、角色定義），跟程式碼綁在一起，因此進版控。
+# 角色的「工作指引」不在這裡，而是存在看板的 role 表，由 get_role 取得。
 .env
 .DS_Store
 *.db

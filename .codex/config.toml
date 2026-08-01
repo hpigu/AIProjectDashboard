@@ -1,0 +1,5 @@
+[mcp_servers.board]
+url = "http://127.0.0.1:8080/mcp"
+
+[mcp_servers.board.tools.list_tasks]
+approval_mode = "approve"
