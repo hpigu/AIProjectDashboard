@@ -1,0 +1,35 @@
+{
+  "name": "ai-project-board",
+  "version": "1.0.0",
+  "description": "AI 專案看板的 Codex 整合：認領/更新任務、取得角色指引、啟動看板服務。",
+  "author": {
+    "name": "Daniel Huang"
+  },
+  "homepage": "https://github.com/hpigu/AIProjectDashboard",
+  "repository": "https://github.com/hpigu/AIProjectDashboard",
+  "license": "MIT",
+  "keywords": [
+    "project-board",
+    "task-management",
+    "multi-agent"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "AI Project Board",
+    "shortDescription": "認領/更新任務、取得角色指引",
+    "longDescription": "串接本機 AI 專案看板（http://localhost:8080），讓 Codex 能認領任務、依角色取得工作指引、回報任務狀態。",
+    "developerName": "Daniel Huang",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "認領 AgentDashboard 的任務",
+      "看板上還有哪些任務待辦",
+      "把 #12 標記為完成"
+    ]
+  }
+}

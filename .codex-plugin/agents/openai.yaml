@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI Project Board"
+  short_description: "認領/更新看板任務、依角色取得工作指引"
+  default_prompt: "認領 AgentDashboard 的任務，依角色指引完成工作並回報。"
