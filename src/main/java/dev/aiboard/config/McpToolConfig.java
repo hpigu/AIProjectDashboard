@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import dev.aiboard.mcp.ProjectBoardTools;
 import dev.aiboard.mcp.RoleTools;
 import dev.aiboard.mcp.TaskBlockTools;
+import dev.aiboard.mcp.TaskCompleteTools;
 
 @Configuration
 public class McpToolConfig {
@@ -15,9 +16,10 @@ public class McpToolConfig {
     @Bean
     public ToolCallbackProvider projectBoardToolCallbackProvider(ProjectBoardTools projectBoardTools,
                                                                   RoleTools roleTools,
-                                                                  TaskBlockTools taskBlockTools) {
+                                                                  TaskBlockTools taskBlockTools,
+                                                                  TaskCompleteTools taskCompleteTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(projectBoardTools, roleTools, taskBlockTools)
+                .toolObjects(projectBoardTools, roleTools, taskBlockTools, taskCompleteTools)
                 .build();
     }
 }
