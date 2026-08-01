@@ -3,3 +3,31 @@ url = "http://127.0.0.1:8080/mcp"
 
 [mcp_servers.board.tools.list_tasks]
 approval_mode = "approve"
+
+# agent role 不會自動掃描 .codex/agents/ 目錄,必須在這裡逐一用 config_file
+# 指向對應的 toml 才會被載入。少了這段,那些檔案等於不存在。
+# 每個 toml 都是薄殼:開工先呼叫 get_role 取得看板上的最新指引。
+
+[agents.backend-dev]
+description = "看板上 category 為 BACKEND 的任務"
+config_file = ".codex/agents/backend-dev.toml"
+
+[agents.frontend-dev]
+description = "看板上 category 為 FRONTEND 的任務"
+config_file = ".codex/agents/frontend-dev.toml"
+
+[agents.qa]
+description = "看板上 category 為 TEST 的任務"
+config_file = ".codex/agents/qa.toml"
+
+[agents.infra]
+description = "看板上 category 為 INFRA 的任務"
+config_file = ".codex/agents/infra.toml"
+
+[agents.docs]
+description = "看板上 category 為 DOC 的任務"
+config_file = ".codex/agents/docs.toml"
+
+[agents.reviewer]
+description = "審查實作,由 leader 在驗收階段直接叫用,不從看板認領任務"
+config_file = ".codex/agents/reviewer.toml"
