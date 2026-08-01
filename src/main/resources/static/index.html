@@ -241,6 +241,24 @@
     .column-body {
       position: relative;
     }
+    .column-toggle {
+      display: block;
+      width: 100%;
+      background: var(--surface);
+      border: 1px dashed var(--line);
+      color: var(--muted);
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-family: var(--font-data);
+      cursor: pointer;
+      text-align: center;
+      margin-top: 2px;
+    }
+    .column-toggle:hover {
+      color: var(--text);
+      border-color: var(--muted);
+    }
     .task-move,
     .task-enter-active,
     .task-leave-active {
