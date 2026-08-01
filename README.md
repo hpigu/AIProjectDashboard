@@ -48,10 +48,23 @@ Chat 規劃專案
 
 ## 需求
 
-- JDK 21
+- JDK 21（沒裝的話，`bin/start-board.sh` 會自動偵測並給出對應平台的安裝指令，
+  見 [docs/installation.md](docs/installation.md)）
 - Maven（或直接用內附的 `./mvnw`，不需另外安裝）
 
 ## 快速開始
+
+推薦用 `bin/start-board.sh`：它會自動找 JDK 21、決定資料庫路徑、檢查埠號、
+偵測 H2 鎖檔，找不到編譯好的 jar 時還會自動 `./mvnw package -DskipTests`
+現場組裝一次（首次啟動會多花數十秒到數分鐘，之後有 `target/*.jar` 就不會
+重複組裝）：
+
+```bash
+./bin/start-board.sh
+```
+
+看到 `看板已就緒：http://127.0.0.1:8080` 就代表可以打開瀏覽器了。也可以繼續
+用最原始的手動方式（等價於腳本內部做的事，差別是不會自動偵測 JDK/埠號/鎖檔）：
 
 ```bash
 ./mvnw clean package
@@ -67,6 +80,10 @@ BOARD_PORT=18080 \
 BOARD_DB_URL='jdbc:h2:file:./data/dev;DB_CLOSE_ON_EXIT=FALSE' \
 java -jar target/ai-project-board-backend-2.0.0.jar
 ```
+
+`bin/start-board.sh` 支援同一組環境變數（`BOARD_PORT`、`BOARD_DB_URL`、
+`BOARD_HOME_DIR`、`BOARD_JAR` 等），資料目錄預設策略與 Claude Code plugin
+安裝方式見 [docs/installation.md](docs/installation.md)。
 
 第一次啟動後，看板是空的（`http://localhost:8080` 顯示無專案）——這是正常的，
 因為新增專案與任務只能透過 MCP 工具寫入，REST 端點是唯讀的，不會有種子資料。
@@ -85,6 +102,16 @@ java -jar target/ai-project-board-backend-2.0.0.jar
 ```bash
 ./mvnw test
 ```
+
+## 用 Claude Code plugin 安裝
+
+除了上面手動 clone + 執行 jar，也可以把 `plugin/` 目錄裝成 Claude Code
+plugin，一次接好 MCP 端點（`.mcp.json`）、六個角色 agent 薄殼
+（`backend-dev`、`frontend-dev`、`qa`、`infra`、`docs`、`reviewer`）與
+`claim-tasks` skill。**plugin 不內含編譯好的 jar**，第一次啟動時
+`bin/start-board.sh` 會自動組裝，細節、資料目錄規劃、家目錄薄殼衝突的
+排除方式，以及角色指引不跟著 plugin 走這件事的完整說明，見
+[docs/installation.md](docs/installation.md)。
 
 ## 接線
 
@@ -139,7 +166,7 @@ url = "http://127.0.0.1:8080/mcp"
 
 這層過濾只影響候選挑選，原子認領的 compare-and-swap 語意不變。
 
-REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}/tasks/{taskId}/history`、`/api/events` SSE）全部唯讀，只給前端用，所有寫入一律經由 MCP。
+REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}/tasks/{taskId}/history`、`/api/events` SSE、`/api/health`）全部唯讀，只給前端用，所有寫入一律經由 MCP。`/api/health` 回傳 `version`／`databasePath`／`tools`（實際載入的清單，非寫死）／`startedAt`，用來確認目前這個行程連到哪個資料庫、跑的是不是最新程式碼。
 
 ## 角色 agent
 
@@ -190,11 +217,20 @@ leader 的驗收範圍有限：只驗「該動的有動、測試有跑、`BLOCKE
 Claude Code / Codex 端只需要一份**薄殼**：先呼叫 `get_role` 拿最新指引來
 work，`get_role` 失敗或看板未啟動時才退回檔案內建的最小 fallback 規則（讀
 repo 的 `CLAUDE.md`/`AGENTS.md`、認領哪個 category、單件回報），不會因為看板
-連不上就停工。這一層薄殼檔案不進版控（見下方「AGENTS.md 不進版控」），clone
-這個 repo 不會自動取得——想用這套多 agent 認領流程，需要在自己機器上建立：
+連不上就停工。
 
-- Claude Code：在 `~/.claude/agents/` 底下為每個角色各建一個 `*.md`（[subagent
-  格式文件](https://docs.claude.com/en/docs/claude-code/sub-agents)），例如
+Claude Code 這層薄殼有兩種取得方式：
+
+1. **手動建立**（不進版控，clone 這個 repo 不會自動取得）：在自己機器的
+   `~/.claude/agents/` 底下為每個角色各建一個 `*.md`，見下方範例
+2. **透過 plugin 安裝**：`plugin/agents/*.md` 已經是同樣內容的薄殼，
+   裝了 plugin 就自動取得六個角色（含新增的 `reviewer`），不需要再手動建立；
+   但要注意家目錄若已有同名檔案會蓋掉 plugin 版本，處理方式見
+   [docs/installation.md](docs/installation.md)
+
+手動建立的方式如下（[subagent 格式文件](https://docs.claude.com/en/docs/claude-code/sub-agents)）：
+
+- Claude Code：在 `~/.claude/agents/` 底下為每個角色各建一個 `*.md`，例如
   `~/.claude/agents/backend-dev.md`：
 
   ```markdown
@@ -225,12 +261,17 @@ repo 的 `CLAUDE.md`/`AGENTS.md`、認領哪個 category、單件回報），不
 跑，無法把同一波裡沒有相依的任務分給不同角色同時開工。角色指引本身（`get_role`
 能查到什麼）不受影響，因為它存在看板資料庫，與這層檔案殼無關。
 
-### AGENTS.md 不進版控
+### AGENTS.md 進版控
 
-本 repo 根目錄的 `AGENTS.md` 記錄了給 agent 看的開發規則（埠號、資料庫、分派
-模式等），但列在 `.gitignore` 裡，是本機檔案、不進版控。之後把看板打包成
-plugin 散布時，這份檔案不會一起帶走；規劃階段性工作或替換機器時，記得
-`AGENTS.md` 需要另外處理（重新寫一份，或改放進看板的角色覆寫指引裡）。
+本 repo 根目錄的 `AGENTS.md` 記錄了給 agent 看的開發規則（埠號、資料庫、
+分派模式、認領 SQL、角色指引的兩層來源等），與程式碼綁在一起，因此進版控
+（`.gitignore` 明確排除的是 `.claude/settings.local.json`、
+`.claude/worktrees/` 這類使用者機器上的個人設定，不含 `AGENTS.md`）。
+clone 這個 repo 就會拿到 `AGENTS.md`，不需要另外重建。
+
+角色的「工作指引」本身不在 `AGENTS.md` 裡，而是存在看板的 `role` 表，由
+`get_role` 取得；`AGENTS.md` 只是給 Claude Code / Codex 一份寫死在 repo 裡
+的開發規範參考，兩者是分開的兩件事，見上一節「兩層來源」。
 
 ## 目錄結構
 
@@ -239,14 +280,21 @@ src/main/java/dev/aiboard/
 ├── mcp/        # MCP 工具定義（ProjectBoardTools）
 ├── project/    # 專案 Entity / Repository / Service
 ├── task/       # 任務 Entity / Repository / Service
+├── role/       # 角色 Entity / Repository / Service（RoleTools、RoleSeeder）
+├── health/     # /api/health 用的 HealthService
 ├── web/        # 唯讀 REST Controller
 ├── event/      # SSE 事件發布
 ├── config/     # MCP tool 註冊設定
 └── common/     # 共用例外與列舉（TaskCategory 等）
 src/main/resources/
 ├── application.yml
-├── db/migration/   # Flyway migration（V1、V3、V4）
+├── db/migration/   # Flyway migration
 └── static/         # Vue 3 CDN 前端（index.html / app.js / tokens.css）
+bin/
+└── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、自動組裝）
+plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
+docs/
+└── installation.md # 完整安裝指南
 ```
 
 ## 技術棧
@@ -258,3 +306,11 @@ Spring Boot 3.5.16、Spring AI 1.1.8（MCP server，Streamable HTTP）、Java 21
 - 單機使用，看板與資料庫都在本機，無跨裝置同步
 - `/mcp` 端點無認證，設計前提是只在本機或私有網路使用
 - SSE 連線集合是行程內單例，不支援多副本水平擴展
+- **角色指引不跟著 plugin 走**：角色的完整工作指引存在看板的 H2 資料庫
+  （`role` 表），plugin 只是程式碼與薄殼檔案的散布單位。新裝的看板會由
+  `RoleSeeder` 建立初始指引，但使用者自己用 `upsert_role`
+  調整過的內容不會跟著 plugin 一起帶走，換機器或重建資料庫要重新灌一次。
+  細節見 [docs/installation.md](docs/installation.md)
+- `GET /api/health` 回傳的 `version` 讀的是 `pom.xml` 版本號，不含 git
+  commit hash；同一版本號底下可能已經有多次 commit，無法只靠這個欄位
+  區分新舊 build
