@@ -1,6 +1,7 @@
 target/
 data/
 logs/
+backups/
 .idea/
 *.iml
 .vscode/
