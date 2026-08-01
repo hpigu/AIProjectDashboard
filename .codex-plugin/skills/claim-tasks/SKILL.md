@@ -1,12 +1,38 @@
 ---
 name: claim-tasks
-description: 從 AI 專案看板認領並執行指定專案的任務。當使用者說「認領{專案名}的任務」、「{專案名}開工」、「{專案名}還有什麼要做」等，明示某個專案並要求開始執行時使用；由主 session 擔任 leader，盤點後分波派工給角色 agent。
+description: 從 AI 專案看板認領並執行指定專案的任務。當使用者說「認領{專案名}的任務」、「{專案名}開工」、「{專案名}還有什麼要做」等，明示某個專案並要求開始執行時使用；由主 thread 擔任 leader，盤點後分波派工給角色 agent。
 ---
 
 # 認領專案任務
 
-你是 leader。主 session 不直接執行任務、不建立專案、不規劃新任務，
+你是 leader。主 thread 不直接執行任務、不建立專案、不規劃新任務，
 只負責盤點、分派、驗收與彙整。
+
+## 平台差異（先讀）
+
+這份 skill 移植自 Claude Code 版（plugin/skills/claim-tasks/SKILL.md），
+邏輯相同，但兩個地方因平台機制不同而改寫：
+
+1. **平行能力不保證存在。** Codex 有 `spawn_agent`/`wait_agent`/`send_message`/
+   `followup_task`/`list_agents`/`interrupt_agent`/`close_agent` 這組 multi-agent
+   工具（逆向 codex binary 字串證實，來源：`core/src/tools/parallel.rs` 與
+   `MultiAgentV2ConfigToml` 相關字串），系統提示也明講「write scope 不重疊時
+   可平行 spawn 多個 agent」。但這是 `features.multi_agent_v2` 這個 feature flag
+   控制的能力，未必在每個帳號/環境都開啟，本機也無法安裝 codex CLI 實測。
+   所以本 skill **不假設平行一定可用**：能力存在就用，`spawn_agent` 不可用
+   （工具不存在或呼叫失敗）就退化成逐一循序執行，不當作錯誤。
+2. **沒有 Claude 版 SendMessage 那種「重派時延續同一個 agent」的對應保證。**
+   Codex 若平行能力可用，`send_message`/`followup_task` 可以對同一個
+   `spawn_agent` 產生的 agent id 追加任務，效果類似；但若退化為循序執行
+   （由 leader 直接依序扮演/呼叫角色而非真的 spawn 出獨立 agent），
+   則沒有「原 agent」這個概念可延續，重派就是在同一個 leader 對話裡
+   直接把 reviewer 的發現交給下一輪執行、重新 claim 同一筆任務即可，
+   不需要額外機制。
+
+也因為 `.codex/agents/*.toml` 目前未被 `config.toml` 的 `[agents.*]` 引用
+（處於未載入狀態），無法用 `spawn_agent(agent_type="backend-dev")` 這種方式
+直接指定自訂角色。派工時改用 default agent，在初始任務訊息裡把
+`.codex-plugin/agents/<role>.md` 的角色說明整段交給它，讓它照該角色的規則行動。
 
 ## 1. 取得專案名稱
 
@@ -68,14 +94,27 @@ list_tasks(projectName=<名稱>, status="TODO", includeDescription=true)
 - projectName
 - 只做認領到的這一件，完成後回報並結束，不要自行認領下一件
 - repo 指定的開發用埠號與資料庫（正式服務可能正在運作，不得佔用或寫入）
+- 該角色的規則（`.codex-plugin/agents/<role>.md` 整段內容），因為
+  `agent_type` 無法直接指定到自訂角色
 
-agent 回報後，若該角色還有可做的任務，**開一個新的 subagent** 派下一件。
-每件從乾淨的 context 開始，行為可預測、出問題容易定位，也不會累積前一件
-的錯誤推理。
+**同一波內有多個可派角色時：**
 
-**唯一的例外是重派**：reviewer 退回、或你自己發現要補的東西，
-用 `SendMessage` 延續原本那個 agent。它剛做完、記憶還在，
-重新開一個等於要它重讀一遍才能理解問題所在。
+- 若 `spawn_agent` 可用，對每個角色各自 `spawn_agent` 一次（write scope
+  不重疊，符合平台建議的平行條件），用 `wait_agent` 收尾；
+  需要在同一個已 spawn 的 agent 上追加下一件時，用 `followup_task`，
+  一次性提醒可用 `send_message`。
+- 若 `spawn_agent` 不可用（工具不存在、呼叫失敗、或環境明顯不支援），
+  退化為由 leader 依序逐一扮演/執行每個角色的任務，一次只做一件，
+  做完立刻依下方「驗收」處理，再進下一件，不要並發混跑同一個 category。
+
+agent 完成後，若該角色還有可做的任務，用乾淨的新一輪任務（新 spawn 或
+新的一輪執行）派下一件，不要延續前一件的 context，行為才可預測、
+出問題容易定位，也不會累積前一件的錯誤推理。
+
+**唯一的例外是重派**：reviewer 退回、或你自己發現要補的東西，延續原本
+處理該任務的 agent／同一輪 context（可用 `followup_task`/`send_message`，
+或循序模式下直接在同一輪裡把發現交回去）。它剛做完、記憶還在，
+重新開一輪等於要它重讀一遍才能理解問題所在。
 
 ## 5. 驗收
 
@@ -135,7 +174,7 @@ reviewer 會把發現分成兩類，**處置方式不同**：
 list_tasks(projectName=<名稱>, status="TODO", category="OTHER")
 ```
 
-有的話列出來，問使用者要自己處理還是要主 session 直接做。
+有的話列出來，問使用者要自己處理還是要主 thread 直接做。
 最後附上 http://localhost:8080/ 。
 
 ## 看板連不上時
