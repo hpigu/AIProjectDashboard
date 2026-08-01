@@ -29,6 +29,8 @@
 #   BOARD_JAR      指定要啟動的 jar 路徑（預設自動尋找 target/*.jar，
 #                  找不到且 repo 根目錄有 pom.xml + mvnw 時會現場組裝一次）
 #   BOARD_START_TIMEOUT_SEC  等待啟動完成的逾時秒數（預設 60）
+#   BOARD_BACKUP_DIR  啟動前冷備份輸出目錄，預設 <BOARD_HOME_DIR>/backups，
+#                  細節見第 4.5 節與 bin/backup-db.sh
 
 set -u
 
@@ -237,6 +239,25 @@ if [ -n "$DB_FILE_PATH" ]; then
       err "請先確認並結束該行程（例如：kill ${LOCK_PIDS}），再重新執行本腳本。"
       exit 1
     fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4.5 啟動前冷備份：資料庫已存在且未被其他行程持有（上一步已確認）時，
+#     在 jar 啟動、Flyway migration 跑之前先建立一份快照。備份失敗必須
+#     中止啟動，不可讓 migration 在沒有備份可還原的情況下繼續。
+#
+#     資料庫不存在（全新環境首次啟動）不算失敗，直接略過，見
+#     bin/backup-db.sh 內 backup_database() 的說明。
+# ---------------------------------------------------------------------------
+BOARD_BACKUP_DIR="${BOARD_BACKUP_DIR:-${BOARD_HOME_DIR:-$HOME/.ai-project-board}/backups}"
+# shellcheck source=bin/backup-db.sh
+source "${SCRIPT_DIR}/backup-db.sh"
+
+if [ -n "${DB_FILE_PATH:-}" ]; then
+  if ! backup_database "${DB_FILE_PATH}.mv.db" "$BOARD_BACKUP_DIR"; then
+    err "啟動前資料庫備份失敗，為避免在無可還原快照的情況下執行 migration，中止啟動。"
+    exit 1
   fi
 fi
 
