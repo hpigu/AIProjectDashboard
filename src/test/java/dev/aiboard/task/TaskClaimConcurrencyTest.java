@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:claim-concurrency;DB_CLOSE_DELAY=-1",
@@ -92,7 +93,8 @@ class TaskClaimConcurrencyTest {
         TaskService.ClaimNextTaskResult infra =
                 taskService.claimNextTask("相依守衛測試", "INFRA", "infra");
         assertThat(infra.claimed()).isTrue();
-        taskService.updateStatus(infra.task().id(), "DONE", null);
+        assertThat(infra.claimToken()).isNotBlank();
+        taskService.updateStatus(infra.task().id(), "DONE", null, infra.claimToken());
 
         TaskService.ClaimNextTaskResult unlocked =
                 taskService.claimNextTask("相依守衛測試", "BACKEND", "backend-dev");
@@ -134,6 +136,82 @@ class TaskClaimConcurrencyTest {
                     .orElseThrow();
             assertThat(stillBlocked.getStatus()).isEqualTo("TODO");
             assertThat(stillBlocked.getAssignee()).isNull();
+        }
+    }
+
+    @Test
+    void secondAgentWithoutTokenCannotHijackFirstAgentsClaim() {
+        // #112：認領成功後拿到 claimToken，另一個 agent（就算知道 taskId）沒有正確
+        // token 就不能動這筆任務——就算它猜一個假 token 也一樣被拒絕。
+        var project = projectService.createProject("token 所有權測試", null).project();
+        taskService.createTasks(project.id(), List.of(
+                new TaskService.TaskInput("受保護任務", null, "BACKEND")));
+
+        TaskService.ClaimNextTaskResult claimedByA =
+                taskService.claimNextTask("token 所有權測試", "BACKEND", "backend-dev-a");
+        assertThat(claimedByA.claimed()).isTrue();
+        Long taskId = claimedByA.task().id();
+
+        // 冒充者不帶 token、或帶假 token，都不能把任務標成 DONE。
+        assertThatThrownBy(() -> taskService.updateStatus(taskId, "DONE", null, null))
+                .isInstanceOf(dev.aiboard.common.BoardException.class);
+        assertThatThrownBy(() -> taskService.updateStatus(taskId, "DONE", null, "假冒的token"))
+                .isInstanceOf(dev.aiboard.common.BoardException.class);
+
+        Task stillInProgress = taskRepository.findById(taskId).orElseThrow();
+        assertThat(stillInProgress.getStatus()).isEqualTo("IN_PROGRESS");
+
+        // 真正的認領者帶對 token 才能完成。
+        TaskService.TaskStatusChangeResult result =
+                taskService.updateStatus(taskId, "DONE", null, claimedByA.claimToken());
+        assertThat(result.changed()).isTrue();
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("DONE");
+    }
+
+    @Test
+    void concurrentUpdateAttemptsOnlyTheTokenHolderSucceeds() throws Exception {
+        var project = projectService.createProject("token 併發保護測試", null).project();
+        taskService.createTasks(project.id(), List.of(
+                new TaskService.TaskInput("受保護任務", null, "BACKEND")));
+
+        TaskService.ClaimNextTaskResult claimedByA =
+                taskService.claimNextTask("token 併發保護測試", "BACKEND", "backend-dev-a");
+        Long taskId = claimedByA.task().id();
+        String realToken = claimedByA.claimToken();
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            // 一個 worker 帶正確 token，另一個帶假 token，同時嘗試完成同一筆任務。
+            Future<Boolean> withRealToken = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                try {
+                    taskService.updateStatus(taskId, "DONE", null, realToken);
+                    return true;
+                } catch (RuntimeException e) {
+                    return false;
+                }
+            });
+            Future<Boolean> withFakeToken = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                try {
+                    taskService.updateStatus(taskId, "DONE", null, "偽造的token");
+                    return true;
+                } catch (RuntimeException e) {
+                    return false;
+                }
+            });
+
+            ready.await();
+            start.countDown();
+            boolean realSucceeded = withRealToken.get();
+            boolean fakeSucceeded = withFakeToken.get();
+
+            assertThat(realSucceeded).isTrue();
+            assertThat(fakeSucceeded).isFalse();
+            assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("DONE");
         }
     }
 

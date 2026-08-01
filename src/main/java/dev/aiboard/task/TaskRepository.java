@@ -20,10 +20,12 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Task t SET t.status = 'IN_PROGRESS', t.assignee = :assignee, "
-            + "t.claimedAt = :claimedAt, t.updatedAt = :claimedAt, t.version = t.version + 1 "
+            + "t.claimedAt = :claimedAt, t.claimTokenHash = :claimTokenHash, "
+            + "t.updatedAt = :claimedAt, t.version = t.version + 1 "
             + "WHERE t.id = :taskId AND t.status = 'TODO'")
     int claimIfTodo(@Param("taskId") Long taskId, @Param("assignee") String assignee,
-                    @Param("claimedAt") LocalDateTime claimedAt);
+                    @Param("claimedAt") LocalDateTime claimedAt,
+                    @Param("claimTokenHash") String claimTokenHash);
 
     @Query("SELECT t FROM Task t WHERE t.projectId = :projectId "
             + "AND (:status IS NULL OR t.status = :status) "
