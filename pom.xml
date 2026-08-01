@@ -38,11 +38,33 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+            <exclusions>
+                <!-- jtokkit 是 LLM tokenizer（spring-ai-commons 傳遞進來），
+                     本專案是看板服務，不做 token 計算，程式碼未直接或間接
+                     使用 com.knuddels.jtokkit 任何類別。已實測排除後應用
+                     啟動、MCP tools/list、tools/call 皆正常。 -->
+                <exclusion>
+                    <groupId>com.knuddels</groupId>
+                    <artifactId>jtokkit</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
+            <exclusions>
+                <!-- aspectjweaver 經 spring-boot-starter-data-jpa -> spring-aspects
+                     傳遞進來，僅供 @Configurable / AspectJ 編織式 AOP 使用；
+                     本專案未使用 @EnableAspectJAutoProxy、@Configurable 或任何
+                     AspectJ 織入語法，Hibernate 的 lazy-loading proxy 由
+                     byte-buddy（執行期 proxy）提供，與 aspectjweaver 無關。
+                     已實測排除後應用啟動、JPA/Hibernate 功能、MCP 端點皆正常。 -->
+                <exclusion>
+                    <groupId>org.springframework</groupId>
+                    <artifactId>spring-aspects</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
