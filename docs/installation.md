@@ -1,8 +1,8 @@
 # 安裝指南
 
-本文件涵蓋兩種安裝方式的完整步驟：Claude Code plugin（推薦，會自動接線
-MCP 與角色 agent）與手動 clone + 執行 jar。兩種方式最終啟動的都是同一顆
-Spring Boot 行程，差別只在「怎麼把 MCP 端點與角色 agent 接進 Claude Code」。
+本文件涵蓋三種整合方式：Claude Code plugin、Codex plugin，以及手動 clone +
+執行 jar／接線。兩套 plugin 會帶入 MCP 宣告、角色 agent 與 leader skill；所有
+方式最終連到的都是同一顆 Spring Boot 行程。
 
 ## 0. 前置需求
 
@@ -110,12 +110,30 @@ rm ~/.claude/agents/{backend-dev,frontend-dev,qa,infra,docs}.md   # 視實際存
 
 （`reviewer.md` 是新增角色，家目錄通常還沒有同名檔案，但仍建議一併確認。）
 
-## 2. 方式二：手動 clone + 執行 jar
+## 2. 方式二：Codex plugin
+
+repo 內的 Codex plugin 由以下兩層組成：
+
+- `.codex-plugin/`：plugin manifest、`.mcp.json`、六個角色薄殼與
+  `skills/claim-tasks/`
+- `.agents/plugins/marketplace.json`：把上述目錄登錄為本機可安裝的
+  **AI Project Board** plugin
+
+在 Codex 開啟本 repo 後，從 plugin marketplace 安裝 **AI Project Board**。
+安裝時若提示啟用 `board` connector，需確認一次；它會連到
+`http://127.0.0.1:8080/mcp`。安裝或更新後重開 task，使角色與 skill 清單重新
+載入。只在 `~/.codex/config.toml` 手動設定 MCP 也能使用看板工具，但不會帶入
+plugin 內的角色薄殼與 leader skill。
+
+Codex plugin 與 Claude Code plugin 使用不同的包裝目錄，但兩者的角色邊界與
+leader 流程應保持一致；更新其中一份時需同步檢查另一份。
+
+## 3. 方式三：手動 clone + 執行 jar
 
 適合不使用 Claude Code plugin 機制、或想手動控制啟動流程的情境，
 細節與環境變數見 README「快速開始」一節，這裡不重複。
 
-## 3. 資料目錄
+## 4. 資料目錄
 
 `bin/start-board.sh` 決定資料庫路徑的邏輯（也適用於直接執行 jar 時手動
 指定 `BOARD_DB_URL` 的參考預設值）：
@@ -129,7 +147,7 @@ rm ~/.claude/agents/{backend-dev,frontend-dev,qa,infra,docs}.md   # 視實際存
 這樣設計的原因：plugin 目錄可能因為更新（重新 clone / 覆蓋整個目錄）而
 遺失內容，H2 資料庫檔案不能放在會被覆蓋的路徑下。
 
-## 4. 已知限制與落差
+## 5. 已知限制與落差
 
 ### 角色指引不跟著 plugin 走
 
@@ -150,6 +168,11 @@ rm ~/.claude/agents/{backend-dev,frontend-dev,qa,infra,docs}.md   # 視實際存
 - 若要讓調整過的指引在新環境上重現，需要另外手動呼叫 `upsert_role`
   重新灌一次，或自行備份/搬移 `data/board.mv.db`
 
+`reviewer` 是 leader 驗收階段直接呼叫的唯讀角色，不認領 category 任務，因而
+不在 `RoleSeeder` 初始化的五個 worker 角色內。Claude Code 與 Codex plugin 的
+reviewer 薄殼都含完整 fallback；除非使用者另用 `upsert_role` 建立 reviewer
+指引，否則 `get_role("reviewer", projectName)` 找不到時會直接依薄殼工作。
+
 ### 版本號無法區分同版本號跨多次 commit 的新舊 build
 
 `/api/health` 回傳的 `version` 讀的是 `pom.xml` 的版本號（例如
@@ -159,7 +182,7 @@ commit（例如新增了 `/api/health` 本身這個端點），單看 `version` 
 ／新欄位」間接推斷，或直接比對啟動時間（`startedAt`）與程式碼 commit
 時間。
 
-## 5. macOS 開機自動啟動與崩潰自動重啟（launchd）
+## 6. macOS 開機自動啟動與崩潰自動重啟（launchd）
 
 適合「至少在要 build 新專案時看板不能死掉」這類需求：登入時自動啟動、
 行程意外終止（crash、被系統回收、手滑 kill 到）時自動拉起，同時保留
@@ -269,7 +292,7 @@ PID 隔離、未受影響）：
    `~/Library/LaunchAgents/` 底下無殘留、`launchctl print` 找不到該
    job、測試埠號已釋放
 
-## 6. 驗證記錄
+## 7. 驗證記錄
 
 以下為撰寫本文件時的實際驗證方式，供之後比對程式行為是否漂移：
 
@@ -287,7 +310,6 @@ PID 隔離、未受影響）：
 4. 測試完畢後 `kill` 掉該臨時行程、刪除暫存目錄，並確認正式看板
    （8080）的 `/api/projects` 仍正常回應，未受影響
 
-正式看板（8080）目前跑的行程啟動於本文件撰寫日期之前，尚未包含
-`/api/health` 這個較新的端點，因此對它呼叫 `/api/health` 目前回 404——
-這是「舊行程還沒重啟」的正常現象，不是端點沒做或壞掉；重啟該行程後即可
-看到 `/api/health` 生效。
+這份記錄只描述當次隔離環境的驗證結果，不代表任何時間點正式 `:8080` 行程的
+即時狀態。判斷目前服務是否已更新，請直接查看該行程的 `/api/health`；若端點
+不存在，再確認實際啟動的 jar 與 commit，而不要依賴本文件的歷史狀態。

@@ -1,17 +1,18 @@
-# Scope 重新定位：Leader 分派架構
+# Scope 重新定位：Leader 分派架構（歷史決策紀錄）
 
-> 狀態：階段 0、1、1.5 已實作完成（2026-07-30）；階段 2～4 未動工
+> 狀態：階段 0～4 均已實作；本文件保留 2026-07-30 的問題分析與原始計畫
 > 日期：2026-07-30
 >
-> **已完成**：`list_tasks` 支援 projectName 與 description 輸出、
+> **目前已完成**：`list_tasks` 支援 projectName 與 description 輸出、
 > `task_dependency` 與認領守衛、前端相依標示、`claim-tasks` skill 改為
-> leader 分派模式、五個角色 agent 改單件回報、資料庫路徑偵測。
-> 90 個測試全綠，並以真實 MCP 協定完成端到端驗證。
+> leader 分派模式、五個 worker 角色改單件回報、角色指引兩層模型、Claude Code
+> 與 Codex plugin，以及啟動腳本的絕對資料庫路徑策略。
 >
-> **未做**：階段 2（角色指引收斂到看板）、階段 3（打包 plugin）、
-> 階段 4（Codex 對齊）。
+> **閱讀方式**：下方第 1～9 節是實作前的設計快照，其中「現況」「未做」與
+> 行號引用只代表 2026-07-30 當時，不應用來判斷目前程式；目前操作方式以
+> `README.md`、`docs/installation.md` 與 repo 根目錄 `AGENTS.md` 為準。
 
-## 1. 事實盤點（已驗證，非推測）
+## 1. 原始事實盤點（2026-07-30 實作前）
 
 先釐清一件事：**Codex 和 Claude Code 的能力其實是對稱的**，兩邊都有 skill、agent、plugin 機制。這推翻了「Codex 只能當單一 worker」的假設。
 
@@ -30,11 +31,12 @@
 
 **結論：同一個角色在兩個 client 上的行為已經不一樣了。** 不處理這件事，加角色只會讓漂移加倍。
 
-### 現有看板 MCP tools
+### 當時的看板 MCP tools
 
 `create_project` / `create_tasks` / `update_task_status` / `claim_next_task` / `list_tasks`
 
-看板目前只存**任務**，不存規格文件、不存角色定義。
+看板當時只存**任務**，不存規格文件、不存角色定義；目前已由 `role` 表與
+`list_roles`／`get_role`／`upsert_role` 支援角色指引。
 
 ---
 
@@ -281,9 +283,9 @@ Session B（開工）：主 session = leader
 
 ---
 
-## 8. 分階段計畫
+## 8. 分階段計畫（均已完成，以下保留原始驗收想法）
 
-### 階段 0：解掉 leader 的兩個硬阻塞（看板，小改）
+### 階段 0：解掉 leader 的兩個硬阻塞（已完成）
 
 沒有這兩項，leader 連盤點都做不到。
 
@@ -296,7 +298,7 @@ Session B（開工）：主 session = leader
 
 **驗收**：leader 能只憑專案名稱盤點出含描述的 TODO 清單。
 
-### 階段 1：Leader 邏輯（只改 skill）
+### 階段 1：Leader 邏輯（已完成）
 
 改寫 `claim-tasks` skill：
 
@@ -311,7 +313,7 @@ Session B（開工）：主 session = leader
 
 **這階段做完就能感受到差別。體感沒變好，後面都不用做。**
 
-### 階段 1.5：`depends_on`（看板）
+### 階段 1.5：`depends_on`（已完成）
 
 - migration：`task_dependency` 表（task_id, depends_on_task_id）或 task 表加欄位
 - `create_tasks` 支援帶入相依
@@ -320,7 +322,7 @@ Session B（開工）：主 session = leader
 
 **驗收**：前置未完成時 `claim_next_task` 不發放該任務；前置一 DONE 就自動可認領。
 
-### 階段 2：角色指引收斂到看板
+### 階段 2：角色指引收斂到看板（已完成）
 
 - migration：`role` 表（name, category, instructions, project_id 可為 NULL = 通用）
 - MCP：`list_roles`、`get_role`、`upsert_role`
@@ -329,21 +331,22 @@ Session B（開工）：主 session = leader
 
 **驗收**：改一次看板角色指引，確認 Claude 與 Codex 下次開工都吃到新版。
 
-### 階段 3：打包 plugin
+### 階段 3：打包 plugin（已完成）
 
 - `.claude-plugin/plugin.json` + `.codex-plugin/plugin.json`
 - skills、agents 骨架、mcp 設定收進去，推上 git
 - 在第二台機器裝一次驗證
 
-### 階段 4：Codex 對齊
+### 階段 4：Codex 對齊（已完成）
 
 移植 leader skill，補上缺的 infra/docs 角色，實測平行能力。
 
 ---
 
-## 9. 尚未驗證的假設
+## 9. 當時尚未驗證的假設（歷史）
 
-以下是這份文件依賴、但**沒有實測過**的事，做之前要先確認：
+以下是原始計畫在 2026-07-30 尚未驗證的事項；plugin 與 Codex 對齊現已完成，
+此清單只保留決策背景，不是目前待辦：
 
 1. **Codex 的 skill 能否平行啟動多個 agent**，還是只能循序。影響階段 4 的可行性。
 2. **每件開新 subagent 的 token 成本**。每次都要重讀 `CLAUDE.md`/`AGENTS.md`，任務多時成本可能明顯上升。階段 1 跑完要實測。
@@ -363,9 +366,9 @@ Session B（開工）：主 session = leader
 | `AGENTS.md` R5 認領段 | compare-and-swap 只檢查 `status='TODO'` | 加上前置全 DONE 的條件 |
 | 併發測試 | 證明兩 worker 只有一個取得同任務 | 增加：前置未完成時不得發放 |
 
-以上五項在 2026-07-30 的實作中都已完成。註：`AGENTS.md` 在 `.gitignore`
-內，屬本機檔案，不隨 repo 分發——階段 3 打包 plugin 時要留意這件事，
-否則別人裝了 plugin 也拿不到這些規則。
+以上五項在 2026-07-30 的實作中都已完成。後續也已把 `AGENTS.md` 納入版控；
+`.gitignore` 明確保留它，因此 clone repo 會取得這份開發規則。Plugin 角色薄殼
+則分別位於 `plugin/agents/` 與 `.codex-plugin/agents/`。
 
 ---
 
@@ -409,14 +412,11 @@ Session B（開工）：主 session = leader
 
 `BOARD_DB_URL` 預設 `jdbc:h2:file:./data/board` 是相對路徑，
 jar 從 `target/` 啟動就會連到全新空庫，前端顯示所有專案消失。
-這在實作當天真的發生了。已加啟動期檢查（`DatabaseLocationCheck`），
-會記錄實際解析到的絕對路徑，並在「即將建立空庫但上層目錄有同名資料檔」
-時發出警告。
-
-實作細節值得留意：檢查必須用 `EnvironmentPostProcessor` 而非
-`ApplicationRunner`（後者執行時 H2 已經把空檔建好了），
-且該時機早於 logging system 初始化，要用 `DeferredLogFactory`
-否則訊息會被靜默吞掉。
+這在實作當天真的發生了。最終沒有加入 Java 端的
+`DatabaseLocationCheck`／`EnvironmentPostProcessor`；目前由
+`bin/start-board.sh` 在啟動 Java 前把資料庫解析成絕對路徑，既有 repo 資料庫
+優先沿用，否則使用 `~/.ai-project-board/data`。手動執行 jar 不會得到這層
+保護，必須自行明確設定 `BOARD_DB_URL`。
 
 ### 前端「等待前置」不該用停線紅
 

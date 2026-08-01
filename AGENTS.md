@@ -88,10 +88,12 @@ TypeScript。IN_PROGRESS 與 BLOCKED 顯示 muted、IBM Plex Mono 的 `@assignee
   也不會重複匯入。要把新版指引推到既有看板必須呼叫 `upsert_role`，改
   `RoleSeeder` 裡的常數只影響「還沒有該角色的全新看板」。
 
-`~/.claude/agents/*.md`、`~/.codex/AGENTS.md` 這層是使用者機器上的**薄殼**：
+`plugin/agents/*.md`、`.codex-plugin/agents/*.md`（或手動安裝時的
+`~/.claude/agents/*.md`、`~/.codex/AGENTS.md`）這層是 client 專用的**薄殼**：
 先呼叫 `get_role` 取得看板上的最新指引並照做；只有在 `get_role` 失敗或看板
 未啟動時，才退回檔案內建的最小 fallback 規則（讀 repo 的
 `CLAUDE.md`/`AGENTS.md`、呼叫對應 category 的 `claim_next_task`、單件回報不
 連續認領），確保看板連不上時仍不停工，但不是常態運作路徑。
 
-更完整的專案說明與指令同步維護在 `CLAUDE.md`。
+使用者向的安裝、工具與操作說明維護在 `README.md` 與 `docs/`；本檔是 repo 內
+唯一的 agent 開發規則正本，避免再維護一份容易漂移的 `CLAUDE.md`。

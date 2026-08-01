@@ -63,11 +63,14 @@ Chat 規劃專案
 ./bin/start-board.sh
 ```
 
-看到 `看板已就緒：http://127.0.0.1:8080` 就代表可以打開瀏覽器了。也可以繼續
-用最原始的手動方式（等價於腳本內部做的事，差別是不會自動偵測 JDK/埠號/鎖檔）：
+看到 `看板已就緒：http://127.0.0.1:8080` 就代表可以打開瀏覽器了。也可以用
+手動方式組裝與啟動；組裝時仍必須隔離測試用埠號與資料庫。手動方式不包含腳本的
+JDK／埠號／鎖檔檢查，也不會套用腳本的絕對資料庫路徑策略：
 
 ```bash
-./mvnw clean package
+BOARD_PORT=8081 \
+BOARD_DB_URL='jdbc:h2:file:./data/dev-local' \
+  ./mvnw clean package
 java -jar target/ai-project-board-backend-2.0.0.jar
 ```
 
@@ -100,10 +103,14 @@ java -jar target/ai-project-board-backend-2.0.0.jar
 跑測試：
 
 ```bash
-./mvnw test
+BOARD_PORT=8081 \
+BOARD_DB_URL='jdbc:h2:file:./data/dev-local' \
+  ./mvnw test
 ```
 
-## 用 Claude Code plugin 安裝
+## 用 plugin 安裝
+
+### Claude Code
 
 除了上面手動 clone + 執行 jar，也可以把 `plugin/` 目錄裝成 Claude Code
 plugin，一次接好 MCP 端點（`.mcp.json`）、六個角色 agent 薄殼
@@ -131,6 +138,18 @@ claude plugin install ai-project-board@ai-board
 `bin/start-board.sh` 會自動組裝，細節、資料目錄規劃、家目錄薄殼衝突的
 排除方式，以及角色指引不跟著 plugin 走這件事的完整說明，見
 [docs/installation.md](docs/installation.md)。
+
+### Codex
+
+repo 也包含 Codex plugin：`.codex-plugin/` 放角色薄殼、`claim-tasks` skill 與
+MCP 宣告，`.agents/plugins/marketplace.json` 則是本機 marketplace 入口。在
+Codex 開啟這個 repo 後，可從 plugin marketplace 安裝 **AI Project Board**；
+安裝時若提示啟用 `board` connector，需再確認一次，讓它連到本機
+`http://127.0.0.1:8080/mcp`。安裝或更新後重開 task，讓角色與 skill 清單重新載入。
+
+如果不使用 plugin，仍可用下方 `~/.codex/config.toml` 手動接線；差別是只會得到
+MCP 工具，不會自動取得 `.codex-plugin/agents/` 的角色薄殼與 leader skill。完整
+安裝方式與檔案對照見 [docs/installation.md](docs/installation.md)。
 
 ## 接線
 
@@ -186,7 +205,7 @@ url = "http://127.0.0.1:8080/mcp"
 
 這層過濾只影響候選挑選，原子認領的 compare-and-swap 語意不變。
 
-REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}/tasks/{taskId}/history`、`/api/events` SSE、`/api/health`）全部唯讀，只給前端用，所有寫入一律經由 MCP。`/api/health` 回傳 `version`／`databasePath`／`tools`（實際載入的清單，非寫死）／`startedAt`，用來確認目前這個行程連到哪個資料庫、跑的是不是最新程式碼。
+REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}/tasks/{taskId}/history`、`/api/roles`、`/api/events` SSE、`/api/health`）全部唯讀；主要供前端查詢，其中 `/api/health` 也供啟動腳本確認服務版本、資料庫路徑與實際載入的工具。所有寫入一律經由 MCP。`/api/health` 回傳 `version`／`databasePath`／`tools`（實際載入的清單，非寫死）／`startedAt`。
 
 ## 角色 agent
 
@@ -219,7 +238,7 @@ leader 的驗收範圍有限：只驗「該動的有動、測試有跑、`BLOCKE
 
 ### 兩層來源：檔案是薄殼，指引在看板
 
-角色的完整工作指引**存在看板的資料庫裡**（`role` 表），透過 `get_role` 取得，
+五個會認領任務的角色，其完整工作指引**存在看板的資料庫裡**（`role` 表），透過 `get_role` 取得，
 不是寫死在本 repo 或使用者機器的檔案中。指引分兩層，`get_role` 依優先序回傳
 整份（不會自動疊加，覆寫版必須包含通用版的全部內容加上專屬規則）：
 
@@ -265,8 +284,14 @@ Claude Code 這層薄殼有兩種取得方式：
   完成後更新為 DONE，卡住則更新為 BLOCKED 並在 note 說明原因。
   ```
 
-- Codex CLI：在 `~/.codex/AGENTS.md` 用同樣邏輯寫五個角色段落（Codex 沒有各角色
-  獨立檔案的機制，習慣上集中寫在一份 `AGENTS.md`）。
+- Codex：優先安裝本 repo 的 Codex plugin，使用 `.codex-plugin/agents/*.md` 中的
+  六個獨立角色薄殼；不使用 plugin 時，才在 `~/.codex/AGENTS.md` 寫相同的
+  fallback 規則。
+
+`reviewer` 不認領 category 任務，因此 `RoleSeeder` 只初始化上述五個 worker
+角色，不會另外建立 reviewer 的資料庫指引。兩套 plugin 的 reviewer 薄殼本身
+包含完整唯讀審查 fallback；若使用者另外用 `upsert_role` 建立 reviewer 指引，
+它才會優先採用看板版本。
 
 每個角色只認領自己類別的任務、只碰自己職責內的檔案；同一類別同時只有一個角色
 在跑，且**做完一件就回報結束、不自行認領下一件**——下一件由 leader 判斷時機
@@ -297,10 +322,10 @@ clone 這個 repo 就會拿到 `AGENTS.md`，不需要另外重建。
 
 ```
 src/main/java/dev/aiboard/
-├── mcp/        # MCP 工具定義（ProjectBoardTools）
+├── mcp/        # MCP 工具定義（ProjectBoardTools、RoleTools）
 ├── project/    # 專案 Entity / Repository / Service
 ├── task/       # 任務 Entity / Repository / Service
-├── role/       # 角色 Entity / Repository / Service（RoleTools、RoleSeeder）
+├── role/       # 角色 Entity / Repository / Service（含 RoleSeeder）
 ├── health/     # /api/health 用的 HealthService
 ├── web/        # 唯讀 REST Controller
 ├── event/      # SSE 事件發布
