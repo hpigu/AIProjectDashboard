@@ -108,14 +108,34 @@ java -jar target/ai-project-board-backend-2.0.0.jar
 除了上面手動 clone + 執行 jar，也可以把 `plugin/` 目錄裝成 Claude Code
 plugin，一次接好 MCP 端點（`.mcp.json`）、六個角色 agent 薄殼
 （`backend-dev`、`frontend-dev`、`qa`、`infra`、`docs`、`reviewer`）與
-`claim-tasks` skill。**plugin 不內含編譯好的 jar**，第一次啟動時
+`claim-tasks` skill：
+
+```bash
+claude plugin marketplace add /path/to/AgentDashboard
+```
+
+```bash
+claude plugin install ai-project-board@ai-board
+```
+
+第一行註冊 marketplace（`.claude-plugin/marketplace.json`），第二行才真的安裝。
+裝完在當前 session 生效需要 `/reload-plugins`，或重開 Claude Code。之後改了
+`plugin/` 底下的內容，重跑一次 `install` 就會吃到新版。
+
+安裝後 plugin 的 `board` connector 需要按一次 Install 才會註冊到你的環境
+（plugin 只是宣告需要這個 MCP server，宣告不等於啟用）。它連的是本機的
+`127.0.0.1:8080`，所以只在 Claude Code session 內生效，網頁端會顯示
+「Connects in sessions」。
+
+**plugin 不內含編譯好的 jar**，第一次啟動時
 `bin/start-board.sh` 會自動組裝，細節、資料目錄規劃、家目錄薄殼衝突的
 排除方式，以及角色指引不跟著 plugin 走這件事的完整說明，見
 [docs/installation.md](docs/installation.md)。
 
 ## 接線
 
-Claude Code：
+Claude Code：**裝了上面的 plugin 就不必手動接線**，plugin 自帶的 `.mcp.json`
+會處理。沒裝 plugin（或想用其他專案連上看板）時才需要這一行：
 
 ```bash
 claude mcp add --transport http board http://127.0.0.1:8080/mcp --scope project
@@ -293,6 +313,11 @@ src/main/resources/
 bin/
 └── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、自動組裝）
 plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
+.codex-plugin/      # Codex plugin 骨架（同上，格式依 Codex 慣例）
+.claude-plugin/
+└── marketplace.json    # Claude Code 的安裝入口，指向 plugin/
+.agents/plugins/
+└── marketplace.json    # Codex 的安裝入口，指向 .codex-plugin/
 docs/
 └── installation.md # 完整安裝指南
 ```
