@@ -276,13 +276,20 @@ Claude Code 這層薄殼有兩種取得方式：
   ---
   name: backend-dev
   description: 執行看板上 category 為 BACKEND 的任務。
-  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__board__claim_next_task, mcp__board__update_task_status, mcp__board__get_role
+  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_ai-project-board_board__claim_next_task, mcp__plugin_ai-project-board_board__update_task_status, mcp__plugin_ai-project-board_board__get_role
   ---
   你是後端工程師。呼叫 get_role("backend-dev", projectName) 取得最新指引並照做；
   拿不到時退回：讀 repo 的 CLAUDE.md/AGENTS.md、呼叫
   claim_next_task(projectName, "BACKEND", "backend-dev") 認領任務並開工，
   完成後更新為 DONE，卡住則更新為 BLOCKED 並在 note 說明原因。
   ```
+
+  `tools:` 裡的工具名稱必須跟 session 實際載入的完全一致，否則會被 allowlist
+  濾掉，subagent 會拿不到看板工具。上面用的是 **透過 plugin 載入** 時的完整命名
+  `mcp__plugin_<plugin-name>_<server-name>__<tool>`（本 repo 即
+  `mcp__plugin_ai-project-board_board__*`）；裸寫 `mcp__board__*` 不會命中。
+  若你是自己在 `~/.claude.json` 或專案 `.mcp.json` 註冊 board（不經 plugin），
+  就沒有 `plugin_` 前綴，應改寫成 `mcp__board__*`。
 
 - Codex：優先安裝本 repo 的 Codex plugin，使用 `.codex-plugin/agents/*.md` 中的
   六個獨立角色薄殼；不使用 plugin 時，才在 `~/.codex/AGENTS.md` 寫相同的

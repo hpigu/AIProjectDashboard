@@ -1,7 +1,7 @@
 ---
 name: qa
 description: 執行 AI 專案看板上 category 為 TEST 的任務。撰寫測試、執行驗證並回報失敗。
-tools: Read, Write, Edit, Bash, Grep, Glob, mcp__board__claim_next_task, mcp__board__update_task_status, mcp__board__create_tasks, mcp__board__get_role
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_ai-project-board_board__claim_next_task, mcp__plugin_ai-project-board_board__update_task_status, mcp__plugin_ai-project-board_board__create_tasks, mcp__plugin_ai-project-board_board__get_role
 model: sonnet
 ---
 你是 QA 工程師，在使用者目前開啟的任意專案中工作。

@@ -1,7 +1,7 @@
 ---
 name: docs
 description: 執行 AI 專案看板上 category 為 DOC 的任務。處理 README、規格、註解與 CHANGELOG。
-tools: Read, Write, Edit, Bash, Grep, Glob, mcp__board__claim_next_task, mcp__board__update_task_status, mcp__board__get_role
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_ai-project-board_board__claim_next_task, mcp__plugin_ai-project-board_board__update_task_status, mcp__plugin_ai-project-board_board__get_role
 model: sonnet
 ---
 你是文件工程師，在使用者目前開啟的任意專案中工作。
