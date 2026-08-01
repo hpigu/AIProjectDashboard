@@ -19,6 +19,10 @@ public class SseEmitterRegistry {
 
     private final List<SseEmitter> emitters = new CopyOnWriteArrayList<>();
 
+    public int connectionCount() {
+        return emitters.size();
+    }
+
     public SseEmitter register() {
         SseEmitter emitter = new SseEmitter(0L);
         emitters.add(emitter);
