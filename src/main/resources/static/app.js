@@ -1,7 +1,6 @@
 const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount } = Vue;
 
 const STATUS_ORDER = ['DONE', 'IN_PROGRESS', 'BLOCKED', 'TODO'];
-const COLUMN_COLLAPSE_THRESHOLD = 6;
 const RAIL_FLASH_CLASS = {
   'TODO': 'flash-todo',
   'IN_PROGRESS': 'flash-progress',
@@ -160,9 +159,6 @@ const LevelTwo = {
       error: null,
       highlightedTaskId: null,
       showRoles: false,
-      // 各欄位獨立記住是否已展開；SSE 重新整理只呼叫 loadBoard，不動這裡，
-      // 所以使用者展開過的欄位不會在新任務進來時被收回去。
-      expandedColumns: reactive({}),
     };
   },
   computed: {
@@ -175,9 +171,6 @@ const LevelTwo = {
     },
     doneCount() {
       return this.board ? (this.board.columns.DONE || []).length : 0;
-    },
-    collapseThreshold() {
-      return COLUMN_COLLAPSE_THRESHOLD;
     },
   },
   created() {
@@ -217,26 +210,6 @@ const LevelTwo = {
     column(status) {
       return this.board ? (this.board.columns[status] || []) : [];
     },
-    isExpanded(status) {
-      return !!this.expandedColumns[status];
-    },
-    toggleColumn(status) {
-      this.expandedColumns[status] = !this.expandedColumns[status];
-    },
-    visibleTasks(status) {
-      const all = this.column(status);
-      if (all.length <= COLUMN_COLLAPSE_THRESHOLD || this.isExpanded(status)) {
-        return all;
-      }
-      return all.slice(0, COLUMN_COLLAPSE_THRESHOLD);
-    },
-    hiddenCount(status) {
-      const all = this.column(status);
-      if (all.length <= COLUMN_COLLAPSE_THRESHOLD || this.isExpanded(status)) {
-        return 0;
-      }
-      return all.length - COLUMN_COLLAPSE_THRESHOLD;
-    },
   },
   template: `
     <div>
@@ -266,7 +239,7 @@ const LevelTwo = {
           <div class="column-count">{{ column(status).length }}</div>
           <transition-group name="task" tag="div" class="column-body">
             <div
-              v-for="task in visibleTasks(status)"
+              v-for="task in column(status)"
               :key="task.id"
               class="task-card"
               :class="['st-' + status, { highlight: task.id === highlightedTaskId }]"
@@ -285,11 +258,6 @@ const LevelTwo = {
               >等待 {{ task.waitingFor.map(id => '#' + id).join('、') }}</div>
             </div>
           </transition-group>
-          <button
-            v-if="column(status).length > collapseThreshold"
-            class="column-toggle"
-            @click="toggleColumn(status)"
-          >{{ isExpanded(status) ? '收合' : '還有 ' + hiddenCount(status) + ' 張・點擊展開' }}</button>
         </div>
       </div>
     </div>
