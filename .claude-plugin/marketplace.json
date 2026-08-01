@@ -1,0 +1,25 @@
+{
+  "name": "ai-board",
+  "owner": {
+    "name": "Daniel Huang",
+    "url": "https://github.com/hpigu/AIProjectDashboard"
+  },
+  "description": "AI 專案看板的 Claude Code 整合。",
+  "plugins": [
+    {
+      "name": "ai-project-board",
+      "source": "./plugin",
+      "description": "AI 專案看板的 Claude Code 整合：認領/更新任務、取得角色指引、啟動看板服務。",
+      "version": "2.0.0",
+      "author": {
+        "name": "Daniel Huang"
+      },
+      "category": "productivity",
+      "tags": [
+        "project-board",
+        "task-management",
+        "multi-agent"
+      ]
+    }
+  ]
+}

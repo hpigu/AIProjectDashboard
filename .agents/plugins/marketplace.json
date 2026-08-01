@@ -1,0 +1,20 @@
+{
+  "name": "ai-board",
+  "interface": {
+    "displayName": "AI Project Board"
+  },
+  "plugins": [
+    {
+      "name": "ai-project-board",
+      "source": {
+        "source": "local",
+        "path": "./.codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
