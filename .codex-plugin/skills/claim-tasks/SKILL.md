@@ -29,10 +29,11 @@ description: 從 AI 專案看板認領並執行指定專案的任務。當使用
    直接把 reviewer 的發現交給下一輪執行、重新 claim 同一筆任務即可，
    不需要額外機制。
 
-也因為 `.codex/agents/*.toml` 目前未被 `config.toml` 的 `[agents.*]` 引用
-（處於未載入狀態），無法用 `spawn_agent(agent_type="backend-dev")` 這種方式
-直接指定自訂角色。派工時改用 default agent，在初始任務訊息裡把
-`.codex-plugin/agents/<role>.md` 的角色說明整段交給它，讓它照該角色的規則行動。
+另外，plugin 的角色定義（`.codex-plugin/agents/*.md`）能否直接對應到
+`spawn_agent(agent_type="backend-dev")` 尚未實測。派工時採用不依賴這件事的做法：
+用 default agent，在初始任務訊息裡把 `.codex-plugin/agents/<role>.md` 的
+角色說明整段交給它，讓它照該角色的規則行動。若確認 `agent_type` 可以直接
+指定到這些角色，再改成直接指定即可，其餘流程不變。
 
 ## 1. 取得專案名稱
 
@@ -89,6 +90,19 @@ list_tasks(projectName=<名稱>, status="TODO", includeDescription=true)
 
 ## 4. 派工
 
+### 先確保在 dev 分支上
+
+agent 的 commit 一律進 `dev`，**不直接進 `main`**。派第一件之前先確認：
+
+```
+git branch --show-current
+```
+
+不在 `dev` 就切過去（沒有就從 `main` 開）。這樣壞掉的改動不會污染 `main`，
+reviewer 也有明確的審查邊界（`git diff main...dev`）。
+
+### 指示內容
+
 每個角色**每次只派一件**。在給 agent 的指示中明確寫出：
 
 - projectName
@@ -128,15 +142,20 @@ agent 完成後，若該角色還有可做的任務，用乾淨的新一輪任�
 
 回報有疑點時，追問或重派，不要照單全收。
 
-### 叫 reviewer
+### 叫 reviewer（一波做完才叫，不是每筆）
 
-實作類任務（BACKEND / FRONTEND / INFRA）完成後，叫 `reviewer` 讀 diff。
+**一個波次的任務全部完成後**，叫 `reviewer` 審這一波的整體 diff。
 它不認領任務、不改檔案，只回報。給它：
 
-- 任務 id（commit 訊息帶 `(#taskId)`，它據此找 diff）
-- 沒有 commit 時（例如改的是家目錄檔案），直接告訴它範圍
+- 審查範圍：`git diff main...dev`（或指定這一波的 commit 範圍）
+- 這一波包含哪些任務 id 與各自的驗收條件
+- 沒有 commit 的改動（例如家目錄檔案），直接告訴它範圍
 
-文件類任務（DOC）與測試任務（TEST）可以跳過，除非改動牽涉程式行為。
+**為什麼一波而不是一筆**：同一波的任務彼此沒有相依（所以才能併行），
+但它們的改動可能互相矛盾——那正是 reviewer 該找的東西之一，
+逐筆審看不出來。而且逐筆審會讓 reviewer 跑很多次，成本不成比例。
+
+純文件波次（全是 DOC）可以跳過，除非改動牽涉程式行為。
 
 ### 處置 reviewer 的回報
 
@@ -160,6 +179,20 @@ reviewer 會把發現分成兩類，**處置方式不同**：
 
 連兩次沒過通常代表問題不在 agent，而在任務描述不清或設計本身有問題——
 再派一次只是重複燒 token。把 reviewer 兩次的發現一起呈給使用者判斷。
+
+### 合併回 main
+
+reviewer 說沒有「必須修」之後，**由你合併**，不是 agent 合：
+
+```
+git checkout main && git merge dev && git checkout dev
+```
+
+- 有 conflict 就停下來問使用者，不要自己猜著解
+- **不要 push**，推送由使用者決定
+- 合併後回到 `dev` 繼續下一波
+
+reviewer 只回報，不合併——它沒有全局視野，不知道你的波次安排。
 
 ## 6. 彙整
 
