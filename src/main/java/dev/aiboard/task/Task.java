@@ -42,6 +42,10 @@ public class Task {
     @Column(name = "claimed_at")
     private LocalDateTime claimedAt;
 
+    /** claim token 的安全雜湊；只有 hash，原文從不落庫。TODO/DONE 必為 NULL。 */
+    @Column(name = "claim_token_hash", length = 128)
+    private String claimTokenHash;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -103,6 +107,14 @@ public class Task {
         return claimedAt;
     }
 
+    public String getClaimTokenHash() {
+        return claimTokenHash;
+    }
+
+    public void setClaimTokenHash(String claimTokenHash) {
+        this.claimTokenHash = claimTokenHash;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
@@ -116,7 +128,13 @@ public class Task {
         if (newStatus == TaskStatus.TODO) {
             this.assignee = null;
             this.claimedAt = null;
+            this.claimTokenHash = null;
         }
+        if (newStatus == TaskStatus.DONE) {
+            this.claimTokenHash = null;
+        }
+        // BLOCKED 保留 claimTokenHash：認領者仍擁有這筆任務，之後要 resume/complete
+        // 還是得用同一把 token；IN_PROGRESS 本身也保留（正常認領中）。
         this.updatedAt = LocalDateTime.now();
     }
 }

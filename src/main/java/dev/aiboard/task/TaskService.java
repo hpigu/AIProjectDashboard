@@ -24,15 +24,18 @@ public class TaskService {
     private final TaskDependencyRepository taskDependencyRepository;
     private final ProjectService projectService;
     private final BoardEventPublisher eventPublisher;
+    private final ClaimTokenService claimTokenService;
 
     public TaskService(TaskRepository taskRepository, TaskLogRepository taskLogRepository,
                         TaskDependencyRepository taskDependencyRepository,
-                        ProjectService projectService, BoardEventPublisher eventPublisher) {
+                        ProjectService projectService, BoardEventPublisher eventPublisher,
+                        ClaimTokenService claimTokenService) {
         this.taskRepository = taskRepository;
         this.taskLogRepository = taskLogRepository;
         this.taskDependencyRepository = taskDependencyRepository;
         this.projectService = projectService;
         this.eventPublisher = eventPublisher;
+        this.claimTokenService = claimTokenService;
     }
 
     @Transactional
@@ -125,8 +128,21 @@ public class TaskService {
         }
     }
 
+    /**
+     * 相容既有呼叫方式（無 token）。舊契約：只要任務已認領即可操作。
+     * 新契約疊加在同一個方法上——任務是否要求 token 完全看該筆任務自己有沒有
+     * claimTokenHash：部署當下已存在、由舊流程認領的任務沒有 hash，不受影響；
+     * 用新版 claim_next_task 認領、已經拿到 hash 的任務，才會要求呼叫端帶對
+     * 的 token，否則一律拒絕。
+     */
     @Transactional
     public TaskStatusChangeResult updateStatus(Long taskId, String targetStatusRaw, String note) {
+        return updateStatus(taskId, targetStatusRaw, note, null);
+    }
+
+    @Transactional
+    public TaskStatusChangeResult updateStatus(Long taskId, String targetStatusRaw, String note,
+                                                String claimToken) {
         TaskStatus target = parseStatus(targetStatusRaw);
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
@@ -147,6 +163,19 @@ public class TaskService {
             throw new BoardException("未認領的 TODO 任務不能標記為 BLOCKED");
         }
 
+        // token 驗證：只有「這筆任務本身有 claimTokenHash」時才強制要求，
+        // 讓部署前既有、以舊契約認領（沒有 token）的任務仍可用舊呼叫方式完成。
+        boolean operatingOnOwnedClaim = current == TaskStatus.IN_PROGRESS || current == TaskStatus.BLOCKED;
+        if (operatingOnOwnedClaim && task.getClaimTokenHash() != null) {
+            if (claimToken == null || claimToken.isBlank()) {
+                throw new BoardException("任務 #" + taskId
+                        + " 需要認領時取得的 claim token 才能操作，請提供 claimToken");
+            }
+            if (!claimTokenService.matches(claimToken, task.getClaimTokenHash())) {
+                throw new BoardException("任務 #" + taskId + " 的 claim token 不正確，無法操作");
+            }
+        }
+
         boolean changed = current != target;
         if (changed) {
             task.changeStatus(target);
@@ -161,6 +190,39 @@ public class TaskService {
         ProjectService.ProjectDto project = projectService.getById(task.getProjectId());
 
         return new TaskStatusChangeResult(toDto(task), current, target, changed, project, doneCount, totalCount);
+    }
+
+    /**
+     * Leader 專用的遺失 token 重置流程。跳過 token 驗證，直接把任務打回 TODO
+     * 並清空認領資訊（含 token hash）。一般 agent 不得呼叫這個方法，
+     * MCP 層要用獨立的 reset 工具暴露，不能疊加在 update_task_status 上，
+     * 避免一般 agent 用「忘記帶 token」繞過驗證。
+     */
+    @Transactional
+    public TaskStatusChangeResult resetClaimAsLeader(Long taskId, String note) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
+        TaskStatus current = parseStatus(task.getStatus());
+
+        if (current == TaskStatus.DONE) {
+            throw new BoardException("任務 #" + taskId + " 已完成，無需重置認領");
+        }
+        if (current == TaskStatus.TODO) {
+            throw new BoardException("任務 #" + taskId + " 尚未被認領，無需重置");
+        }
+
+        task.changeStatus(TaskStatus.TODO);
+        taskLogRepository.save(new TaskLog(taskId, current.name(), TaskStatus.TODO.name(),
+                "leader 重置遺失的 claim token" + (note == null || note.isBlank() ? "" : "：" + note)));
+        eventPublisher.publish(BoardEvent.taskStatusChanged(
+                task.getProjectId(), taskId, current.name(), TaskStatus.TODO.name(),
+                task.getUpdatedAt().toString()));
+
+        long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE.name());
+        long totalCount = taskRepository.countByProjectId(task.getProjectId());
+        ProjectService.ProjectDto project = projectService.getById(task.getProjectId());
+
+        return new TaskStatusChangeResult(toDto(task), current, TaskStatus.TODO, true, project, doneCount, totalCount);
     }
 
     private TaskStatus parseStatus(String raw) {
@@ -243,7 +305,11 @@ public class TaskService {
             }
 
             LocalDateTime claimedAt = LocalDateTime.now();
-            int updated = taskRepository.claimIfTodo(candidate.getId(), assignee, claimedAt);
+            // token 原文只存在這個區域變數與最終回傳值裡；claimIfTodo 只收 hash，
+            // task_log 的 note 也只寫認領者名稱，原文不會被任何地方持久化。
+            String claimToken = claimTokenService.generateToken();
+            String claimTokenHash = claimTokenService.hash(claimToken);
+            int updated = taskRepository.claimIfTodo(candidate.getId(), assignee, claimedAt, claimTokenHash);
             if (updated == 1) {
                 Task claimed = taskRepository.findById(candidate.getId())
                         .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidate.getId()));
@@ -252,7 +318,7 @@ public class TaskService {
                 eventPublisher.publish(BoardEvent.taskStatusChanged(
                         claimed.getProjectId(), claimed.getId(), TaskStatus.TODO.name(),
                         TaskStatus.IN_PROGRESS.name(), claimed.getUpdatedAt().toString()));
-                return ClaimNextTaskResult.claimed(project.get(), toDto(claimed), category.name());
+                return ClaimNextTaskResult.claimed(project.get(), toDto(claimed), category.name(), claimToken);
             }
         }
 
@@ -353,27 +419,32 @@ public class TaskService {
     public record BlockedCandidate(TaskDto task, List<TaskDto> waitingFor) {
     }
 
+    /**
+     * @param claimToken 高熵 token 原文，只有認領成功那一刻回傳這一次；
+     *                   DB 只存 hash，這個欄位絕不能被序列化進 log 或存進資料庫。
+     */
     public record ClaimNextTaskResult(ProjectService.ProjectDto project, TaskDto task,
                                       List<ProjectService.ProjectDto> availableProjects,
-                                      String category, List<BlockedCandidate> blockedCandidates) {
+                                      String category, List<BlockedCandidate> blockedCandidates,
+                                      String claimToken) {
         public static ClaimNextTaskResult claimed(ProjectService.ProjectDto project, TaskDto task,
-                                                   String category) {
-            return new ClaimNextTaskResult(project, task, List.of(), category, List.of());
+                                                   String category, String claimToken) {
+            return new ClaimNextTaskResult(project, task, List.of(), category, List.of(), claimToken);
         }
 
         public static ClaimNextTaskResult noTask(ProjectService.ProjectDto project, String category) {
-            return new ClaimNextTaskResult(project, null, List.of(), category, List.of());
+            return new ClaimNextTaskResult(project, null, List.of(), category, List.of(), null);
         }
 
         /** 該 category 還有 TODO，但全部都在等前置任務完成。 */
         public static ClaimNextTaskResult allBlocked(ProjectService.ProjectDto project, String category,
                                                       List<BlockedCandidate> blockedCandidates) {
-            return new ClaimNextTaskResult(project, null, List.of(), category, blockedCandidates);
+            return new ClaimNextTaskResult(project, null, List.of(), category, blockedCandidates, null);
         }
 
         public static ClaimNextTaskResult projectNotFound(
                 List<ProjectService.ProjectDto> availableProjects, String category) {
-            return new ClaimNextTaskResult(null, null, availableProjects, category, List.of());
+            return new ClaimNextTaskResult(null, null, availableProjects, category, List.of(), null);
         }
 
         public boolean projectFound() {

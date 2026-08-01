@@ -45,10 +45,12 @@ class TaskServiceTest {
 
     private TaskService taskService;
 
+    private final ClaimTokenService claimTokenService = new ClaimTokenService();
+
     @BeforeEach
     void setUp() {
         taskService = new TaskService(taskRepository, taskLogRepository, taskDependencyRepository,
-                projectService, eventPublisher);
+                projectService, eventPublisher, claimTokenService);
     }
 
     @Test
@@ -330,7 +332,8 @@ class TaskServiceTest {
         when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
                 .thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
-                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
+                any(String.class)))
                 .thenReturn(1);
         when(taskRepository.findById(14L)).thenReturn(Optional.of(claimed));
 
@@ -357,10 +360,12 @@ class TaskServiceTest {
                 .thenReturn(List.of(first, second), List.of(second));
         when(taskDependencyRepository.findUnfinishedPrerequisites(any())).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
-                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
+                any(String.class)))
                 .thenReturn(0);
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
-                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
+                any(String.class)))
                 .thenReturn(1);
         when(taskRepository.findById(15L)).thenReturn(Optional.of(claimed));
 
@@ -387,7 +392,8 @@ class TaskServiceTest {
         when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L, 15L)))
                 .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
-                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class)))
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
+                any(String.class)))
                 .thenReturn(1);
         when(taskRepository.findById(15L)).thenReturn(Optional.of(claimed));
 
@@ -396,7 +402,7 @@ class TaskServiceTest {
 
         assertThat(result.task().id()).isEqualTo(15L);
         verify(taskRepository, never()).claimIfTodo(
-                org.mockito.ArgumentMatchers.eq(14L), any(), any(LocalDateTime.class));
+                org.mockito.ArgumentMatchers.eq(14L), any(), any(LocalDateTime.class), any());
     }
 
     @Test
@@ -422,7 +428,7 @@ class TaskServiceTest {
         assertThat(candidate.task().title()).isEqualTo("改後端");
         assertThat(candidate.waitingFor()).extracting(TaskService.TaskDto::id)
                 .containsExactly(9L);
-        verify(taskRepository, never()).claimIfTodo(any(), any(), any(LocalDateTime.class));
+        verify(taskRepository, never()).claimIfTodo(any(), any(), any(LocalDateTime.class), any());
     }
 
     @Test
@@ -510,6 +516,180 @@ class TaskServiceTest {
         assertThat(task.getStatus()).isEqualTo("TODO");
         assertThat(task.getAssignee()).isNull();
         assertThat(task.getClaimedAt()).isNull();
+    }
+
+    @Test
+    void updateStatus_withoutStoredTokenHash_worksWithoutClaimToken_backwardCompatible() {
+        // 部署前既有、以舊契約認領（沒有 claimTokenHash）的任務，仍要能用舊呼叫方式
+        // （不帶 claimToken）完成操作，這是 #112 對「舊 server 契約」的相容承諾。
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "舊資料任務", "BACKEND", 0, "backend-dev");
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
+
+        TaskService.TaskStatusChangeResult result = taskService.updateStatus(4L, "DONE", null);
+
+        assertThat(result.changed()).isTrue();
+        assertThat(task.getStatus()).isEqualTo("DONE");
+    }
+
+    @Test
+    void updateStatus_withStoredTokenHash_rejectsMissingToken() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
+        task.setClaimTokenHash(claimTokenService.hash("正確的token"));
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "DONE", null))
+                .isInstanceOf(BoardException.class)
+                .hasMessageContaining("claimToken");
+
+        verify(taskLogRepository, never()).save(any(TaskLog.class));
+        verify(eventPublisher, never()).publish(any(BoardEvent.class));
+    }
+
+    @Test
+    void updateStatus_withStoredTokenHash_rejectsWrongToken() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
+        task.setClaimTokenHash(claimTokenService.hash("正確的token"));
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "DONE", null, "別人猜的token"))
+                .isInstanceOf(BoardException.class)
+                .hasMessageContaining("不正確");
+
+        verify(taskLogRepository, never()).save(any(TaskLog.class));
+    }
+
+    @Test
+    void updateStatus_withStoredTokenHash_acceptsCorrectToken() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
+        task.setClaimTokenHash(claimTokenService.hash("正確的token"));
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
+
+        TaskService.TaskStatusChangeResult result =
+                taskService.updateStatus(4L, "DONE", null, "正確的token");
+
+        assertThat(result.changed()).isTrue();
+        assertThat(task.getStatus()).isEqualTo("DONE");
+        // DONE 必須清空 token hash。
+        assertThat(task.getClaimTokenHash()).isNull();
+    }
+
+    @Test
+    void updateStatus_toBlocked_keepsTokenHash() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
+        task.setClaimTokenHash(claimTokenService.hash("正確的token"));
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
+
+        taskService.updateStatus(4L, "BLOCKED", "卡住了", "正確的token");
+
+        assertThat(task.getStatus()).isEqualTo("BLOCKED");
+        assertThat(task.getClaimTokenHash()).isNotNull();
+    }
+
+    @Test
+    void updateStatus_toTodo_clearsTokenHashEvenWithStoredToken() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
+        setField(task, "status", "BLOCKED");
+        task.setClaimTokenHash(claimTokenService.hash("正確的token"));
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
+
+        taskService.updateStatus(4L, "TODO", "歸還", "正確的token");
+
+        assertThat(task.getStatus()).isEqualTo("TODO");
+        assertThat(task.getClaimTokenHash()).isNull();
+        assertThat(task.getAssignee()).isNull();
+    }
+
+    @Test
+    void claimNextTask_storesOnlyHashAndReturnsPlaintextTokenOnce() {
+        Long projectId = 12L;
+        Task candidate = taskWithId(projectId, 14L, "任務", "BACKEND", 0);
+        Task claimed = claimedTask(projectId, 14L, "任務", "BACKEND", 0, "backend-dev");
+        var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
+        when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
+        when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                projectId, "BACKEND", "TODO")).thenReturn(List.of(candidate));
+        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L))).thenReturn(List.of());
+        when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
+                any(String.class)))
+                .thenReturn(1);
+        when(taskRepository.findById(14L)).thenReturn(Optional.of(claimed));
+
+        TaskService.ClaimNextTaskResult result =
+                taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
+
+        assertThat(result.claimToken()).isNotBlank();
+
+        // task_log 的 note 只有認領者名稱，絕不含 token 原文。
+        ArgumentCaptor<TaskLog> logCaptor = ArgumentCaptor.forClass(TaskLog.class);
+        verify(taskLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getNote()).doesNotContain(result.claimToken());
+        assertThat(logCaptor.getValue().getNote()).isEqualTo("認領者：backend-dev");
+
+        // claimIfTodo 收到的第四個參數是 hash，不是原文。
+        ArgumentCaptor<String> hashCaptor = ArgumentCaptor.forClass(String.class);
+        verify(taskRepository).claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
+                org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
+                hashCaptor.capture());
+        assertThat(hashCaptor.getValue()).isNotEqualTo(result.claimToken());
+        assertThat(hashCaptor.getValue()).isEqualTo(claimTokenService.hash(result.claimToken()));
+    }
+
+    @Test
+    void resetClaimAsLeader_bypassesTokenAndClearsClaimMetadata() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "遺失token的任務", "BACKEND", 0, "backend-dev");
+        task.setClaimTokenHash(claimTokenService.hash("再也拿不回來的token"));
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
+
+        TaskService.TaskStatusChangeResult result =
+                taskService.resetClaimAsLeader(4L, "agent 中斷連線遺失 token");
+
+        assertThat(result.changed()).isTrue();
+        assertThat(task.getStatus()).isEqualTo("TODO");
+        assertThat(task.getAssignee()).isNull();
+        assertThat(task.getClaimedAt()).isNull();
+        assertThat(task.getClaimTokenHash()).isNull();
+
+        ArgumentCaptor<TaskLog> logCaptor = ArgumentCaptor.forClass(TaskLog.class);
+        verify(taskLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getNote()).doesNotContain("再也拿不回來的token");
+    }
+
+    @Test
+    void resetClaimAsLeader_whenTaskIsDone_throws() {
+        Task task = claimedTask(12L, 4L, "任務", "BACKEND", 0, "backend-dev");
+        setField(task, "status", "DONE");
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.resetClaimAsLeader(4L, null))
+                .isInstanceOf(BoardException.class);
     }
 
     @Test

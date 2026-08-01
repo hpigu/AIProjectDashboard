@@ -215,9 +215,9 @@ class ProjectBoardToolsTest {
         var projectDto = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
         var result = new TaskService.TaskStatusChangeResult(
                 taskDto, TaskStatus.IN_PROGRESS, TaskStatus.DONE, true, projectDto, 3L, 8L);
-        when(taskService.updateStatus(4L, "DONE", null)).thenReturn(result);
+        when(taskService.updateStatus(4L, "DONE", null, null)).thenReturn(result);
 
-        String message = tools.updateTaskStatus(4L, "DONE", null);
+        String message = tools.updateTaskStatus(4L, "DONE", null, null);
 
         assertThat(message).isEqualTo("#4 實作交易 CRUD API：IN_PROGRESS → DONE\n專案「個人記帳 App」進度 3/8");
     }
@@ -229,21 +229,35 @@ class ProjectBoardToolsTest {
         var projectDto = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
         var result = new TaskService.TaskStatusChangeResult(
                 taskDto, TaskStatus.TODO, TaskStatus.TODO, false, projectDto, 0L, 8L);
-        when(taskService.updateStatus(4L, "TODO", null)).thenReturn(result);
+        when(taskService.updateStatus(4L, "TODO", null, null)).thenReturn(result);
 
-        String message = tools.updateTaskStatus(4L, "TODO", null);
+        String message = tools.updateTaskStatus(4L, "TODO", null, null);
 
         assertThat(message).isEqualTo("#4 實作交易 CRUD API：狀態已是 TODO，未變更");
     }
 
     @Test
     void updateTaskStatus_whenConcurrentWriteWins_returnsClearBusinessError() {
-        when(taskService.updateStatus(4L, "DONE", null))
+        when(taskService.updateStatus(4L, "DONE", null, null))
                 .thenThrow(new OptimisticLockingFailureException("conflict"));
 
-        assertThatThrownBy(() -> tools.updateTaskStatus(4L, "DONE", null))
+        assertThatThrownBy(() -> tools.updateTaskStatus(4L, "DONE", null, null))
                 .isInstanceOf(dev.aiboard.common.BoardException.class)
                 .hasMessageContaining("重新讀取");
+    }
+
+    @Test
+    void updateTaskStatus_passesClaimTokenThrough() {
+        var taskDto = taskDto(4L, 12L, "實作交易 CRUD API", null,
+                "DONE", "BACKEND", 1, "backend-dev");
+        var projectDto = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
+        var result = new TaskService.TaskStatusChangeResult(
+                taskDto, TaskStatus.IN_PROGRESS, TaskStatus.DONE, true, projectDto, 3L, 8L);
+        when(taskService.updateStatus(4L, "DONE", null, "my-token")).thenReturn(result);
+
+        String message = tools.updateTaskStatus(4L, "DONE", null, "my-token");
+
+        assertThat(message).contains("IN_PROGRESS → DONE");
     }
 
     @Test
@@ -252,13 +266,14 @@ class ProjectBoardToolsTest {
         var task = taskDto(14L, 12L, "實作交易 CRUD API", "含分頁與驗收條件",
                 "IN_PROGRESS", "BACKEND", 1, "backend-dev");
         when(taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev"))
-                .thenReturn(TaskService.ClaimNextTaskResult.claimed(project, task, "BACKEND"));
+                .thenReturn(TaskService.ClaimNextTaskResult.claimed(project, task, "BACKEND", "plain-token-abc"));
 
         String result = tools.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
 
         assertThat(result).isEqualTo(
                 "已認領 #14「實作交易 CRUD API」[BACKEND]\n"
-                        + "專案：個人記帳 App（#12）\n描述／驗收條件：含分頁與驗收條件");
+                        + "專案：個人記帳 App（#12）\n描述／驗收條件：含分頁與驗收條件\n"
+                        + "claimToken：plain-token-abc（僅顯示這一次，操作此任務時請帶上，勿外流／勿記錄到自己的 log）");
     }
 
     @Test
@@ -267,7 +282,7 @@ class ProjectBoardToolsTest {
         var task = taskDto(14L, 12L, "實作交易 CRUD API", null,
                 "IN_PROGRESS", "BACKEND", 1, "backend-dev");
         when(taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev"))
-                .thenReturn(TaskService.ClaimNextTaskResult.claimed(project, task, "BACKEND"));
+                .thenReturn(TaskService.ClaimNextTaskResult.claimed(project, task, "BACKEND", "plain-token-abc"));
 
         String result = tools.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
 
@@ -297,6 +312,31 @@ class ProjectBoardToolsTest {
         assertThat(result).contains("找不到專案「個人記帳」")
                 .contains("#12 個人記帳 App")
                 .contains("#15 SMTP 監控工具");
+    }
+
+    @Test
+    void resetTaskClaim_returnsResetMessage() {
+        var taskDto = taskDto(4L, 12L, "遺失token的任務", null,
+                "TODO", "BACKEND", 1, null);
+        var projectDto = new ProjectService.ProjectDto(12L, "個人記帳 App", null, "ACTIVE");
+        var result = new TaskService.TaskStatusChangeResult(
+                taskDto, TaskStatus.BLOCKED, TaskStatus.TODO, true, projectDto, 0L, 8L);
+        when(taskService.resetClaimAsLeader(4L, "遺失token")).thenReturn(result);
+
+        String message = tools.resetTaskClaim(4L, "遺失token");
+
+        assertThat(message).contains("已重置 #4 遺失token的任務 的認領")
+                .contains("BLOCKED → TODO");
+    }
+
+    @Test
+    void resetTaskClaim_whenConcurrentWriteWins_returnsClearBusinessError() {
+        when(taskService.resetClaimAsLeader(4L, null))
+                .thenThrow(new OptimisticLockingFailureException("conflict"));
+
+        assertThatThrownBy(() -> tools.resetTaskClaim(4L, null))
+                .isInstanceOf(dev.aiboard.common.BoardException.class)
+                .hasMessageContaining("重新讀取");
     }
 
     private static TaskService.TaskDto taskDto(Long id, Long projectId, String title,
