@@ -159,7 +159,117 @@ commit（例如新增了 `/api/health` 本身這個端點），單看 `version` 
 ／新欄位」間接推斷，或直接比對啟動時間（`startedAt`）與程式碼 commit
 時間。
 
-## 5. 驗證記錄
+## 5. macOS 開機自動啟動與崩潰自動重啟（launchd）
+
+適合「至少在要 build 新專案時看板不能死掉」這類需求：登入時自動啟動、
+行程意外終止（crash、被系統回收、手滑 kill 到）時自動拉起，同時保留
+「使用者想手動停掉就要停得掉」的退路。
+
+### 安裝
+
+```bash
+bin/install-launchd.sh
+```
+
+預設安裝 label `dev.aiboard.board`、埠號 `8080`，資料庫沿用
+`start-board.sh` 原本的推斷邏輯（`<repo>/data/board.mv.db` 已存在時沿用
+該路徑，這對已在跑的正式看板是向下相容的路徑）。安裝完成會把
+plist 寫到 `~/Library/LaunchAgents/dev.aiboard.board.plist` 並立刻載入
+（`launchctl bootstrap`）。
+
+如果 `:8080` 當下已有看板在跑（例如你原本就是手動啟動的），`RunAtLoad`
+觸發後 `bin/board-agent-wrapper.sh` 會呼叫 `start-board.sh`，其埠號檢查
+邏輯偵測到「已有看板在正常運作」會直接結束、不搶埠號、不動既有行程——
+可以放心安裝，不會因為裝了 launchd job 就把手動啟動的行程弄掛。之後你
+可以自行選擇何時把手動行程換成 launchd 管理（例如下次重開機，或手動
+`kill` 掉舊行程一次，讓 launchd 接手）。
+
+### 機制設計與三個衝突問題
+
+1. **自動重啟 vs 使用者手動啟動的行程互相打架（H2 檔案鎖）**
+   `start-board.sh` 第 3 節（埠號檢查）與第 4 節（H2 鎖檔偵測）本來就會
+   在啟動前先確認「是不是已經有人（不管是不是 launchd 管的）在用同一個
+   埠號／同一個資料庫檔案」，偵測到就直接結束並提示，不會硬闖造成
+   `MVStoreException`。launchd 這層只是「定期／崩潰後嘗試呼叫
+   `start-board.sh`」，實際的互斥判斷仍在 `start-board.sh` 本身，兩者
+   共用同一套防呆，不會出現「launchd 版本」與「手動版本」用不同邏輯各
+   判各的而互相踩線的情況。
+
+2. **無限重啟迴圈（資料庫壞掉、埠號永遠被佔等不可恢復錯誤）**
+   兩層防護：
+   - launchd `ThrottleInterval=15`：兩次啟動嘗試之間至少間隔 15 秒，
+     避免瞬間狂重試洗爆 CPU 與 log。
+   - `bin/board-agent-wrapper.sh` 額外做「時間窗內失敗次數」判斷：
+     120 秒內累計失敗（`start-board.sh` 結束碼非 0）達 5 次，就自動寫入
+     停用旗標並停止嘗試，同時把偵測結果記進 log，不會無止盡地每 15 秒
+     重試一個注定失敗的狀況。失敗計數與旗標檔都在
+     `~/.ai-project-board/`（`board-launchd-failures.log`、
+     `board-disabled`），可用 `BOARD_LOOP_WINDOW_SEC` /
+     `BOARD_LOOP_MAX_FAILURES` 環境變數調整門檻。
+
+3. **使用者想手動停掉時，不能一 kill 就被拉起來**
+   ```bash
+   bin/stop-board.sh            # 停止目前行程 + 寫入停用旗標
+   bin/stop-board.sh --status   # 查看目前是否處於停用狀態、行程是否在跑
+   bin/stop-board.sh --enable   # 移除停用旗標，恢復自動重啟
+   ```
+   `board-agent-wrapper.sh` 每次被 launchd 呼叫時最先檢查停用旗標
+   （`~/.ai-project-board/board-disabled`），存在就直接 `exit 0`（對
+   launchd 而言視為正常執行完畢，不會被當成崩潰而更積極重試，也不會真的
+   再啟動一份 java）。這個旗標只影響「要不要啟動」，不會移除 launchd job
+   本身；如果要連 job 定義都不要了，用 `bin/uninstall-launchd.sh`。
+
+### 卸載
+
+```bash
+bin/uninstall-launchd.sh
+```
+
+只移除 launchd job 定義（`launchctl bootout` + 刪除 plist），不會動到
+當下正在跑的看板行程；如果也想同時停掉行程，另外執行
+`bin/stop-board.sh`。
+
+### 驗證方式（重要：不得使用正式 label／埠號／資料庫）
+
+正式看板常駐在 `:8080`，**驗證 launchd 設定務必用不同的 label 與埠號，
+並明確指定隔離的測試資料庫**，驗證完務必卸載乾淨：
+
+```bash
+BOARD_LAUNCHD_LABEL=dev.aiboard.board.test \
+BOARD_PORT=18099 \
+BOARD_DB_URL='jdbc:h2:file:/tmp/dev-infra-launchd-test;DB_CLOSE_ON_EXIT=FALSE' \
+  bin/install-launchd.sh
+
+# 驗證完畢後
+BOARD_LAUNCHD_LABEL=dev.aiboard.board.test bin/uninstall-launchd.sh
+```
+
+**必須明確指定 `BOARD_DB_URL`**：`start-board.sh` 預設邏輯是「若
+`<repo>/data/board.mv.db` 已存在就沿用該路徑」，這是為了讓既有使用者
+向下相容；但這代表如果驗證時只換了 label 與埠號、沒有另外指定
+`BOARD_DB_URL`，驗證用的 job 會與正式看板共用同一個 H2 資料庫檔案，
+即使埠號不同也會有鎖檔衝突風險。
+
+實測記錄（本機驗證，label `dev.aiboard.board.test`、埠號 `18099`，
+資料庫另外指到 `/tmp` 下的隔離路徑，全程與正式看板 `:8080`
+PID 隔離、未受影響）：
+
+1. 安裝後約 15～20 秒完成 Spring Boot 啟動，`/api/health` 回應正常
+2. `kill` 掉行程後，約 15 秒（`ThrottleInterval`）后被 launchd 自動重啟
+   為全新 PID 的行程（`/api/health` 的 `startedAt` 也隨之更新，確認不是
+   舊行程殘留）
+3. 執行 `bin/stop-board.sh` 寫入停用旗標並 kill 行程後，等待超過
+   `ThrottleInterval` 的時間，行程**未**被重新拉起（`launchctl print`
+   顯示 `state = not running`、`last exit code = 0`）
+4. 執行 `bin/stop-board.sh --enable` 後，`launchctl kickstart -k` 手動
+   觸發一次即恢復正常啟動
+5. 全程以 `curl http://127.0.0.1:8080/api/projects` 確認正式看板
+   PID／回應碼未變化
+6. 驗證完畢執行 `bin/uninstall-launchd.sh`，確認
+   `~/Library/LaunchAgents/` 底下無殘留、`launchctl print` 找不到該
+   job、測試埠號已釋放
+
+## 6. 驗證記錄
 
 以下為撰寫本文件時的實際驗證方式，供之後比對程式行為是否漂移：
 

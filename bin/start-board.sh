@@ -29,6 +29,11 @@
 #   BOARD_JAR      指定要啟動的 jar 路徑（預設自動尋找 target/*.jar，
 #                  找不到且 repo 根目錄有 pom.xml + mvnw 時會現場組裝一次）
 #   BOARD_START_TIMEOUT_SEC  等待啟動完成的逾時秒數（預設 60）
+#   BOARD_FOREGROUND  設為 1 時，就緒確認後改用 wait 阻塞在 java 行程上，
+#                  讓本腳本的存活期間等同 java 行程的存活期間，供
+#                  launchd／systemd 這類「監控直接子行程存活」的常駐管理
+#                  機制使用；預設不啟用，維持原本互動式終端機用法
+#                  （背景啟動＋輪詢＋腳本本身結束）。
 
 set -u
 
@@ -324,6 +329,27 @@ if command -v curl >/dev/null 2>&1; then
   else
     log "此行程沒有 /api/health（可能是較舊的 build），略過版本檢查。"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8. 前景模式：供常駐管理機制（launchd／systemd）監控行程存活用
+#
+#    一般互動式用法（BOARD_FOREGROUND 未設定）到此結束，java 留在背景、
+#    腳本本身 exit 0，符合終端機操作習慣。
+#
+#    BOARD_FOREGROUND=1 時改成阻塞等待 java 行程（`wait`），讓本腳本的
+#    存活期間等同 java 行程的存活期間：launchd 只監控它直接 fork 的
+#    行程（本腳本），若腳本在就緒後立刻 exit，launchd 會認為程式「已執行
+#    完畢」而依 KeepAlive 設定重新啟動一份全新的腳本／java，而不是「行程
+#    掛了才重啟」——兩者對使用者的意義完全不同，必須讓腳本阻塞著才能讓
+#    launchd 的存活判斷對應到 java 行程本身。
+# ---------------------------------------------------------------------------
+if [ "${BOARD_FOREGROUND:-0}" = "1" ]; then
+  log "前景模式：等待 java 行程（PID=${APP_PID}）結束……"
+  wait "$APP_PID"
+  EXIT_CODE=$?
+  log "java 行程（PID=${APP_PID}）已結束，結束碼 ${EXIT_CODE}。"
+  exit "$EXIT_CODE"
 fi
 
 exit 0

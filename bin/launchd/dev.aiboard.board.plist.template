@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- dev.aiboard.board.plist.template：由 install-launchd.sh 展開佔位字串
+     後寫入 ~/Library/LaunchAgents/<LABEL>.plist，說明見該腳本開頭註解。
+     不要手動編輯 ~/Library/LaunchAgents 底下產生出來的檔案，也不要在本
+     模板的佔位字串行內加註解文字或其他內容，install-launchd.sh 是逐行
+     比對整行是否等於特定佔位字串，同一行摻雜其他文字會被一併處理掉。 -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO_ROOT__/bin/board-agent-wrapper.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO_ROOT__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BOARD_PORT</key>
+        <string>__BOARD_PORT__</string>
+__BOARD_DB_URL_ENTRY__
+    </dict>
+
+    <!-- 開機／登入時啟動一次 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!--
+      只有「非正常結束」（結束碼非 0，或被訊號終止）才重啟；使用者用
+      stop-board.sh 走的是「kill + 寫停用旗標」，行程結束碼會是被訊號終止
+      （非 0 語意），但 wrapper 已經在被呼叫時先檢查停用旗標並直接
+      exit 0，所以 launchd 重新觸發 wrapper 時會安靜地什麼都不做，
+      不會真的再啟動一份 java。
+    -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- 兩次啟動嘗試之間至少間隔 15 秒，避免 crash-loop 瞬間洗爆 CPU/log -->
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>__STDOUT_LOG__</string>
+
+    <key>StandardErrorPath</key>
+    <string>__STDERR_LOG__</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
