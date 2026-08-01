@@ -31,81 +31,11 @@ async function fetchJson(url) {
   return res.json();
 }
 
-const RolesModal = {
-  props: ['projectName'],
-  emits: ['close'],
-  data() {
-    return {
-      roles: [],
-      loading: true,
-      error: null,
-    };
-  },
-  created() {
-    this.load();
-    this._keyHandler = (e) => {
-      if (e.key === 'Escape') this.$emit('close');
-    };
-    window.addEventListener('keydown', this._keyHandler);
-  },
-  beforeUnmount() {
-    window.removeEventListener('keydown', this._keyHandler);
-  },
-  methods: {
-    async load() {
-      this.loading = true;
-      this.error = null;
-      try {
-        const url = this.projectName
-          ? `/api/roles?projectName=${encodeURIComponent(this.projectName)}`
-          : '/api/roles';
-        this.roles = await fetchJson(url);
-      } catch (e) {
-        this.error = e.message;
-      } finally {
-        this.loading = false;
-      }
-    },
-  },
-  template: `
-    <div class="modal-backdrop" @click.self="$emit('close')">
-      <div class="modal-panel">
-        <div class="modal-header">
-          <h2 class="modal-title">角色與指引{{ projectName ? '　·　' + projectName : '' }}</h2>
-          <button class="modal-close" @click="$emit('close')" aria-label="關閉">&times;</button>
-        </div>
-        <div v-if="loading" class="empty-state">載入中…</div>
-        <div v-else-if="error" class="empty-state">{{ error }}</div>
-        <div v-else-if="roles.length === 0" class="empty-state">目前沒有任何角色。</div>
-        <div v-else class="role-list">
-          <details v-for="r in roles" :key="r.name" class="role-item">
-            <summary class="role-summary">
-              <span class="role-name">{{ r.name }}</span>
-              <span v-if="r.category" class="role-category">{{ r.category }}</span>
-              <span
-                class="role-scope"
-                :class="{ override: r.isOverride }"
-              >{{ r.isOverride ? '專案覆寫' : '通用' }}</span>
-            </summary>
-            <pre class="role-instructions">{{ r.instructions }}</pre>
-          </details>
-        </div>
-      </div>
-    </div>
-  `,
-};
-
 const LevelOne = {
   props: ['projects'],
   emits: ['select'],
-  data() {
-    return { showRoles: false };
-  },
   template: `
     <div>
-      <div class="level-one-toolbar">
-        <button class="roles-btn" @click="showRoles = true">角色與指引</button>
-      </div>
       <div v-if="projects.length === 0" class="empty-state">
         還沒有專案。在 Claude Code 或 Codex 裡說「幫我規劃一個⋯⋯」就會出現在這裡。
       </div>
@@ -135,10 +65,8 @@ const LevelOne = {
           </div>
         </button>
       </div>
-      <roles-modal v-if="showRoles" @close="showRoles = false"></roles-modal>
     </div>
   `,
-  components: { RolesModal },
   methods: {
     relTime(iso) { return relativeTime(iso); },
     segStyle(p, key) {
@@ -152,13 +80,11 @@ const LevelOne = {
 const LevelTwo = {
   props: ['projectId', 'projects'],
   emits: ['back', 'jump'],
-  components: { RolesModal },
   data() {
     return {
       board: null,
       error: null,
       highlightedTaskId: null,
-      showRoles: false,
     };
   },
   computed: {
@@ -217,7 +143,6 @@ const LevelTwo = {
         <button class="back-btn" @click="$emit('back')">&larr; 總覽</button>
         <h2 class="board-title" v-if="board">{{ board.name }}</h2>
         <span class="board-progress" v-if="board">{{ doneCount }}/{{ totalCount }}</span>
-        <button class="roles-btn" @click="showRoles = true">角色與指引</button>
         <button
           v-for="p in otherBlockedProjects"
           :key="p.id"
@@ -225,12 +150,6 @@ const LevelTwo = {
           @click="$emit('jump', p.id)"
         >⚠ {{ p.name }}</button>
       </div>
-      <roles-modal
-        v-if="showRoles"
-        :project-name="board ? board.name : null"
-        @close="showRoles = false"
-      ></roles-modal>
-
       <div v-if="error" class="empty-state">{{ error }}</div>
       <div v-else-if="board && totalCount === 0" class="empty-state">這個專案還沒有任務。</div>
       <div v-else-if="board" class="columns">
