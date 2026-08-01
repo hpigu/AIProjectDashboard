@@ -26,8 +26,12 @@ spring:
         version: 2.0.0
 
 server:
+  address: ${BOARD_HOST:127.0.0.1}
   port: ${BOARD_PORT:8080}
 
 logging:
+  # 實際輪替策略（每日/容量雙門檻、gzip 壓縮、保留天數、總容量上限）
+  # 由 logback-spring.xml 定義；此處的 file.name 供其讀取路徑基準，
+  # 亦作為未設定 logback-spring.xml 時 Spring Boot 預設行為的後備值。
   file:
     name: ${BOARD_LOG_FILE:./logs/board.log}

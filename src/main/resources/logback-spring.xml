@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <property name="LOG_FILE" value="${BOARD_LOG_FILE:-./logs/board.log}"/>
+    <!-- 單檔輪替門檻：日期或容量任一觸發即滾動（預設 10MB） -->
+    <property name="LOG_MAX_FILE_SIZE" value="${BOARD_LOG_MAX_FILE_SIZE:-10MB}"/>
+    <!-- 保留歷史檔案天數（預設 30 天） -->
+    <property name="LOG_MAX_HISTORY" value="${BOARD_LOG_MAX_HISTORY:-30}"/>
+    <!-- 所有輪替檔案加總容量上限（預設 250MB），超過時自動刪除最舊的檔案 -->
+    <property name="LOG_TOTAL_SIZE_CAP" value="${BOARD_LOG_TOTAL_SIZE_CAP:-250MB}"/>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE}</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- 每日輪替；同日超過 LOG_MAX_FILE_SIZE 時額外以 .1, .2... 分割 -->
+            <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>${LOG_MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${LOG_MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${LOG_TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 這些 logger 預設會以 INFO 印出含使用者名稱／檔案路徑的完整 JDBC URL
+         （例如 HikariPool "Added connection ... url=jdbc:h2:file:...user=SA"，
+         以及 Flyway "Database: jdbc:h2:file:..."）。調整為 WARN 以避免外洩，
+         同時仍保留連線／遷移失敗時的警告與錯誤訊息。 -->
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <logger name="org.flywaydb" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>
