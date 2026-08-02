@@ -232,6 +232,36 @@ const LevelTwo = {
         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
       }).format(date);
     },
+    formatDuration(from, to) {
+      if (!from) return '—';
+      const start = new Date(from).getTime();
+      const end = to ? new Date(to).getTime() : Date.now();
+      if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—';
+      const minutes = Math.floor((end - start) / 60000);
+      if (minutes < 1) return '不到 1 分鐘';
+      if (minutes < 60) return `${minutes} 分鐘`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours} 小時 ${minutes % 60} 分鐘`;
+      const days = Math.floor(hours / 24);
+      return `${days} 天 ${hours % 24} 小時`;
+    },
+    blockerReasonLabel(reason) {
+      return ({
+        DEPENDENCY: '等待任務',
+        USER_INPUT: '等待使用者',
+        TECHNICAL: '技術問題',
+        EXTERNAL: '外部因素',
+        OTHER: '其他原因',
+      })[reason] || reason || '未分類';
+    },
+    visibleVerifications(evidence) {
+      const items = evidence && Array.isArray(evidence.verifications)
+        ? evidence.verifications
+        : [];
+      return this.detail && this.detail.status === 'DONE'
+        ? items.filter(item => item.result !== 'FAILED')
+        : items;
+    },
     statusChange(entry) {
       if (!entry.fromStatus) return `建立為 ${entry.toStatus}`;
       return `${entry.fromStatus} → ${entry.toStatus}`;
@@ -330,9 +360,24 @@ const LevelTwo = {
           </section>
 
           <section v-if="detail.currentBlocker" class="detail-section detail-blocker">
-            <h3>目前阻塞</h3>
+            <div class="section-title-row">
+              <h3>目前阻塞</h3>
+              <span class="reason-badge">{{ blockerReasonLabel(detail.currentBlocker.reasonType) }}</span>
+            </div>
             <p class="detail-description">{{ detail.currentBlocker.detail }}</p>
-            <div class="detail-note">{{ detail.currentBlocker.reasonType }} · @{{ detail.currentBlocker.blockedBy }} · {{ formatDate(detail.currentBlocker.blockedAt) }}</div>
+            <dl class="blocker-meta">
+              <div><dt>BLOCKED BY</dt><dd>{{ detail.currentBlocker.blockedBy ? '@' + detail.currentBlocker.blockedBy : '—' }}</dd></div>
+              <div><dt>BLOCKED AT</dt><dd>{{ formatDate(detail.currentBlocker.blockedAt) }}</dd></div>
+              <div><dt>DURATION</dt><dd>{{ formatDuration(detail.currentBlocker.blockedAt, detail.currentBlocker.clearedAt) }}</dd></div>
+            </dl>
+            <div v-if="detail.currentBlocker.blockingTasks.length" class="blocker-dependencies">
+              <h4>BLOCKING TASKS</h4>
+              <div class="related-list">
+                <button v-for="item in detail.currentBlocker.blockingTasks" :key="item.id" type="button" @click="openDetail(item.id, $event)">
+                  <span>#{{ item.id }} · {{ item.title }}</span><small :class="'st-text-' + item.status">{{ item.status }}</small>
+                </button>
+              </div>
+            </div>
           </section>
 
           <section class="detail-section">
@@ -355,13 +400,32 @@ const LevelTwo = {
             <p v-else class="detail-empty">無</p>
           </section>
 
-          <section v-if="detail.completionEvidence" class="detail-section">
-            <h3>完成證據</h3>
+          <section v-if="detail.completionEvidence" class="detail-section detail-evidence">
+            <div class="section-title-row">
+              <h3>{{ detail.status === 'DONE' ? '完成證據' : '最近一次完成證據' }}</h3>
+              <span class="evidence-badge" :class="detail.status === 'DONE' ? 'is-current' : 'is-historical'">
+                {{ detail.status === 'DONE' ? 'CURRENT' : 'HISTORICAL' }}
+              </span>
+            </div>
             <p class="detail-description">{{ detail.completionEvidence.summary }}</p>
-            <div v-if="detail.completionEvidence.commitRef" class="detail-note">COMMIT {{ detail.completionEvidence.commitRef }}</div>
-            <ul v-if="detail.completionEvidence.verifications.length" class="verification-list">
-              <li v-for="item in detail.completionEvidence.verifications" :key="item.id">
-                <strong>{{ item.name }}</strong><span>{{ item.result }}</span><p v-if="item.detail">{{ item.detail }}</p>
+            <dl class="evidence-meta">
+              <div><dt>COMPLETED BY</dt><dd>{{ detail.completionEvidence.completedBy ? '@' + detail.completionEvidence.completedBy : '—' }}</dd></div>
+              <div><dt>COMPLETED AT</dt><dd>{{ formatDate(detail.completionEvidence.completedAt) }}</dd></div>
+            </dl>
+            <div v-if="detail.completionEvidence.changedFiles" class="evidence-field">
+              <h4>CHANGED FILES</h4>
+              <pre>{{ detail.completionEvidence.changedFiles }}</pre>
+            </div>
+            <div v-if="detail.completionEvidence.commitRef" class="evidence-field">
+              <h4>COMMIT / PR</h4>
+              <div class="code-value">{{ detail.completionEvidence.commitRef }}</div>
+            </div>
+            <ul v-if="visibleVerifications(detail.completionEvidence).length" class="verification-list">
+              <li v-for="item in visibleVerifications(detail.completionEvidence)" :key="item.id" :class="'verification-' + item.result">
+                <div class="verification-heading">
+                  <strong>{{ item.name }}</strong><span class="verification-badge">{{ item.result }}</span>
+                </div>
+                <pre v-if="item.detail">{{ item.detail }}</pre>
               </li>
             </ul>
           </section>
@@ -369,9 +433,13 @@ const LevelTwo = {
           <section class="detail-section">
             <h3>完整歷史 <span>{{ detail.history.length }}</span></h3>
             <ol v-if="detail.history.length" class="history-timeline">
-              <li v-for="entry in detail.history" :key="entry.id">
+              <li v-for="entry in detail.history" :key="entry.id" :class="'history-' + entry.toStatus">
                 <time>{{ formatDate(entry.createdAt) }}</time>
-                <strong>{{ statusChange(entry) }}</strong>
+                <div class="history-heading">
+                  <strong>{{ statusChange(entry) }}</strong>
+                  <span v-if="entry.toStatus === 'BLOCKED'" class="history-kind is-blocker">BLOCKER</span>
+                  <span v-else-if="entry.toStatus === 'DONE'" class="history-kind is-evidence">EVIDENCE</span>
+                </div>
                 <p v-if="entry.note">{{ entry.note }}</p>
               </li>
             </ol>
