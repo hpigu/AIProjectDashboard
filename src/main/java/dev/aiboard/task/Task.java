@@ -42,6 +42,18 @@ public class Task {
     @Column(name = "claimed_at")
     private LocalDateTime claimedAt;
 
+    /** claim token 的安全雜湊；只有 hash，原文從不落庫。TODO/DONE 必為 NULL。 */
+    @Column(name = "claim_token_hash", length = 128)
+    private String claimTokenHash;
+
+    /**
+     * 目前有效的 BLOCKED 事件（指向 task_block_event.id）；只有 BLOCKED 狀態會非
+     * NULL。離開 BLOCKED 時清空這個指標，但該筆事件本身在 task_block_event 永久
+     * 保留、只補上 clearedAt，供歷史追溯。
+     */
+    @Column(name = "current_block_event_id")
+    private Long currentBlockEventId;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -103,6 +115,23 @@ public class Task {
         return claimedAt;
     }
 
+    public String getClaimTokenHash() {
+        return claimTokenHash;
+    }
+
+    public void setClaimTokenHash(String claimTokenHash) {
+        this.claimTokenHash = claimTokenHash;
+    }
+
+    public Long getCurrentBlockEventId() {
+        return currentBlockEventId;
+    }
+
+    /** block_task 呼叫成功後，把目前 blocker 指向新建立的事件。 */
+    public void setCurrentBlockEventId(Long currentBlockEventId) {
+        this.currentBlockEventId = currentBlockEventId;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
@@ -111,11 +140,26 @@ public class Task {
         return updatedAt;
     }
 
+    public Long getVersion() {
+        return version;
+    }
+
     public void changeStatus(TaskStatus newStatus) {
         this.status = newStatus.name();
         if (newStatus == TaskStatus.TODO) {
             this.assignee = null;
             this.claimedAt = null;
+            this.claimTokenHash = null;
+        }
+        if (newStatus == TaskStatus.DONE) {
+            this.claimTokenHash = null;
+        }
+        // BLOCKED 保留 claimTokenHash：認領者仍擁有這筆任務，之後要 resume/complete
+        // 還是得用同一把 token；IN_PROGRESS 本身也保留（正常認領中）。
+        if (newStatus != TaskStatus.BLOCKED) {
+            // 離開 BLOCKED（包含重新變成 BLOCKED 前的中繼狀態）時清空目前 blocker 指標；
+            // task_block_event 那一列本身不動，由呼叫端另外呼叫 clear() 補上 clearedAt。
+            this.currentBlockEventId = null;
         }
         this.updatedAt = LocalDateTime.now();
     }
