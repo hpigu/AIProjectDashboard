@@ -74,7 +74,13 @@ public class TaskCompleteService {
         }
 
         TaskStatus current = TaskStatus.valueOf(task.getStatus());
-        if (!current.canTransitionTo(TaskStatus.DONE)) {
+        // #137：complete_task 是比通用 update_task_status 更嚴謹的替代路徑（帶
+        // claim token／expectedVersion／完成證據驗證），額外允許 BLOCKED 直接轉
+        // DONE——語意是「帶著已完成的證據回報，任務本身不再受阻」。這裡刻意不放寬
+        // TaskStatus.canTransitionTo 這個共用狀態機本身：那會連帶讓通用的
+        // update_task_status 也能在不附任何完成證據的情況下把 BLOCKED 任務直接
+        // 轉 DONE，範圍比這張票要求的大很多。只在這個方法內特別處理 BLOCKED。
+        if (current != TaskStatus.BLOCKED && !current.canTransitionTo(TaskStatus.DONE)) {
             throw new BoardException(
                     "不合法的狀態轉移：#%d 目前是 %s，無法轉移至 DONE".formatted(taskId, current));
         }
