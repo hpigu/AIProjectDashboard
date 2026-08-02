@@ -65,6 +65,27 @@ _backup_verify_file() {
 }
 
 # ---------------------------------------------------------------------------
+# 清理由前次中斷留下的啟動備份暫存檔。只處理 backup_dir 第一層、一般檔案，
+# 且檔名必須符合本腳本產生的 board-startup-*.mv.db.tmp；正式 .mv.db 備份、
+# 子目錄、符號連結與其他 .tmp 檔都不在清理範圍內。
+# ---------------------------------------------------------------------------
+_backup_cleanup_stale_tmp() {
+  local backup_dir="$1"
+  [ -d "$backup_dir" ] || return 0
+
+  local stale_tmp
+  while IFS= read -r -d '' stale_tmp; do
+    _backup_log "清理前次中斷留下的暫存備份：${stale_tmp}"
+    if ! rm -f -- "$stale_tmp"; then
+      _backup_err "無法清理暫存備份：$stale_tmp"
+      return 1
+    fi
+  done < <(find "$backup_dir" -maxdepth 1 -type f -name 'board-startup-*.mv.db.tmp' -print0 2>/dev/null)
+
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # 保留策略：
 #   - 保留 30 天內（含）的所有備份。
 #   - 30 天前的備份，只要刪除後剩餘總份數仍 >= 7，就可以刪；
@@ -152,6 +173,11 @@ backup_database() {
     return 1
   fi
 
+  if ! _backup_cleanup_stale_tmp "$backup_dir"; then
+    _backup_err "清理前次中斷留下的暫存備份失敗，中止啟動。"
+    return 1
+  fi
+
   # 檔名標示 startup 與時區：board-startup-<UTC 時間戳>-<時區縮寫>.mv.db
   # 時間戳用 UTC（Z）避免主機時區變動或 DST 造成檔名歧義；額外附上主機當地
   # 時區縮寫（例如 CST/JST）方便人工判讀，兩者並存、以 UTC 為排序與比較基準。
@@ -162,8 +188,6 @@ backup_database() {
   local final_name="board-startup-${ts_utc}-${tz_abbr}.mv.db"
   local tmp_path="${backup_dir}/${final_name}.tmp"
   local final_path="${backup_dir}/${final_name}"
-
-  rm -f -- "$tmp_path" 2>/dev/null || true
 
   if ! cp -p -- "$db_mv_file" "$tmp_path" 2>/dev/null; then
     _backup_err "複製資料庫到暫存備份檔失敗：${db_mv_file} -> ${tmp_path}"
