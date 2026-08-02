@@ -60,6 +60,10 @@ public class RoleSeeder implements ApplicationRunner {
             log.info("看板上尚無「{}」專案，略過專屬指引匯入", AGENT_DASHBOARD_PROJECT_NAME);
             return;
         }
+        if (!"ACTIVE".equals(project.get().status())) {
+            log.info("「{}」已封存，略過專屬指引匯入以維持唯讀狀態", AGENT_DASHBOARD_PROJECT_NAME);
+            return;
+        }
         int created = seedAll(AGENT_DASHBOARD_SEEDS, AGENT_DASHBOARD_PROJECT_NAME);
         log.info("AgentDashboard 專屬角色指引：新建 {} 筆，已存在保留 {} 筆",
                 created, AGENT_DASHBOARD_SEEDS.size() - created);
@@ -104,8 +108,9 @@ public class RoleSeeder implements ApplicationRunner {
             ## 收尾
 
             - 執行 repo 要求的相關測試。
-            - 完成後更新為 DONE；卡住則更新為 BLOCKED，note 寫明原因與需要誰處理。
+            - 完成後保持 IN_PROGRESS，提交並把完成摘要、驗證結果、commit 與 claim token（若有）只回報 leader；卡住才更新為 BLOCKED，note 寫明原因與需要誰處理。
             - 依 repo 慣例提交；無慣例時使用 `feat: <任務標題> (#taskId)`，只提交本任務檔案。
+            - 只在 leader 指定的 `task/<task-id>-backend-dev` branch/worktree 工作，不自行切換、合併或 push `dev`/`main`。
             - 只做認領到的這一件。完成後回報並結束，不要自行認領下一件——
               任務之間可能有相依，下一件由 leader 判斷時機後另派。
             """;
@@ -129,8 +134,9 @@ public class RoleSeeder implements ApplicationRunner {
             ## 收尾
 
             - 執行相關測試或前端驗證。
-            - 完成更新 DONE；卡住更新 BLOCKED 並寫清 note。
+            - 完成後保持 IN_PROGRESS，提交並把完成摘要、驗證結果、commit 與 claim token（若有）只回報 leader；卡住才更新 BLOCKED 並寫清 note。
             - 依 repo 慣例提交；無慣例時使用 `feat: <任務標題> (#taskId)`，只提交本任務檔案。
+            - 只在 leader 指定的 `task/<task-id>-frontend-dev` branch/worktree 工作，不自行切換、合併或 push `dev`/`main`。
             - 只做認領到的這一件。完成後回報並結束，不要自行認領下一件——
               任務之間可能有相依，下一件由 leader 判斷時機後另派。
             """;
@@ -154,8 +160,9 @@ public class RoleSeeder implements ApplicationRunner {
             ## 收尾
 
             - 執行適當的測試套件並保留可重現結果。
-            - 完成更新 DONE；卡住更新 BLOCKED。
+            - 完成後保持 IN_PROGRESS，提交並把完成摘要、驗證結果、commit 與 claim token（若有）只回報 leader；卡住才更新 BLOCKED。
             - 依 repo 慣例提交；無慣例時使用 `test: <任務標題> (#taskId)`，只提交本任務檔案。
+            - 只在 leader 指定的 `task/<task-id>-qa` branch/worktree 工作，不自行切換、合併或 push `dev`/`main`。
             - 只做認領到的這一件。完成後回報並結束，不要自行認領下一件——
               任務之間可能有相依，下一件由 leader 判斷時機後另派。
             """;
@@ -179,8 +186,9 @@ public class RoleSeeder implements ApplicationRunner {
             ## 收尾
 
             - 驗證設定、建置或部署流程，不對正式環境做未授權變更。
-            - 完成更新 DONE；卡住更新 BLOCKED 並寫清 note。
+            - 完成後保持 IN_PROGRESS，提交並把完成摘要、驗證結果、commit 與 claim token（若有）只回報 leader；卡住才更新 BLOCKED 並寫清 note。
             - 依 repo 慣例提交；無慣例時使用 `chore: <任務標題> (#taskId)`。
+            - 只在 leader 指定的 `task/<task-id>-infra` branch/worktree 工作，不自行切換、合併或 push `dev`/`main`。
             - 只做認領到的這一件。完成後回報並結束，不要自行認領下一件——
               任務之間可能有相依，下一件由 leader 判斷時機後另派。
             """;
@@ -202,8 +210,9 @@ public class RoleSeeder implements ApplicationRunner {
             ## 收尾
 
             - 檢查文件連結、命令與內容一致性。
-            - 完成更新 DONE；卡住更新 BLOCKED 並寫清 note。
+            - 完成後保持 IN_PROGRESS，提交並把完成摘要、驗證結果、commit 與 claim token（若有）只回報 leader；卡住才更新 BLOCKED 並寫清 note。
             - 依 repo 慣例提交；無慣例時使用 `docs: <任務標題> (#taskId)`。
+            - 只在 leader 指定的 `task/<task-id>-docs` branch/worktree 工作，不自行切換、合併或 push `dev`/`main`。
             - 只做認領到的這一件。完成後回報並結束，不要自行認領下一件——
               任務之間可能有相依，下一件由 leader 判斷時機後另派。
             """;

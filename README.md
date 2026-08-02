@@ -14,7 +14,7 @@ flowchart LR
         direction TB
         MCP["MCP server（/mcp）<br/>Streamable HTTP :8080"]
         REST["唯讀 REST API + SSE"]
-        UI["Vue 3 CDN 看板"]
+        UI["Vue 3 離線看板"]
         MCP -.唯讀查詢.-> REST -.推送.-> UI
     end
 
@@ -34,7 +34,7 @@ Chat 規劃專案
 │   AI Project Board      │   單一 Spring Boot 行程
 │   Streamable HTTP :8080 │   ├─ MCP server（/mcp）
 └─────────────────────────┘   ├─ 唯讀 REST API + SSE
-    ▲            ▲            └─ Vue 3 CDN 看板
+    ▲            ▲            └─ Vue 3 離線看板
     │ 認領        │ 認領
 「個人記帳 App」  「SMTP 監控工具」
 ┌──────────┐  ┌──────────┐
@@ -44,7 +44,11 @@ Chat 規劃專案
 
 </details>
 
-在 chat 裡規劃專案、拆成任務卡片；到任一個專案的 repo 裡跟 Claude Code 或 Codex 說「認領 {專案名} 的任務」，主 session 會盤點待辦、依相依關係分波派工給對應職能的角色 agent（backend / frontend / qa / infra / docs，設定方式見下方「角色 agent」）；瀏覽器開著看板即時反映狀態變化，不用重整頁面。
+在 chat 裡規劃專案、拆成任務卡片；到任一個專案的 repo 裡跟 Claude Code 或 Codex
+說「認領 {專案名} 的任務」，主 session 會以事件驅動方式把前置已完成的工作派給
+空閒角色 agent（backend / frontend / qa / infra / docs）。每個角色同時只做一件，
+成果先進 `dev`，整批完成後才由 reviewer 審查並合併 `main`。瀏覽器開著看板即可
+即時看到狀態，不用重整。
 
 ## 需求
 
@@ -71,7 +75,7 @@ JDK／埠號／鎖檔檢查，也不會套用腳本的絕對資料庫路徑策�
 BOARD_PORT=8081 \
 BOARD_DB_URL='jdbc:h2:file:./data/dev-local' \
   ./mvnw clean package
-java -jar target/ai-project-board-backend-2.0.0.jar
+java -jar target/ai-project-board-backend-3.0.0.jar
 ```
 
 常駐執行在 `:8080`，瀏覽器開 `http://localhost:8080` 看看板。資料庫是 H2 檔案，
@@ -81,12 +85,20 @@ java -jar target/ai-project-board-backend-2.0.0.jar
 ```bash
 BOARD_PORT=18080 \
 BOARD_DB_URL='jdbc:h2:file:./data/dev;DB_CLOSE_ON_EXIT=FALSE' \
-java -jar target/ai-project-board-backend-2.0.0.jar
+java -jar target/ai-project-board-backend-3.0.0.jar
 ```
 
 `bin/start-board.sh` 支援同一組環境變數（`BOARD_PORT`、`BOARD_DB_URL`、
 `BOARD_HOME_DIR`、`BOARD_JAR` 等），資料目錄預設策略與 Claude Code plugin
 安裝方式見 [docs/installation.md](docs/installation.md)。
+
+監聽位址預設 `BOARD_HOST=127.0.0.1`（見 `application.yml`），只綁定本機
+loopback，同機的瀏覽器與 MCP client 都可用 `127.0.0.1`／`localhost` 存取；
+可用 `BOARD_HOST` 環境變數覆寫綁定其他位址。**目前沒有 server-side 身分驗證**，
+`/mcp` 一旦綁定到非 loopback 位址（例如 `0.0.0.0`）並對外可達，任何連得到的
+人都能呼叫全部 MCP 工具；因此除非額外自行加上反向代理與認證層，否則不要把
+`BOARD_HOST` 改成公開位址。本 repo 目前**未提供**雲端／伺服器部署方式（例如
+Oracle Cloud）——設計前提是單機本地執行，尚未規劃或驗證對外部署情境。
 
 第一次啟動後，看板是空的（`http://localhost:8080` 顯示無專案）——這是正常的，
 因為新增專案與任務只能透過 MCP 工具寫入，REST 端點是唯讀的，不會有種子資料。
@@ -126,8 +138,8 @@ claude plugin install ai-project-board@ai-board
 ```
 
 第一行註冊 marketplace（`.claude-plugin/marketplace.json`），第二行才真的安裝。
-裝完在當前 session 生效需要 `/reload-plugins`，或重開 Claude Code。之後改了
-`plugin/` 底下的內容，重跑一次 `install` 就會吃到新版。
+裝完在當前 session 生效需要 `/reload-plugins`，或重開 Claude Code。之後更新
+本機來源可執行 `claude plugin update ai-project-board@ai-board`，並重啟 Claude Code。
 
 安裝後 plugin 的 `board` connector 需要按一次 Install 才會註冊到你的環境
 （plugin 只是宣告需要這個 MCP server，宣告不等於啟用）。它連的是本機的
@@ -175,10 +187,18 @@ url = "http://127.0.0.1:8080/mcp"
 | `create_tasks(projectId, tasks[])` | 一次寫入 1–50 筆任務；標題最多 300 字；可用 `dependsOnIndexes`／`dependsOnTaskIds` 指定前置任務 |
 | `list_tasks(projectId?/projectName?, status?, category?, includeDescription?)` | 查詢任務清單與進度；`projectId` 與 `projectName` 擇一，`includeDescription` 一併輸出描述與驗收條件 |
 | `claim_next_task(projectName, category, assignee)` | 原子認領指定專案、指定類別中最早且前置皆已完成的一筆待辦任務 |
-| `update_task_status(taskId, status, note?)` | 完成／阻塞／歸還任務 |
+| `block_task(taskId, claimToken?, reasonType, detail, blockingTaskIds?, expectedVersion?)` | 以結構化原因標記自己認領的任務 BLOCKED |
+| `complete_task(taskId, claimToken?, summary, verificationResults, changedFiles?, commitRef?, expectedVersion?)` | 以摘要與驗證證據完成自己認領的任務；可從 `IN_PROGRESS` 或 `BLOCKED` 直接轉 `DONE` |
+| `update_task_status(taskId, status, note?, claimToken?)` | 相容的任務狀態入口；resume／release 分別改為 `IN_PROGRESS`／`TODO`，沒有獨立同名工具；`BLOCKED` 不能直接轉 `DONE`（需改用 `complete_task`） |
+| `reset_task_claim(taskId, note?)` | leader 專用：worker 遺失 claim token 時，確認情況後重置認領 |
+| `preview_archive_project(projectName)` | leader 專用：唯讀預覽封存影響與 IN_PROGRESS assignee |
+| `archive_project(projectName, reason, inProgressConfirmed?)` | leader 專用：在當前明確授權、preview 後封存專案 |
+| `restore_project(projectName, reason)` | leader 專用：在當前明確授權後恢復封存專案 |
+| `update_task_details(taskId, title?, description?, category?, expectedVersion)` | leader 專用：以 patch 語意修改 TODO／BLOCKED 任務規格 |
+| `set_task_dependencies(taskId, prerequisiteTaskIds, expectedVersion)` | leader 專用：以完整集合取代 TODO 任務的前置相依 |
 | `list_roles(projectName?)` | 列出可用角色（名稱、分類、是通用指引還是專案覆寫）；帶 `projectName` 時同名角色以該專案的覆寫版取代通用版 |
 | `get_role(name, projectName?)` | 取得角色的完整工作指引；帶 `projectName` 時優先回傳該專案的覆寫版，沒有才回通用版，都沒有則列出現有角色供選 |
-| `upsert_role(name, category?, instructions, projectName?)` | 建立或更新角色指引；不帶 `projectName` 操作通用版，帶則操作該專案的覆寫版，同名同範圍再次呼叫是更新 |
+| `upsert_role(name, category?, instructions, projectName?)` | leader 專用：在當前明確授權後建立或更新角色指引 |
 
 `category`：`BACKEND` / `FRONTEND` / `TEST` / `INFRA` / `DOC` / `OTHER`。
 未填、空白或不在清單內的值會正規化為 `OTHER`，因此不會產生無法認領的任務。
@@ -205,7 +225,63 @@ url = "http://127.0.0.1:8080/mcp"
 
 這層過濾只影響候選挑選，原子認領的 compare-and-swap 語意不變。
 
-REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}/tasks/{taskId}/history`、`/api/roles`、`/api/events` SSE、`/api/health`）全部唯讀；主要供前端查詢，其中 `/api/health` 也供啟動腳本確認服務版本、資料庫路徑與實際載入的工具。所有寫入一律經由 MCP。`/api/health` 回傳 `version`／`databasePath`／`tools`（實際載入的清單，非寫死）／`startedAt`。
+REST 端點全部唯讀，所有寫入一律經由 MCP：
+
+| 端點 | 用途 |
+|---|---|
+| `/api/projects` | 專案清單（前端首頁用） |
+| `/api/projects/{id}/board` | 單一專案的看板資料（任務、狀態分組） |
+| `/api/projects/{id}/tasks/{taskId}/history` | 單一任務的狀態變更歷史，含結構化 BLOCKED 原因與 `complete_task` 完成證據 |
+| `/api/roles` | 角色指引（供看板首頁「角色與指引」按鈕） |
+| `/api/events` | SSE，任務／專案異動的即時推播 |
+| `/api/health` | 供 `bin/start-board.sh` 等一般啟動檢查用的最小版本資訊：`version`／`tools`（實際載入清單，非寫死）／`startedAt`；**不含**資料庫路徑或其他敏感資訊 |
+| `/api/health/live` | 存活探測：只回答行程是否還在回應 HTTP，不觸碰資料庫 |
+| `/api/health/ready` | 就緒探測：檢查資料庫連線、Flyway migration 是否有 pending、MCP tool 是否已註冊；任一項失敗回 `503` 並列出各項檢查結果，但**不含**原始例外訊息（密碼、JDBC URL、主機路徑等只進伺服器日誌，不進回應內容） |
+| `/api/diagnostics` | 維運／debug 用的深度資訊（資料庫類型、migration 版本、SSE 連線數、專案/任務統計、最新備份狀態、磁碟用量等），可能包含路徑等細節，只該給信任使用者查看，呼叫方需自行控管可見範圍 |
+
+### 完成證據與結構化 BLOCKED
+
+任務有 `require_evidence` 旗標：由 `create_tasks` 建立的新任務一律為
+`true`，這類任務**不能**用 `update_task_status` 直接轉 `DONE`，必須改用
+`complete_task` 附上 `summary` 與至少一筆 `verificationResults`（`PASSED`／
+`FAILED`／`NOT_RUN`，`FAILED` 會直接拒絕完成）。部署前既有、`require_evidence`
+為 `false` 的既有任務不受影響，仍可用 `update_task_status` 直接完成——這是
+刻意保留的相容行為，不是遺漏。
+
+`complete_task` 可以從 `IN_PROGRESS` 或 `BLOCKED` 直接完成（`BLOCKED` 任務完成
+時會在同一個 transaction 內清空 blocker 並回填清除時間）；`update_task_status`
+仍不能把 `BLOCKED` 直接轉 `DONE`，只能先轉回 `IN_PROGRESS` 再完成，或改用
+`complete_task`。
+
+`block_task` 要求結構化原因：`reasonType` 限定 `DEPENDENCY`／`USER_INPUT`／
+`TECHNICAL`／`ENVIRONMENT`／`EXTERNAL`／`OTHER` 擇一，`detail` 必填說明具體卡在
+哪裡；`reasonType=DEPENDENCY` 時 `blockingTaskIds` 必須至少帶一個同專案任務 id。
+
+`claim_next_task` 認領成功時會回傳 claim token；`block_task`／`complete_task`／
+`update_task_status` 對「有 token 的任務」會要求帶入同一個 token 才能操作，
+沒有 token 的舊資料任務沿用舊行為（不強制）。token 只在 worker 的工作上下文
+保留並內部回報 leader，不寫入檔案、commit 或 task log，使用者不需手動複製。
+
+### 工具治理與使用者授權
+
+MCP server 目前沒有 caller identity，因此 worker 的工具白名單是第一階段 client
+邊界，不是伺服器端授權；請保持服務只在 localhost（`BOARD_HOST` 預設
+`127.0.0.1`，見上方「快速開始」），未完成 server-side 認證前不要對外暴露
+`/mcp`——若確實需要讓其他機器連線，必須自行在前面加上驗證（例如反向代理配
+Basic Auth 或 mTLS），本 repo 目前不提供這層認證，也未提供或驗證任何雲端伺服
+器部署方式（例如 Oracle Cloud）。使用工具前以 MCP `tools/list` 或 `/api/health`
+的 `tools` 為準。
+
+五個 worker 只取得 `get_role` 與 `claim_next_task`、`block_task`、`complete_task`、
+`update_task_status`。不得提供 `create_tasks`、`reset_task_claim`、封存／恢復、任務
+規格／相依編輯或 `upsert_role`。worker 若發現規格、分類或相依應改，只回報 leader；
+由 leader 決定後續處理，不能自行變更。
+
+`preview_archive_project`、`archive_project`、`restore_project` 與 `upsert_role` 都只
+能由 leader 在使用者於**目前對話**明確要求該操作後使用。「完成」、「收尾」、沉默
+或先前對話不是授權。封存先呼叫 preview；若仍有 `IN_PROGRESS` 任務，實際封存前必須
+再次取得使用者明確確認。claim token 由 worker 在工作上下文保管並內部回報 leader，
+使用者不需要也不應手動複製、貼上或轉交它。
 
 ## 角色 agent
 
@@ -225,16 +301,18 @@ session 處理。
                     │
                     ▼
 開工 session：主 session 擔任 leader
-   1. list_tasks(projectName, status="TODO", includeDescription=true)
-   2. 讀描述與規格，依相依關係決定派工波次
-   3. 每個角色每次只派一件，agent 做完回報即結束
-   4. 驗收後再派下一件，全部完成後彙整
+   1. list_tasks(projectName, includeDescription=true) 並記錄 batch manifest
+   2. 為每筆 task 從 dev 建立 task/<id>-<role> branch/worktree
+   3. 每個空閒角色派一件；任一 agent 結束就重新盤點，不等待同步 wave
+   4. agent 驗證、commit、回報後維持 IN_PROGRESS
+   5. leader 表面驗收並 merge task branch → dev，成功後才標 DONE
+   6. 整批完成後 reviewer 審 main...dev，通過才由 leader merge dev → main
 ```
 
 混在同一個 session 會被進度訊息洗版，也失去「規劃定稿」這個分界點。
 
-leader 的驗收範圍有限：只驗「該動的有動、測試有跑、`BLOCKED` 有交代」，
-程式碼品質交給 `qa` 角色與既有測試。
+leader 的表面驗收只確認範圍、commit、驗證證據與 `BLOCKED` 說明，不取代 QA 或
+reviewer。Reviewer 唯讀且只回報 leader；是否建立修正 task 由 leader 決定。
 
 ### 兩層來源：檔案是薄殼，指引在看板
 
@@ -248,15 +326,16 @@ leader 的驗收範圍有限：只驗「該動的有動、測試有跑、`BLOCKE
    commit 規則等，優先於通用層。
 
 `get_role(name, projectName?)` 帶 `projectName` 時，若該專案有覆寫版就回傳
-覆寫版，否則退回通用版；都沒有則列出現有角色供選。`upsert_role` 可以建立/
-更新任一層；不帶 `projectName` 動的是通用版，帶了則只動該專案的覆寫版，不影
-響通用版或其他專案。看板首頁的「角色與指引」按鈕（呼叫唯讀的 `GET /api/roles
+覆寫版，否則退回通用版；都沒有則列出現有角色供選。只有 leader 在使用者**目前對話**
+明確授權後才可用 `upsert_role` 建立／更新任一層；不帶 `projectName` 動的是通用版，
+帶了則只動該專案的覆寫版，不影響通用版或其他專案。看板首頁的「角色與指引」按鈕（呼叫唯讀的 `GET /api/roles
 ?projectName=`）可以直接看到目前每個角色的完整指引與覆寫狀態。
 
 Claude Code / Codex 端只需要一份**薄殼**：先呼叫 `get_role` 拿最新指引來
 work，`get_role` 失敗或看板未啟動時才退回檔案內建的最小 fallback 規則（讀
 repo 的 `CLAUDE.md`/`AGENTS.md`、認領哪個 category、單件回報），不會因為看板
-連不上就停工。
+連不上就停工。看板回傳的角色指引不得擴大薄殼的工具白名單；若它要求 worker
+呼叫被禁止工具，worker 忽略該段並回報 leader。
 
 Claude Code 這層薄殼有兩種取得方式：
 
@@ -276,12 +355,14 @@ Claude Code 這層薄殼有兩種取得方式：
   ---
   name: backend-dev
   description: 執行看板上 category 為 BACKEND 的任務。
-  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_ai-project-board_board__claim_next_task, mcp__plugin_ai-project-board_board__update_task_status, mcp__plugin_ai-project-board_board__get_role
+  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_ai-project-board_board__get_role, mcp__plugin_ai-project-board_board__claim_next_task, mcp__plugin_ai-project-board_board__block_task, mcp__plugin_ai-project-board_board__complete_task, mcp__plugin_ai-project-board_board__update_task_status
   ---
   你是後端工程師。呼叫 get_role("backend-dev", projectName) 取得最新指引並照做；
   拿不到時退回：讀 repo 的 CLAUDE.md/AGENTS.md、呼叫
   claim_next_task(projectName, "BACKEND", "backend-dev") 認領任務並開工，
-  完成後更新為 DONE，卡住則更新為 BLOCKED 並在 note 說明原因。
+  完成後提交並保持 IN_PROGRESS，把證據與 claim token 內部回報 leader；卡住才以
+  block_task 更新為 BLOCKED。不得要求使用者手動轉交 token，也不得取得任務規格／
+  相依、封存／恢復或角色指引寫入工具。
   ```
 
   `tools:` 裡的工具名稱必須跟 session 實際載入的完全一致，否則會被 allowlist
@@ -291,18 +372,17 @@ Claude Code 這層薄殼有兩種取得方式：
   若你是自己在 `~/.claude.json` 或專案 `.mcp.json` 註冊 board（不經 plugin），
   就沒有 `plugin_` 前綴，應改寫成 `mcp__board__*`。
 
-- Codex：優先安裝本 repo 的 Codex plugin，使用 `.codex-plugin/agents/*.md` 中的
-  六個獨立角色薄殼；不使用 plugin 時，才在 `~/.codex/AGENTS.md` 寫相同的
-  fallback 規則。
+- Codex：安裝本 repo 的 Codex plugin，使用 `.codex-plugin/agents/*.md` 中的
+  六個獨立角色薄殼。不使用 plugin 時仍可手動接 MCP，但不建議在
+  `~/.codex/AGENTS.md` 再維護一份完整角色規則，以免與看板及 plugin 漂移。
 
 `reviewer` 不認領 category 任務，因此 `RoleSeeder` 只初始化上述五個 worker
-角色，不會另外建立 reviewer 的資料庫指引。兩套 plugin 的 reviewer 薄殼本身
-包含完整唯讀審查 fallback；若使用者另外用 `upsert_role` 建立 reviewer 指引，
-它才會優先採用看板版本。
+角色。兩套 plugin 的 reviewer 薄殼本身包含不可覆蓋的唯讀審查邊界；看板中若有
+使用者明確授權 leader 用 `upsert_role` 建立的 reviewer 指引，它只能補充唯讀審查準則。
 
 每個角色只認領自己類別的任務、只碰自己職責內的檔案；同一類別同時只有一個角色
-在跑，且**做完一件就回報結束、不自行認領下一件**——下一件由 leader 判斷時機
-後另派，否則 agent 會把該類別的任務全部吃光，分波控制就失效了。
+在跑，且**做完一件就提交、回報、結束，不自行 DONE 或認領下一件**。Leader 將
+task branch 合併到 `dev` 後才完成看板任務；這樣相依任務不會早於實際程式碼解鎖。
 
 這一套是本專案作者自己機器上的慣例，不是看板功能運作的必要條件：
 `claim_next_task`、`get_role` 都是一般 MCP 工具，任何連上 `/mcp` 的 client
@@ -310,7 +390,7 @@ Claude Code 這層薄殼有兩種取得方式：
 
 沒有建立這些角色檔案時，你會失去的是分工，不是功能：assignee 名稱要自己在
 對話中指定（不會自動代入 `backend-dev` 這類名字），而且只有一個主 session 在
-跑，無法把同一波裡沒有相依的任務分給不同角色同時開工。角色指引本身（`get_role`
+跑，無法把沒有相依的任務分給不同角色同時開工。角色指引本身（`get_role`
 能查到什麼）不受影響，因為它存在看板資料庫，與這層檔案殼無關。
 
 ### AGENTS.md 進版控
@@ -329,21 +409,24 @@ clone 這個 repo 就會拿到 `AGENTS.md`，不需要另外重建。
 
 ```
 src/main/java/dev/aiboard/
-├── mcp/        # MCP 工具定義（ProjectBoardTools、RoleTools）
+├── mcp/        # MCP 工具定義（ProjectBoardTools、TaskBlockTools、TaskCompleteTools 等）
 ├── project/    # 專案 Entity / Repository / Service
 ├── task/       # 任務 Entity / Repository / Service
 ├── role/       # 角色 Entity / Repository / Service（含 RoleSeeder）
-├── health/     # /api/health 用的 HealthService
-├── web/        # 唯讀 REST Controller
+├── health/     # HealthService／LivenessService／ReadinessService／DiagnosticsService
+├── web/        # 唯讀 REST Controller（含 HealthController、TaskDetailController）
 ├── event/      # SSE 事件發布
-├── config/     # MCP tool 註冊設定
+├── config/     # MCP tool 註冊設定、ShutdownBackupService（關閉前備份）
 └── common/     # 共用例外與列舉（TaskCategory 等）
 src/main/resources/
 ├── application.yml
 ├── db/migration/   # Flyway migration
-└── static/         # Vue 3 CDN 前端（index.html / app.js / tokens.css）
+└── static/         # 零建置 Vue 3 前端（index.html / app.js / tokens.css），
+                     # Vue 執行檔與字型皆 vendor 進 static/vendor/，完全離線可用，
+                     # 不需連外部 CDN，見 static/vendor/SOURCES.md
 bin/
-└── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、自動組裝）
+├── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、啟動前備份、自動組裝）
+└── backup-db.sh    # 啟動前冷備份與保留策略，由 start-board.sh 呼叫
 plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
 .codex-plugin/      # Codex plugin 骨架（同上，格式依 Codex 慣例）
 .claude-plugin/
@@ -351,17 +434,74 @@ plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks s
 .agents/plugins/
 └── marketplace.json    # Codex 的安裝入口，指向 .codex-plugin/
 docs/
-└── installation.md # 完整安裝指南
+├── installation.md            # 完整安裝指南
+├── dev-isolation.md           # 開發環境隔離基線（埠號／資料庫／日誌／worktree 對照）
+└── scope-leader-dispatch.md   # Leader 派工架構、Git 邊界與角色責任分工
 ```
 
 ## 技術棧
 
-Spring Boot 3.5.16、Spring AI 1.1.8（MCP server，Streamable HTTP）、Java 21、H2、Flyway、Vue 3（CDN，無建置）。
+Spring Boot 3.5.16、Spring AI 1.1.8（MCP server，Streamable HTTP）、Java 21、H2、
+Flyway、Vue 3（零建置，執行檔與字型皆 vendor 進 repo，前端完全離線可用）。
+
+## 安全啟動、備份與診斷
+
+- **啟動前備份**：`bin/start-board.sh` 在偵測到既有資料庫檔案、且確認未被其他
+  行程鎖住之後，會先呼叫 `bin/backup-db.sh` 做一次檔案複製備份（複製到
+  `.tmp`、驗證 H2 MVStore 檔頭與檔案大小、原子改名為正式檔），再進行
+  Flyway migration；備份失敗會直接中止啟動，不會在無可還原快照的情況下繼續。
+- **正常停止前備份**：`ShutdownBackupService` 監聽 Spring `ContextClosedEvent`
+  （涵蓋 SIGTERM、終端機 Ctrl+C、正常 JVM shutdown），用 H2 的
+  `BACKUP TO` SQL 陳述式產生連線仍開啟狀態下的一致性快照（`.zip`），
+  同樣走 `.tmp` → 驗證 → 原子改名的流程；備份失敗只記錄 ERROR 等級日誌，
+  **不會阻塞或中止關閉流程**。前次中斷（例如 `kill -9`）殘留的
+  `board-shutdown-*.zip.tmp` 暫存檔會在下次關閉時依嚴格命名規則清理，
+  不會誤刪正式備份。
+- **`kill -9` 的限制**：SIGKILL 不給行程任何機會執行 shutdown hook，
+  `ShutdownBackupService` 對此完全無能為力；同樣地，行程崩潰（JVM crash）
+  或斷電也無法觸發正常關閉備份，只能仰賴啟動前備份與定期備份。
+- **保留策略**：啟動前與關閉前兩種備份共用同一套規則（`BOARD_BACKUP_DIR`，
+  預設 `~/.ai-project-board/backups`，可用 `BOARD_BACKUP_RETENTION_DAYS`
+  / `BOARD_BACKUP_RETENTION_MIN_COUNT` 覆寫）：保留 30 天內的所有備份；
+  超過 30 天的備份只在刪除後總份數仍 ≥ 7 份時才刪除，一旦剩 7 份就停手，
+  即使還有更舊的備份。兩種備份的檔名前綴不同（`board-startup-*.mv.db` /
+  `board-shutdown-*.zip`），保留策略互不影響彼此的檔案。
+- **日誌輪替**：`logback-spring.xml` 設定每日或達到單檔 10MB
+  （`BOARD_LOG_MAX_FILE_SIZE`）任一觸發即輪替並 gzip 壓縮，保留 30 天
+  （`BOARD_LOG_MAX_HISTORY`），所有輪替檔案加總容量上限 250MB
+  （`BOARD_LOG_TOTAL_SIZE_CAP`），超過上限自動刪除最舊的檔案；Hikari 與
+  Flyway 的連線／遷移日誌調整為 `WARN`，避免預設 `INFO` 等級外洩含使用者
+  名稱與檔案路徑的完整 JDBC URL。
+- **診斷端點**：`/api/health` 只回傳最小版本資訊（見上方「MCP 工具」的
+  REST 端點表）；需要資料庫路徑、備份狀態、磁碟用量等維運細節時改用
+  `/api/diagnostics`，該端點內容較敏感，呼叫方需自行控管可見範圍。
+
+## 前端功能
+
+`static/` 下的 Vue 3 看板分兩層：
+
+- **專案列表**（層一）：可依名稱前綴搜尋、依狀態（`ACTIVE`／封存）與是否含
+  `BLOCKED` 任務篩選、依最近更新／名稱／完成比例排序；篩選條件會同步進
+  URL query string，重新整理或分享連結可還原篩選狀態。
+- **專案看板**（層二）：預設為 Kanban 視圖（依 `category` 分欄），可切換為
+  **相依圖視圖**（`?view=dependencies`），以節點與邊呈現任務間的前置關係；
+  任務量大時預設只展開部分節點（`graphExpanded`），避免一次渲染過多節點。
+  兩種視圖都支援依關鍵字、`category`、`assignee`、是否等待前置、是否可認領
+  篩選任務。
+- **任務詳情側欄**：點選任務卡片開啟，顯示完整歷史時間軸
+  （`/api/projects/{id}/tasks/{taskId}/history`），區分一般狀態變更、
+  結構化 `BLOCKED` 原因（`BLOCKER` 標籤）與 `complete_task` 完成證據
+  （`EVIDENCE` 標籤，含 summary／verification 結果）；側欄狀態會反映在瀏覽器
+  history（上一頁／分享連結可直接開到該任務）。
+- SSE（`/api/events`）驅動即時更新，連線狀態顯示在頁首（連線中／重新連線中）。
 
 ## 已知限制
 
-- 單機使用，看板與資料庫都在本機，無跨裝置同步
-- `/mcp` 端點無認證，設計前提是只在本機或私有網路使用
+- 單機使用，看板與資料庫都在本機，無跨裝置同步；**未提供或驗證任何雲端伺服器
+  部署方式**（例如 Oracle Cloud），只支援本地啟動
+- `/mcp` 端點目前沒有 server-side 身分驗證，設計前提是只在本機或私有網路
+  使用；若要對外暴露（公開位址、非 loopback 的 `BOARD_HOST`），必須自行在
+  前面加上認證層（例如反向代理 + Basic Auth／mTLS），本 repo 不提供這層
 - SSE 連線集合是行程內單例，不支援多副本水平擴展
 - **角色指引不跟著 plugin 走**：角色的完整工作指引存在看板的 H2 資料庫
   （`role` 表），plugin 只是程式碼與薄殼檔案的散布單位。新裝的看板會由
@@ -371,3 +511,6 @@ Spring Boot 3.5.16、Spring AI 1.1.8（MCP server，Streamable HTTP）、Java 21
 - `GET /api/health` 回傳的 `version` 讀的是 `pom.xml` 版本號，不含 git
   commit hash；同一版本號底下可能已經有多次 commit，無法只靠這個欄位
   區分新舊 build
+- 沒有獨立的關閉／備份 CLI 子命令；備份行為固定綁在啟動流程
+  （`bin/backup-db.sh`）與行程關閉事件（`ShutdownBackupService`），
+  不支援手動觸發一次性備份以外的排程或常駐備份機制

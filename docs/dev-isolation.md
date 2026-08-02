@@ -64,8 +64,10 @@ source ./.dev-env.sh
 
 1. qa worktree 執行 `./mvnw test` → 122 tests 全過，`BUILD SUCCESS`
 2. 該次建置產物落在 qa worktree 自己的 `target/`，主工作區 `target/` 無寫入
-3. 以 `.dev-env.sh` 啟動第二份看板於 `:18104`，`/api/health` 顯示
-   `databasePath` 為 `dev-infra`，與正式的 `data/board` 完全分離
+3. 以 `.dev-env.sh` 啟動第二份看板於 `:18104`，當時的 `/api/health` 顯示
+   `databasePath` 為 `dev-infra`，與正式的 `data/board` 完全分離（**注意**：
+   `/api/health` 後續已收斂為不含資料庫路徑的最小版本，這項細節現在要改看
+   `/api/diagnostics`，見 README「MCP 工具」的 REST 端點表）
 4. 全程正式看板 PID、`startedAt`、資料庫 inode、jar 皆未變動
 
 註：單元／整合測試在原始碼中以 `jdbc:h2:mem:` 硬編碼，本來就不會碰到

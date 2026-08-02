@@ -75,6 +75,19 @@ public class ProjectService {
                 .orElseThrow(() -> new BoardException("找不到專案：#" + projectId));
     }
 
+    /**
+     * 在會寫入某專案資料的 transaction 內取得專案鎖，並拒絕封存專案。
+     * 封存流程也持有同一把鎖，讓「檢查仍為 ACTIVE」與實際寫入不會穿插。
+     */
+    public void assertActiveForUpdate(Long projectId) {
+        Project project = projectRepository.findByIdForUpdate(projectId)
+                .orElseThrow(() -> new BoardException("找不到專案：#" + projectId));
+        if (!"ACTIVE".equals(project.getStatus())) {
+            throw new BoardException("專案「%s」已封存，現在只能讀取；請先由 leader 恢復專案"
+                    .formatted(project.getName()));
+        }
+    }
+
     private ProjectDto toDto(Project project) {
         return new ProjectDto(project.getId(), project.getName(), project.getDescription(), project.getStatus());
     }

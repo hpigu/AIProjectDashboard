@@ -28,4 +28,20 @@ public record BoardEvent(String type, Map<String, Object> payload) {
         payload.put("at", at);
         return new BoardEvent("task.status_changed", payload);
     }
+
+    public static BoardEvent taskUpdated(Long projectId, Long taskId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("projectId", projectId);
+        payload.put("taskId", taskId);
+        return new BoardEvent("task.updated", payload);
+    }
+
+    public static BoardEvent projectStatusChanged(Long projectId, String from, String to, String at) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("projectId", projectId);
+        payload.put("from", from);
+        payload.put("to", to);
+        payload.put("at", at);
+        return new BoardEvent("project.status_changed", payload);
+    }
 }

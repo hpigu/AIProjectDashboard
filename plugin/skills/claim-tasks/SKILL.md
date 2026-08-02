@@ -1,177 +1,188 @@
 ---
 name: claim-tasks
-description: 從 AI 專案看板認領並執行指定專案的任務。當使用者說「認領{專案名}的任務」、「{專案名}開工」、「{專案名}還有什麼要做」等，明示某個專案並要求開始執行時使用；由主 session 擔任 leader，盤點後分波派工給角色 agent。
+description: 從 AI 專案看板認領並執行指定專案的任務。當使用者明示專案名稱並要求「認領任務」、「開工」、「繼續開發」或查詢尚可執行工作時使用；由主 session 擔任 leader，以單角色鎖、獨立 task branch/worktree、dev 整合分支及整批 reviewer 流程派工。
 ---
 
 # 認領專案任務
 
-你是 leader。主 session 不直接執行任務、不建立專案、不規劃新任務，
-只負責盤點、分派、驗收與彙整。
+主 session 擔任 leader，只直接處理明確指定給 leader 的 OTHER；五個 worker
+角色必須交給對應 agent。不要讓 leader 假扮 worker，也不要讓 agent 自行連續認領。
 
-## 1. 取得專案名稱
+## 工具治理與授權邊界
 
-從使用者訊息取出完整 projectName。取不出來就直接問，
-**不得用工作目錄、目錄名或 git remote 猜測**——資料夾名稱與看板專案名稱
-是兩件獨立的事，一個 repo 也可能對應多個看板專案，猜錯會讓 agent
-去做別的專案的任務，而認領是原子寫入，錯了就已經改到資料庫。
+以下是目前 server 實際註冊的任務生命週期名稱：`claim_next_task`、`block_task`、
+`complete_task`、`update_task_status`。沒有獨立的 `resume_task` 或 `release_task`；
+兩者皆由 `update_task_status` 處理（分別轉為 `IN_PROGRESS` 與 `TODO`）。
 
-## 2. 盤點
+派給五個 worker 時，只提供 `get_role` 與上述四個生命週期工具；不要提供
+`create_tasks`、`reset_task_claim`、`preview_archive_project`、`archive_project`、
+`restore_project`、`update_task_details`、`set_task_dependencies` 或 `upsert_role`。
+worker 發現任務規格、分類或前置相依需要調整時，只回報事實、風險與建議，由 leader
+處理；不可自行改規格或相依。`reset_task_claim` 也是 leader 處理遺失 token 的例外
+復原工具，worker 不得用它繞過 token 驗證。
 
-```
-list_tasks(projectName=<名稱>, status="TODO", includeDescription=true)
-```
+這是 client 工具白名單的第一階段邊界，不是 server-side 授權：MCP server 目前沒有
+caller identity，任何能連上 `/mcp` 的 client 都可能呼叫其獲得的工具。服務必須維持
+localhost；在有 server-side 身分驗證前，不得將 MCP 對外暴露。
 
-`includeDescription=true` 是必要的：要靠描述判斷任務內容、驗收條件與相依。
-標示 `⏳ 等待 #n` 的任務代表前置未完成，這一波不要派。
+`preview_archive_project`、`archive_project`、`restore_project`、`upsert_role` 只由
+leader 在使用者**目前對話中明確要求該項操作**後呼叫；「完成」、「收尾」、沉默或
+先前對話都不是授權。封存先做 preview；若 preview 有 `IN_PROGRESS`，封存前還要再
+取得一次明確確認。leader 不得要求使用者手動複製 claim token：worker 在工作上下文
+保留它，只在內部回報給 leader，且不得寫入檔案、commit 或 task log。
 
-## 3. 決定波次
+## 1. 確認專案與規則
 
-依相依關係與任務內容決定這一波派誰：
+從使用者訊息取得完整 `projectName`。取不到就詢問；不得從 cwd、資料夾或
+git remote 猜測。開始前完整讀取 repo 的 `AGENTS.md` 與 `CLAUDE.md`（若存在）。
 
-- **沒有相依的任務可以同一波併行**，不必等別人
-- 有前置的任務等前置 DONE 之後才派
-- 派工依據是**任務內容**，不是只看 category——描述裡若寫明需要某角色配合，照它
-- 每個 category 同一時間只有一個 agent 在跑
-- 這一波沒有可做任務的角色就不要派
+盤點全部狀態並取得 TODO 描述：
 
-看板本身也有守衛：被前置卡住的任務 `claim_next_task` 不會發放。
-但仍要自己判斷波次，避免派出去只換回一句「全部都在等前置」。
-
-### 情境走查
-
-盤點拿到這樣的清單：
-
-```
-### TODO (4)
-- #1 設定 CI 環境 [INFRA]
-- #2 改後端 API [BACKEND] ⏳ 等待 #1
-- #3 補既有模組測試 [TEST]
-- #4 串接前端畫面 [FRONTEND] ⏳ 等待 #2
+```text
+list_tasks(projectName=<名稱>, includeDescription=true)
 ```
 
-**波次 1** — 派 `infra`(#1) 與 `qa`(#3)。兩者都沒有前置，可以同時跑。
-`backend-dev` 與 `frontend-dev` 這波不派：#2 在等 #1、#4 在等 #2，
-派出去只會拿回「全部都在等前置」。
+記錄本次 batch manifest：啟動時納入的 task IDs、基準 commit 與後續新增項目。
 
-**波次 2** — #1 回報 DONE 後，#2 解鎖，派 `backend-dev`(#2)。
-若 #3 還沒回來就讓它繼續跑，不必等齊。#4 仍在等 #2，這波不派。
+- 納入：初始 IDs、QA 回報且 leader 建立的 production bug、使用者核准的修正、必要前置、
+  reviewer 的必修 task。
+- 不自動納入執行途中出現的不相關 task；詢問要放本批或下一批。
+- 全部 DONE 也不得自行封存專案；封存只接受使用者當前明確指示。
 
-**波次 3** — #2 完成後派 `frontend-dev`(#4)。
+## 2. 開工前檢查
 
-重點：**波次不是同步的關卡**。#3 什麼時候結束不影響 #2 何時開始，
-只要前置滿足就往下派，不要為了「湊齊一波」而空等。
+### Git 基準
 
-## 4. 派工
+- `main` 有未提交修改時，列出變更並請使用者決定；不得自動 stash、commit 或丟棄。
+- 長期整合分支固定為 `dev`。不存在時從乾淨的 `main` 建立。
+- `dev` 若含上一批尚未合併的內容，先詢問如何處理，不開新 batch。
+- 每筆 task 從最新 `dev` 建立 `task/<task-id>-<role>` 與獨立 worktree。
+  不使用 `dev/task-*`：Git 不能同時保存 `dev` 與 `dev/...` refs。
 
-### 先確保在 dev 分支上
+### 既有執行中任務
 
-agent 的 commit 一律進 `dev`，**不直接進 `main`**。派第一件之前先確認：
+若某 category 已有 `IN_PROGRESS`，先把該角色鎖視為占用並比對 live agent、branch
+與 worktree。找不到對應工作時保留現況並詢問要接手、重開或停止；不得另派同角色。
+無關角色仍可繼續。
 
-```
-git branch --show-current
-```
+### 角色鎖
 
-不在 `dev` 就切過去（沒有就從 `main` 開）。這樣壞掉的改動不會污染 `main`，
-reviewer 也有明確的審查邊界（`git diff main...dev`）。
+固定五把鎖：`BACKEND`、`FRONTEND`、`TEST`、`INFRA`、`DOC`。同一時間每個
+category 最多一個 live agent；每個 agent 只處理一件 task，回報後結束。
+`OTHER` 不占 worker 鎖，但 leader 同一時間也只直接處理一件 OTHER。
 
-### 指示內容
+## 3. 事件驅動排程
 
-每個角色**每次只派一件**。在給 agent 的指示中明確寫出：
+不要使用同步 wave。每次開工、agent 結束、task 轉態或使用者回答後，重新執行：
 
-- projectName
-- 只做認領到的這一件，完成後回報並結束，不要自行認領下一件
-- repo 指定的開發用埠號與資料庫（正式服務可能正在運作，不得佔用或寫入）
+1. `list_tasks(..., includeDescription=true)`。
+2. 排除前置未 DONE、角色鎖占用、已在處理及不屬本 batch 的 task。
+3. 每個空閒 category 只看依看板順序第一筆 eligible task；不得因難度或偏好跳題。
+4. 在平台容量內盡量填滿不同角色。容量不足時，比較各 category 的第一筆候選，
+   依 `sort_order`／看板順序，task id 僅作同序 tie-breaker。
+5. 任一 agent 結束就立即重排；不等待其他角色「湊齊一波」。
 
-agent 回報後，若該角色還有可做的任務，**開一個新的 subagent** 派下一件。
-每件從乾淨的 context 開始，行為可預測、出問題容易定位，也不會累積前一件
-的錯誤推理。
+Agent 仍必須呼叫該角色的 `claim_next_task`。Leader 預期的 task id 與實際認領不符時，
+agent 不修改檔案，立即回報；leader 重新盤點，不把錯誤任務硬塞進既有 branch。
 
-**唯一的例外是重派**：reviewer 退回、或你自己發現要補的東西，
-用 `SendMessage` 延續原本那個 agent。它剛做完、記憶還在，
-重新開一個等於要它重讀一遍才能理解問題所在。
+## 4. 建立 task 工作區並派工
 
-## 5. 驗收
+Leader 從最新 `dev` 建立 task branch/worktree，再啟動對應角色 agent：
 
-分兩層：你自己驗表面，程式碼交給 reviewer。
-
-### 你驗的
-
-- ✅ 該動的檔案有動、測試有跑且結果如實回報、BLOCKED 有交代原因與接手對象
-- ✅ 產出對得上 task description 裡的驗收條件
-- ❌ 程式碼品質、正確性的深度審查——**不要假裝驗過了**
-
-回報有疑點時，追問或重派，不要照單全收。
-
-### 叫 reviewer（一波做完才叫，不是每筆）
-
-**一個波次的任務全部完成後**，叫 `reviewer` 審這一波的整體 diff。
-它不認領任務、不改檔案，只回報。給它：
-
-- 審查範圍：`git diff main...dev`（或指定這一波的 commit 範圍）
-- 這一波包含哪些任務 id 與各自的驗收條件
-- 沒有 commit 的改動（例如家目錄檔案），直接告訴它範圍
-
-**為什麼一波而不是一筆**：同一波的任務彼此沒有相依（所以才能併行），
-但它們的改動可能互相矛盾——那正是 reviewer 該找的東西之一，
-逐筆審看不出來。而且逐筆審會讓 reviewer 跑很多次，成本不成比例。
-
-純文件波次（全是 DOC）可以跳過，除非改動牽涉程式行為。
-
-### 處置 reviewer 的回報
-
-reviewer 會把發現分成兩類，**處置方式不同**：
-
-| 類別 | 處置 |
+| category | agent |
 |---|---|
-| **必須修** | 自己處理，不必問使用者 |
-| **建議** | 不要自己動——記下來，在最後彙整時列給使用者決定 |
+| BACKEND | `backend-dev` |
+| FRONTEND | `frontend-dev` |
+| TEST | `qa` |
+| INFRA | `infra` |
+| DOC | `docs` |
 
-「必須修」的兩種走法：
+Claude Code 優先直接叫用 plugin 提供的具名 agent。若執行環境無法啟動 subagent，
+回報能力限制並停止該 worker 派工；不得由 leader 冒充該角色。平台容量低時循序派工，
+但角色鎖與一 agent 一 task 不變。
 
-- **原角色能修** → 把原任務改回 `TODO`（會清空 assignee），
-  重新派給同一角色，指示中附上 reviewer 的完整發現
-- **要別的角色** → reviewer 已經建好新任務了，照相依關係排進後續波次
+派工訊息必須包含：
 
-### 重派上限
+- `projectName`、預期 task id、branch/worktree 路徑與最新 `dev` 基準。
+- 只認領並處理一件；不得自行認領下一件。
+- 先呼叫 `get_role` 並遵守 repo 指引與角色邊界。
+- 驗證、commit、回報 changed files／commit／測試結果／完成摘要。
+- 完成時保持 `IN_PROGRESS`，不要自行標 `DONE`；若工具回傳 claim token，僅在回報
+  leader 時傳遞，不寫入檔案、commit、task_log 或 application log，也不要要求使用者
+  手動複製或轉交。
 
-**同一筆任務只退回一次。** 重派後 reviewer 仍說「必須修」時，
-**停下來問使用者**，不要派第三次。
+## 5. Agent 回報與 leader 表面驗收
 
-連兩次沒過通常代表問題不在 agent，而在任務描述不清或設計本身有問題——
-再派一次只是重複燒 token。把 reviewer 兩次的發現一起呈給使用者判斷。
+Agent 完成修改、驗證與 commit 後結束。Leader 只做表面 gate：
 
-### 合併回 main
+- 修改範圍與 task 驗收條件一致。
+- branch/worktree 沒有未交代的 dirty 檔案。
+- commit 存在且 task id 正確。
+- 測試／驗證有實際結果，BLOCKED 有完整原因。
 
-reviewer 說沒有「必須修」之後，**由你合併**，不是 agent 合：
+表面 gate 不取代 QA 或 reviewer。第一次未達時，交回原角色在原 branch 修正；第二次
+仍未達就停止並詢問使用者。純機械 merge conflict 也交回原角色，且優先於該角色的
+新 task；語意衝突則暫停相關 merge／下游並詢問使用者。無關工作繼續。
 
-```
-git checkout main && git merge dev && git checkout dev
-```
+通過後由 leader 執行 `git merge --no-ff` 將 task branch 合併到 `dev`。只有 merge
+成功後才以 `complete_task` 將 task 標成 `DONE`，並提交 agent 內部回報的 claim token、
+摘要與驗證證據。下游只在此時解鎖。
 
-- 有 conflict 就停下來問使用者，不要自己猜著解
-- **不要 push**，推送由使用者決定
-- 合併後回到 `dev` 繼續下一波
+合併後確認 worktree 乾淨再移除 worktree，task branch 保留到整批進入 `main`。
 
-reviewer 只回報，不合併——它沒有全局視野，不知道你的波次安排。
+## 6. BLOCKED、異常與提問
 
-## 6. 彙整
+### BLOCKED
 
-全部完成後逐角色彙整：認領內容、完成內容、BLOCKED 原因或無任務。
+- Agent 標記 `BLOCKED` 後結束並釋放角色鎖；保留 branch/worktree，不合併 `dev`。
+- 下游保持等待，無關 task 繼續。
+- `USER_INPUT`、需求或責任不明時，agent 回報事實、歧義、原因、選項與建議；
+  所有使用者問題由 leader 統一提出。
+- Leader 先查 repo、task 與歷史，仍不清楚才問。釐清次數不受返工上限限制。
+- 技術問題有明確解法就留在原 task；需要新設計或新 task 時先問使用者，只有 QA
+  發現 production bug 可依角色規則直接建 task。
+- 回答後優先讓原 agent／原 branch 接續；無法復用時開新的同角色 agent，仍不可並行。
 
-一併列出 reviewer 的「建議」類發現（你沒有自行處理的那些），
-讓使用者決定要不要處理。有退回重派過的任務也要說明退回原因與後續結果。
+### Agent 異常結束
 
-接著查 OTHER 分類：
+任務仍 `IN_PROGRESS` 但 agent 消失時，檢查 branch、diff、commit 與最後回報，保留
+成果並派新的同角色 agent 接續原 branch。自動接手最多一次；再次異常就標記
+`BLOCKED` 並詢問使用者。接手期間角色鎖仍占用。
 
-```
-list_tasks(projectName=<名稱>, status="TODO", category="OTHER")
-```
+### 認領競爭
 
-有的話列出來，問使用者要自己處理還是要主 session 直接做。
-最後附上 http://localhost:8080/ 。
+把 contention 與 no-task 分開處理。競爭時重新盤點後再排，不把它當成 category 已清空。
 
-## 看板連不上時
+## 7. OTHER
 
-agent 可能完成了工作卻無法把狀態寫回看板，這時工作成果與看板狀態會脫節。
-遇到 agent 回報「更新狀態失敗」時，記下是哪幾筆、實際做到哪裡，
-在彙整中明講，並提醒使用者這些任務仍停在 IN_PROGRESS 需要補標記。
+Leader 只直接處理描述明確指定給 leader、範圍清楚且已獲目前請求授權的 OTHER；
+一樣要 claim、使用 `task/<id>-leader`、驗證、commit、merge `dev` 後才 DONE。
+
+若實際應屬 worker role，不自行改分類或猜 owner，先詢問。部署、刪除、付款、外部寫入、
+新增權限與正式環境變更永遠需要相應明確授權。OTHER 一樣列入 batch manifest 與 reviewer。
+
+## 8. 暫停與取消
+
+使用者要求暫停或取消時，立即停止新認領。讓 live agent 在安全操作點保存並回報；
+保留已合併的 `dev`、未完成 branch/worktree 與看板狀態，不啟動 reviewer、不合併 main。
+恢復時沿用 manifest。取消不等於回滾或刪除；需要捨棄成果時另列精確範圍確認。
+
+## 9. 整批 reviewer 與 main 合併
+
+只有 manifest 內全部 task 都 DONE、沒有 unresolved BLOCKED，才叫既有 `reviewer`
+唯讀審查完整 `git diff main...dev`。提供 manifest、驗收條件、commit 清單與測試結果。
+純 DOC 也不跳過。
+
+Reviewer 只分「必須修／建議」並回報 leader；不得改檔、建 task 或合併。Leader 判斷
+是否建立修正 task、category、相依與分派；需求不明或超出範圍時詢問使用者。建議只
+彙整，不自動實作。
+
+必修完成後，啟動新的 reviewer instance 從頭審完整 diff。只允許一個完整修正／重審
+循環；第二次仍有必修就停止並把兩次結果交給使用者。
+
+Reviewer 無必修後，由 leader 執行 `git merge --no-ff dev` 合併到 `main`。不 push、
+不部署、不重啟服務。刪除已合併且狀態明確的 task branches，保留 `dev` 並同步到最新
+`main`；dirty、未合併或狀態不明的一律保留並回報。
+
+最後彙整完成、BLOCKED、返工、reviewer 建議與未納入本批的 task，附上看板網址
+`http://localhost:8080/`。

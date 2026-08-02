@@ -69,14 +69,19 @@ public class ProjectBoardTools {
             description = "更新單一任務的狀態。任務必須先用 claim_next_task 認領，才能進入 IN_PROGRESS；"
                     + "完成後標記 DONE，遇到阻礙標記 BLOCKED 並在 note 說明原因。"
                     + "改回 TODO 會一併清空 assignee 與 claimed_at。"
+                    + "認領時若拿到 claimToken，操作這筆任務（block／complete／resume／release）時"
+                    + "必須帶回同一組 claimToken 才會生效，避免別的 agent 動到你的認領；"
+                    + "沒有 claimToken 的任務（例如舊資料）沿用舊行為，不需要帶。"
                     + "請在實際完成／卡住／歸還工作的當下呼叫，不要等到最後才一次補登。")
     public String updateTaskStatus(
             @ToolParam(description = "任務 ID") Long taskId,
             @ToolParam(description = "目標狀態：TODO / IN_PROGRESS / DONE / BLOCKED") String status,
-            @ToolParam(description = "變更原因，BLOCKED 時強烈建議填寫", required = false) String note) {
+            @ToolParam(description = "變更原因，BLOCKED 時強烈建議填寫", required = false) String note,
+            @ToolParam(description = "認領該任務時取得的 claim token；任務要求 token 時才需要提供",
+                    required = false) String claimToken) {
         TaskService.TaskStatusChangeResult result;
         try {
-            result = taskService.updateStatus(taskId, status, note);
+            result = taskService.updateStatus(taskId, status, note, claimToken);
         } catch (OptimisticLockingFailureException e) {
             throw new BoardException("任務 #" + taskId + " 已被其他 agent 更新，請重新讀取後再操作");
         }
@@ -90,10 +95,35 @@ public class ProjectBoardTools {
                         result.project().name(), result.doneCount(), result.totalCount());
     }
 
+    @Tool(name = "reset_task_claim",
+            description = "leader 專用：明確處理某 agent 遺失 claim token 的情況，"
+                    + "跳過 token 驗證直接把任務打回 TODO 並清空認領資訊（含 token）。"
+                    + "一般 agent 不得呼叫這個工具來繞過 update_task_status 的 token 檢查；"
+                    + "只在確認 token 真的遺失、且已排除是別的 agent 惡意搶占的情況下使用，"
+                    + "note 請寫明原因與判斷依據。")
+    public String resetTaskClaim(
+            @ToolParam(description = "任務 ID") Long taskId,
+            @ToolParam(description = "重置原因，例如「agent 中斷連線遺失 token」", required = false) String note) {
+        TaskService.TaskStatusChangeResult result;
+        try {
+            result = taskService.resetClaimAsLeader(taskId, note);
+        } catch (OptimisticLockingFailureException e) {
+            throw new BoardException("任務 #" + taskId + " 已被其他 agent 更新，請重新讀取後再操作");
+        }
+        TaskService.TaskDto task = result.task();
+        return "已重置 #%d %s 的認領：%s → %s（assignee／claimedAt／claimToken 皆已清空）"
+                .formatted(task.id(), task.title(), result.from(), result.to());
+    }
+
     @Tool(name = "claim_next_task",
             description = "認領指定專案、指定類別中最優先的一個待辦任務。此工具會原子性地"
                     + "把任務標記為 IN_PROGRESS 並記錄認領者，因此不會有兩個 agent"
-                    + "拿到同一個任務。認領成功後立即開始執行該任務。")
+                    + "拿到同一個任務。認領成功後立即開始執行該任務。"
+                    + "結果會區分已認領、真正無待辦、被前置相依卡住、認領競爭與找不到專案；"
+                    + "遇到認領競爭時 leader 應重新讀取看板後再決定是否派工。"
+                    + "回應會附上一組 claimToken，只會顯示這一次，請自行保管；"
+                    + "之後對這筆任務呼叫 update_task_status（block／complete／resume／release）"
+                    + "都要帶上它，遺失的話不要自己想辦法繞過，回報 leader 走專用的重置流程。")
     public String claimNextTask(
             @ToolParam(description = "專案名稱，精確比對但不分大小寫") String projectName,
             @ToolParam(description = "任務分類：BACKEND / FRONTEND / TEST / INFRA / DOC / OTHER")
@@ -112,6 +142,11 @@ public class ProjectBoardTools {
                                     .map(ProjectBoardTools::describeBlockedCandidate)
                                     .collect(Collectors.joining("\n")));
         }
+        if (result.contended()) {
+            return ("%s 認領時發生競爭，三次 compare-and-swap 均未取得任務。"
+                    + "請 leader 重新讀取看板，再決定是否重新派工。")
+                    .formatted(result.category());
+        }
         if (!result.claimed()) {
             return "%s 目前沒有待辦任務。".formatted(result.category());
         }
@@ -119,9 +154,11 @@ public class ProjectBoardTools {
         TaskService.TaskDto task = result.task();
         String description = task.description() == null || task.description().isBlank()
                 ? "（無，開工前建議跟使用者確認驗收條件）" : task.description();
-        return "已認領 #%d「%s」[%s]\n專案：%s（#%d）\n描述／驗收條件：%s"
+        return ("已認領 #%d「%s」[%s]\n專案：%s（#%d）\n描述／驗收條件：%s\n"
+                + "claimToken：%s（僅顯示這一次，操作此任務時請帶上，勿外流／勿記錄到自己的 log）")
                 .formatted(task.id(), task.title(), task.category(),
-                        result.project().name(), result.project().id(), description);
+                        result.project().name(), result.project().id(), description,
+                        result.claimToken());
     }
 
     @Tool(name = "list_tasks",

@@ -23,11 +23,24 @@ spring:
       server:
         protocol: STREAMABLE
         name: project-board
-        version: 2.0.0
+        version: 3.0.0
 
 server:
+  address: ${BOARD_HOST:127.0.0.1}
   port: ${BOARD_PORT:8080}
 
+board:
+  backup:
+    # 與 bin/backup-db.sh 的啟動前備份共用同一個 BOARD_BACKUP_DIR（見
+    # bin/start-board.sh 第 4.5 節），確保 startup／shutdown 兩種備份
+    # 落在同一個目錄，方便管理與保留策略一併檢視。
+    dir: ${BOARD_BACKUP_DIR:${user.home}/.ai-project-board/backups}
+    retention-days: ${BOARD_BACKUP_RETENTION_DAYS:30}
+    retention-min-count: ${BOARD_BACKUP_RETENTION_MIN_COUNT:7}
+
 logging:
+  # 實際輪替策略（每日/容量雙門檻、gzip 壓縮、保留天數、總容量上限）
+  # 由 logback-spring.xml 定義；此處的 file.name 供其讀取路徑基準，
+  # 亦作為未設定 logback-spring.xml 時 Spring Boot 預設行為的後備值。
   file:
     name: ${BOARD_LOG_FILE:./logs/board.log}
