@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } = Vue;
+const { createApp, ref, computed, onMounted, onBeforeUnmount, nextTick } = Vue;
 
 const STATUS_ORDER = ['DONE', 'IN_PROGRESS', 'BLOCKED', 'TODO'];
 const RAIL_FLASH_CLASS = {
@@ -23,8 +23,8 @@ function relativeTime(isoString) {
   return `${diffDay} 天前`;
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url);
+async function fetchJson(url, options) {
+  const res = await fetch(url, options);
   if (!res.ok) {
     throw new Error(`API 錯誤 ${res.status}：${url}`);
   }
@@ -34,23 +34,83 @@ async function fetchJson(url) {
 const LevelOne = {
   props: ['projects'],
   emits: ['select'],
+  data() {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      filters: {
+        query: params.get('projectQuery') || '',
+        status: params.get('projectStatus') || 'ACTIVE',
+        blocked: params.get('projectBlocked') === 'true',
+        sort: params.get('projectSort') || 'UPDATED_DESC',
+      },
+      filteredProjects: [],
+      loading: false,
+      loaded: false,
+      error: null,
+      searchTimer: null,
+      requestController: null,
+    };
+  },
+  computed: {
+    activeProjects() {
+      return this.loaded ? this.filteredProjects : this.projects;
+    },
+    hasFilters() {
+      return this.filters.query || this.filters.status !== 'ACTIVE' || this.filters.blocked || this.filters.sort !== 'UPDATED_DESC';
+    },
+  },
+  created() {
+    this.loadProjects();
+    this._unsubscribe = window.__boardBus.on('project.created', () => this.loadProjects());
+    this._unsubscribeTasks = window.__boardBus.on('tasks.created', () => this.loadProjects());
+    this._unsubscribeStatus = window.__boardBus.on('task.status_changed', () => this.loadProjects());
+  },
+  beforeUnmount() {
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    if (this.requestController) this.requestController.abort();
+    [this._unsubscribe, this._unsubscribeTasks, this._unsubscribeStatus].forEach(fn => fn && fn());
+  },
+  watch: {
+    'filters.query'() { this.scheduleLoad(); },
+    'filters.status'() { this.loadProjects(); },
+    'filters.blocked'() { this.loadProjects(); },
+    'filters.sort'() { this.loadProjects(); },
+  },
   template: `
     <div>
-      <div v-if="projects.length === 0" class="empty-state">
-        還沒有專案。在 Claude Code 或 Codex 裡說「幫我規劃一個⋯⋯」就會出現在這裡。
+      <section class="filter-panel project-filters" aria-label="專案篩選">
+        <label class="filter-field filter-search"><span>專案名稱前綴</span>
+          <input v-model="filters.query" type="search" placeholder="輸入專案名稱" autocomplete="off">
+        </label>
+        <div class="filter-field"><span>狀態</span>
+          <div class="filter-choice" role="group" aria-label="專案狀態">
+            <button v-for="status in ['ACTIVE', 'ARCHIVED', 'ALL']" :key="status" type="button"
+              :class="{ selected: filters.status === status }" @click="filters.status = status">{{ status }}</button>
+          </div>
+        </div>
+        <label class="filter-check"><input v-model="filters.blocked" type="checkbox"> 只看 BLOCKED</label>
+        <label class="filter-field filter-sort"><span>排序</span>
+          <select v-model="filters.sort"><option value="UPDATED_DESC">最近更新</option><option value="NAME">名稱</option><option value="PROGRESS">完成比例</option></select>
+        </label>
+        <button type="button" class="filter-clear" @click="clearFilters" :disabled="!hasFilters">清除條件</button>
+      </section>
+      <div v-if="error" class="empty-state">{{ error }}</div>
+      <div v-else-if="!loading && activeProjects.length === 0" class="empty-state">
+        還沒有符合條件的專案。
       </div>
       <div v-else>
         <button
-          v-for="p in projects"
+          v-for="p in activeProjects"
           :key="p.id"
           class="project-row"
           :class="{ blocked: p.hasBlocked }"
-          @click="$emit('select', p.id)"
+          @click="$emit('select', p)"
         >
           <div class="project-row-top">
             <div class="project-name">
               {{ p.name }}
               <span v-if="p.hasBlocked" class="blocked-badge">⚠ 阻塞</span>
+              <span v-if="p.status === 'ARCHIVED'" class="archive-badge">ARCHIVED</span>
             </div>
             <div class="project-meta">
               <span>{{ p.counts.DONE }}/{{ p.total }}</span>
@@ -68,6 +128,44 @@ const LevelOne = {
     </div>
   `,
   methods: {
+    scheduleLoad() {
+      this.syncFiltersToUrl();
+      if (this.searchTimer) clearTimeout(this.searchTimer);
+      this.searchTimer = setTimeout(() => this.loadProjects(), 250);
+    },
+    syncFiltersToUrl() {
+      const url = new URL(window.location.href);
+      const values = {
+        projectQuery: this.filters.query,
+        projectStatus: this.filters.status === 'ACTIVE' ? '' : this.filters.status,
+        projectBlocked: this.filters.blocked ? 'true' : '',
+        projectSort: this.filters.sort === 'UPDATED_DESC' ? '' : this.filters.sort,
+      };
+      Object.entries(values).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
+      window.history.replaceState(window.history.state, '', url);
+    },
+    async loadProjects() {
+      this.syncFiltersToUrl();
+      if (this.requestController) this.requestController.abort();
+      const controller = new AbortController();
+      this.requestController = controller;
+      this.loading = true;
+      this.error = null;
+      const params = new URLSearchParams({ status: this.filters.status, sort: this.filters.sort });
+      if (this.filters.query) params.set('q', this.filters.query);
+      if (this.filters.blocked) params.set('blocked', 'true');
+      try {
+        this.filteredProjects = await fetchJson('/api/projects?' + params.toString(), { signal: controller.signal });
+        this.loaded = true;
+      } catch (e) {
+        if (e.name !== 'AbortError') this.error = e.message;
+      } finally {
+        if (!controller.signal.aborted) this.loading = false;
+      }
+    },
+    clearFilters() {
+      this.filters = { query: '', status: 'ACTIVE', blocked: false, sort: 'UPDATED_DESC' };
+    },
     relTime(iso) { return relativeTime(iso); },
     segStyle(p, key) {
       const total = p.total || 1;
@@ -78,7 +176,7 @@ const LevelOne = {
 };
 
 const LevelTwo = {
-  props: ['projectId', 'projects'],
+  props: ['projectId', 'projects', 'projectSummary'],
   emits: ['back', 'jump'],
   data() {
     return {
@@ -89,6 +187,17 @@ const LevelTwo = {
       detail: null,
       detailLoading: false,
       detailError: null,
+      filters: {
+        query: new URLSearchParams(window.location.search).get('taskQuery') || '',
+        category: new URLSearchParams(window.location.search).get('taskCategory') || '',
+        assignee: new URLSearchParams(window.location.search).get('taskAssignee') || '',
+        waiting: new URLSearchParams(window.location.search).get('taskWaiting') === 'true',
+        claimable: new URLSearchParams(window.location.search).get('taskClaimable') === 'true',
+      },
+      appliedQuery: new URLSearchParams(window.location.search).get('taskQuery') || '',
+      searchTimer: null,
+      advancedOpen: window.matchMedia('(min-width: 701px)').matches,
+      boardController: null,
     };
   },
   computed: {
@@ -101,6 +210,19 @@ const LevelTwo = {
     },
     doneCount() {
       return this.board ? (this.board.columns.DONE || []).length : 0;
+    },
+    categories() {
+      return [...new Set(this.allTasks.map(task => task.category).filter(Boolean))].sort();
+    },
+    assignees() {
+      return [...new Set(this.allTasks.map(task => task.assignee).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    },
+    allTasks() {
+      if (!this.board) return [];
+      return STATUS_ORDER.flatMap(status => (this.board.columns[status] || []).map(task => ({ ...task, status })));
+    },
+    hasTaskFilters() {
+      return this.filters.query || this.filters.category || this.filters.assignee || this.filters.waiting || this.filters.claimable;
     },
   },
   created() {
@@ -132,28 +254,77 @@ const LevelTwo = {
         if (this.detailTaskId !== null) this.loadDetail(this.detailTaskId, true);
       }
     });
+    this._resizeHandler = () => {
+      if (window.matchMedia('(min-width: 701px)').matches) this.advancedOpen = true;
+    };
+    window.addEventListener('resize', this._resizeHandler);
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this._keyHandler);
     window.removeEventListener('popstate', this._popstateHandler);
+    window.removeEventListener('resize', this._resizeHandler);
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    if (this.boardController) this.boardController.abort();
     document.body.classList.remove('drawer-open');
     if (this._unsubscribe) this._unsubscribe();
     if (this._unsubscribeTasks) this._unsubscribeTasks();
   },
   watch: {
     projectId() { this.loadBoard(); },
+    'filters.query'() {
+      this.syncFiltersToUrl();
+      if (this.searchTimer) clearTimeout(this.searchTimer);
+      this.searchTimer = setTimeout(() => { this.appliedQuery = this.filters.query; }, 250);
+    },
+    'filters.category'() { this.syncFiltersToUrl(); },
+    'filters.assignee'() { this.syncFiltersToUrl(); },
+    'filters.waiting'() { this.syncFiltersToUrl(); },
+    'filters.claimable'() { this.syncFiltersToUrl(); },
   },
   methods: {
     async loadBoard() {
+      if (this.boardController) this.boardController.abort();
+      const controller = new AbortController();
+      this.boardController = controller;
       try {
-        this.board = await fetchJson(`/api/projects/${this.projectId}/board`);
+        this.board = await fetchJson(`/api/projects/${this.projectId}/board`, { signal: controller.signal });
         this.error = null;
       } catch (e) {
-        this.error = e.message;
+        if (e.name !== 'AbortError') this.error = e.message;
       }
     },
     column(status) {
-      return this.board ? (this.board.columns[status] || []) : [];
+      return this.allTasks.filter(task => task.status === status && this.matchesTaskFilters(task));
+    },
+    columnTotal(status) {
+      return this.board ? (this.board.columns[status] || []).length : 0;
+    },
+    matchesTaskFilters(task) {
+      const query = this.appliedQuery.trim().toLocaleLowerCase();
+      const titleMatches = !query || task.title.toLocaleLowerCase().startsWith(query);
+      const categoryMatches = !this.filters.category || task.category === this.filters.category;
+      const assigneeMatches = !this.filters.assignee
+        || (this.filters.assignee === '__unassigned__' ? !task.assignee : task.assignee === this.filters.assignee);
+      const waiting = task.waitingFor && task.waitingFor.length > 0;
+      const claimable = task.status === 'TODO' && !waiting;
+      return titleMatches && categoryMatches && assigneeMatches
+        && (!this.filters.waiting || waiting) && (!this.filters.claimable || claimable);
+    },
+    syncFiltersToUrl() {
+      const url = new URL(window.location.href);
+      const values = {
+        taskQuery: this.filters.query,
+        taskCategory: this.filters.category,
+        taskAssignee: this.filters.assignee,
+        taskWaiting: this.filters.waiting ? 'true' : '',
+        taskClaimable: this.filters.claimable ? 'true' : '',
+      };
+      Object.entries(values).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
+      window.history.replaceState(window.history.state, '', url);
+    },
+    clearTaskFilters() {
+      this.filters = { query: '', category: '', assignee: '', waiting: false, claimable: false };
+      this.appliedQuery = '';
     },
     async openDetail(taskId, event) {
       const switching = this.detailTaskId !== null;
@@ -272,6 +443,7 @@ const LevelTwo = {
       <div class="board-header">
         <button class="back-btn" @click="$emit('back')">&larr; 總覽</button>
         <h2 class="board-title" v-if="board">{{ board.name }}</h2>
+        <span v-if="projectSummary && projectSummary.status === 'ARCHIVED'" class="archive-badge">ARCHIVED · 唯讀</span>
         <span class="board-progress" v-if="board">{{ doneCount }}/{{ totalCount }}</span>
         <button
           v-for="p in otherBlockedProjects"
@@ -283,9 +455,29 @@ const LevelTwo = {
       <div v-if="error" class="empty-state">{{ error }}</div>
       <div v-else-if="board && totalCount === 0" class="empty-state">這個專案還沒有任務。</div>
       <div v-else-if="board" class="columns">
+        <section class="filter-panel task-filters" aria-label="任務篩選">
+          <label class="filter-field filter-search"><span>任務標題前綴</span>
+            <input v-model="filters.query" type="search" placeholder="輸入任務標題" autocomplete="off">
+          </label>
+          <label class="filter-field"><span>主要類別</span>
+            <select v-model="filters.category"><option value="">所有類別</option><option v-for="category in categories" :key="category" :value="category">{{ category }}</option></select>
+          </label>
+          <button type="button" class="advanced-trigger" @click="advancedOpen = true">進階條件</button>
+          <button type="button" class="filter-clear" @click="clearTaskFilters" :disabled="!hasTaskFilters">清除條件</button>
+        </section>
+        <div v-if="advancedOpen" class="filter-sheet-backdrop" @click="advancedOpen = false"></div>
+        <section v-if="advancedOpen" class="filter-advanced" aria-label="進階任務篩選">
+          <div class="filter-sheet-head"><strong>進階條件</strong><button type="button" @click="advancedOpen = false" aria-label="關閉進階條件">×</button></div>
+          <label class="filter-field"><span>負責人</span>
+            <select v-model="filters.assignee"><option value="">所有負責人</option><option value="__unassigned__">未指派</option><option v-for="assignee in assignees" :key="assignee" :value="assignee">@{{ assignee }}</option></select>
+          </label>
+          <label class="filter-check"><input v-model="filters.waiting" type="checkbox"> 只看等待前置</label>
+          <label class="filter-check"><input v-model="filters.claimable" type="checkbox"> 只看可認領</label>
+          <p class="filter-help">可認領 = TODO，且所有前置任務已完成。</p>
+        </section>
         <div v-for="status in ['TODO','IN_PROGRESS','BLOCKED','DONE']" :key="status">
           <div class="column-head">{{ status }}</div>
-          <div class="column-count">{{ column(status).length }}</div>
+          <div class="column-count"><span>{{ column(status).length }}</span><small>/ {{ columnTotal(status) }}</small></div>
           <transition-group name="task" tag="div" class="column-body">
             <button
               v-for="task in column(status)"
@@ -471,7 +663,8 @@ window.__boardBus = createEventBus();
 createApp({
   components: { LevelOne, LevelTwo },
   setup() {
-    const currentProjectId = ref(null);
+    const initialProject = Number(new URLSearchParams(window.location.search).get('project'));
+    const currentProjectId = ref(Number.isSafeInteger(initialProject) && initialProject > 0 ? initialProject : null);
     const projects = ref([]);
     const sseConnected = ref(false);
     const railFlashClass = ref('');
@@ -480,10 +673,33 @@ createApp({
 
     async function loadProjects() {
       try {
-        projects.value = await fetchJson('/api/projects');
+        projects.value = await fetchJson('/api/projects?status=ALL&sort=UPDATED_DESC');
       } catch (e) {
         console.error(e);
       }
+    }
+
+    const selectedProject = computed(() => projects.value.find(project => project.id === currentProjectId.value) || null);
+
+    function selectProject(project) {
+      const id = typeof project === 'object' ? project.id : project;
+      if (id === currentProjectId.value) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set('project', id);
+      window.history.pushState({ projectId: id }, '', url);
+      currentProjectId.value = id;
+    }
+
+    function showProjectList() {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('project');
+      window.history.pushState({ projectId: null }, '', url);
+      currentProjectId.value = null;
+    }
+
+    function syncProjectFromUrl() {
+      const id = Number(new URLSearchParams(window.location.search).get('project'));
+      currentProjectId.value = Number.isSafeInteger(id) && id > 0 ? id : null;
     }
 
     function flashRail(statusLike) {
@@ -544,12 +760,14 @@ createApp({
     onMounted(() => {
       loadProjects();
       connectSse();
+      window.addEventListener('popstate', syncProjectFromUrl);
     });
 
     onBeforeUnmount(() => {
       if (eventSource) eventSource.close();
+      window.removeEventListener('popstate', syncProjectFromUrl);
     });
 
-    return { currentProjectId, projects, sseConnected, railFlashClass };
+    return { currentProjectId, projects, selectedProject, selectProject, showProjectList, sseConnected, railFlashClass };
   },
 }).mount('#app');
