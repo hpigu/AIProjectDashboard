@@ -60,7 +60,8 @@ plugin 內含：
 
 - `agents/`：六個角色薄殼（`backend-dev`、`frontend-dev`、`qa`、`infra`、
   `docs`、`reviewer`），各自呼叫 `get_role` 取得看板上的最新指引
-- `skills/claim-tasks/`：leader 分派流程（盤點 → 分波派工 → 驗收 → 彙整）
+- `skills/claim-tasks/`：leader 事件驅動流程（盤點 → task worktree → dev 整合 →
+  整批 reviewer → main）
 - `.mcp.json`：預先指到 `http://127.0.0.1:8080/mcp`
 - `bin/start-board.sh`：指回 repo 根目錄 `bin/start-board.sh` 的相對
   symlink，啟動用的是同一份腳本
@@ -128,6 +129,10 @@ plugin 內的角色薄殼與 leader skill。
 Codex plugin 與 Claude Code plugin 使用不同的包裝目錄，但兩者的角色邊界與
 leader 流程應保持一致；更新其中一份時需同步檢查另一份。
 
+3.0.0 起，worker 完成修改、驗證與 commit 後保持 `IN_PROGRESS`，由 leader 將
+`task/<task-id>-<role>` 合併進 `dev` 後才標記 `DONE`。整批 task 完成後 reviewer
+只讀審查 `main...dev` 並回報 leader；它不建立 task、不修改或合併。
+
 ## 3. 方式三：手動 clone + 執行 jar
 
 適合不使用 Claude Code plugin 機制、或想手動控制啟動流程的情境，
@@ -176,7 +181,7 @@ reviewer 薄殼都含完整 fallback；除非使用者另用 `upsert_role` 建�
 ### 版本號無法區分同版本號跨多次 commit 的新舊 build
 
 `/api/health` 回傳的 `version` 讀的是 `pom.xml` 的版本號（例如
-`2.0.0`），**不含 git commit hash**。同一個版本號底下可能已經有多次
+`3.0.0`），**不含 git commit hash**。同一個版本號底下可能已經有多次
 commit（例如新增了 `/api/health` 本身這個端點），單看 `version` 欄位
 無法判斷目前跑的行程是不是最新程式碼——只能透過該行程「有沒有某個新端點
 ／新欄位」間接推斷，或直接比對啟動時間（`startedAt`）與程式碼 commit

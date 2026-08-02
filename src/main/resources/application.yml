@@ -23,7 +23,7 @@ spring:
       server:
         protocol: STREAMABLE
         name: project-board
-        version: 2.0.0
+        version: 3.0.0
 
 server:
   port: ${BOARD_PORT:8080}

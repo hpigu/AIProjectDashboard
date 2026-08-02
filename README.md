@@ -44,7 +44,11 @@ Chat 規劃專案
 
 </details>
 
-在 chat 裡規劃專案、拆成任務卡片；到任一個專案的 repo 裡跟 Claude Code 或 Codex 說「認領 {專案名} 的任務」，主 session 會盤點待辦、依相依關係分波派工給對應職能的角色 agent（backend / frontend / qa / infra / docs，設定方式見下方「角色 agent」）；瀏覽器開著看板即時反映狀態變化，不用重整頁面。
+在 chat 裡規劃專案、拆成任務卡片；到任一個專案的 repo 裡跟 Claude Code 或 Codex
+說「認領 {專案名} 的任務」，主 session 會以事件驅動方式把前置已完成的工作派給
+空閒角色 agent（backend / frontend / qa / infra / docs）。每個角色同時只做一件，
+成果先進 `dev`，整批完成後才由 reviewer 審查並合併 `main`。瀏覽器開著看板即可
+即時看到狀態，不用重整。
 
 ## 需求
 
@@ -71,7 +75,7 @@ JDK／埠號／鎖檔檢查，也不會套用腳本的絕對資料庫路徑策�
 BOARD_PORT=8081 \
 BOARD_DB_URL='jdbc:h2:file:./data/dev-local' \
   ./mvnw clean package
-java -jar target/ai-project-board-backend-2.0.0.jar
+java -jar target/ai-project-board-backend-3.0.0.jar
 ```
 
 常駐執行在 `:8080`，瀏覽器開 `http://localhost:8080` 看看板。資料庫是 H2 檔案，
@@ -81,7 +85,7 @@ java -jar target/ai-project-board-backend-2.0.0.jar
 ```bash
 BOARD_PORT=18080 \
 BOARD_DB_URL='jdbc:h2:file:./data/dev;DB_CLOSE_ON_EXIT=FALSE' \
-java -jar target/ai-project-board-backend-2.0.0.jar
+java -jar target/ai-project-board-backend-3.0.0.jar
 ```
 
 `bin/start-board.sh` 支援同一組環境變數（`BOARD_PORT`、`BOARD_DB_URL`、
@@ -126,8 +130,8 @@ claude plugin install ai-project-board@ai-board
 ```
 
 第一行註冊 marketplace（`.claude-plugin/marketplace.json`），第二行才真的安裝。
-裝完在當前 session 生效需要 `/reload-plugins`，或重開 Claude Code。之後改了
-`plugin/` 底下的內容，重跑一次 `install` 就會吃到新版。
+裝完在當前 session 生效需要 `/reload-plugins`，或重開 Claude Code。之後更新
+本機來源可執行 `claude plugin update ai-project-board@ai-board`，並重啟 Claude Code。
 
 安裝後 plugin 的 `board` connector 需要按一次 Install 才會註冊到你的環境
 （plugin 只是宣告需要這個 MCP server，宣告不等於啟用）。它連的是本機的
@@ -225,16 +229,18 @@ session 處理。
                     │
                     ▼
 開工 session：主 session 擔任 leader
-   1. list_tasks(projectName, status="TODO", includeDescription=true)
-   2. 讀描述與規格，依相依關係決定派工波次
-   3. 每個角色每次只派一件，agent 做完回報即結束
-   4. 驗收後再派下一件，全部完成後彙整
+   1. list_tasks(projectName, includeDescription=true) 並記錄 batch manifest
+   2. 為每筆 task 從 dev 建立 task/<id>-<role> branch/worktree
+   3. 每個空閒角色派一件；任一 agent 結束就重新盤點，不等待同步 wave
+   4. agent 驗證、commit、回報後維持 IN_PROGRESS
+   5. leader 表面驗收並 merge task branch → dev，成功後才標 DONE
+   6. 整批完成後 reviewer 審 main...dev，通過才由 leader merge dev → main
 ```
 
 混在同一個 session 會被進度訊息洗版，也失去「規劃定稿」這個分界點。
 
-leader 的驗收範圍有限：只驗「該動的有動、測試有跑、`BLOCKED` 有交代」，
-程式碼品質交給 `qa` 角色與既有測試。
+leader 的表面驗收只確認範圍、commit、驗證證據與 `BLOCKED` 說明，不取代 QA 或
+reviewer。Reviewer 唯讀且只回報 leader；是否建立修正 task 由 leader 決定。
 
 ### 兩層來源：檔案是薄殼，指引在看板
 
@@ -281,7 +287,7 @@ Claude Code 這層薄殼有兩種取得方式：
   你是後端工程師。呼叫 get_role("backend-dev", projectName) 取得最新指引並照做；
   拿不到時退回：讀 repo 的 CLAUDE.md/AGENTS.md、呼叫
   claim_next_task(projectName, "BACKEND", "backend-dev") 認領任務並開工，
-  完成後更新為 DONE，卡住則更新為 BLOCKED 並在 note 說明原因。
+  完成後提交並保持 IN_PROGRESS，把證據回報 leader；卡住才更新為 BLOCKED。
   ```
 
   `tools:` 裡的工具名稱必須跟 session 實際載入的完全一致，否則會被 allowlist
@@ -291,9 +297,9 @@ Claude Code 這層薄殼有兩種取得方式：
   若你是自己在 `~/.claude.json` 或專案 `.mcp.json` 註冊 board（不經 plugin），
   就沒有 `plugin_` 前綴，應改寫成 `mcp__board__*`。
 
-- Codex：優先安裝本 repo 的 Codex plugin，使用 `.codex-plugin/agents/*.md` 中的
-  六個獨立角色薄殼；不使用 plugin 時，才在 `~/.codex/AGENTS.md` 寫相同的
-  fallback 規則。
+- Codex：安裝本 repo 的 Codex plugin，使用 `.codex-plugin/agents/*.md` 中的
+  六個獨立角色薄殼。不使用 plugin 時仍可手動接 MCP，但不建議在
+  `~/.codex/AGENTS.md` 再維護一份完整角色規則，以免與看板及 plugin 漂移。
 
 `reviewer` 不認領 category 任務，因此 `RoleSeeder` 只初始化上述五個 worker
 角色，不會另外建立 reviewer 的資料庫指引。兩套 plugin 的 reviewer 薄殼本身
@@ -301,8 +307,8 @@ Claude Code 這層薄殼有兩種取得方式：
 它才會優先採用看板版本。
 
 每個角色只認領自己類別的任務、只碰自己職責內的檔案；同一類別同時只有一個角色
-在跑，且**做完一件就回報結束、不自行認領下一件**——下一件由 leader 判斷時機
-後另派，否則 agent 會把該類別的任務全部吃光，分波控制就失效了。
+在跑，且**做完一件就提交、回報、結束，不自行 DONE 或認領下一件**。Leader 將
+task branch 合併到 `dev` 後才完成看板任務；這樣相依任務不會早於實際程式碼解鎖。
 
 這一套是本專案作者自己機器上的慣例，不是看板功能運作的必要條件：
 `claim_next_task`、`get_role` 都是一般 MCP 工具，任何連上 `/mcp` 的 client
@@ -310,7 +316,7 @@ Claude Code 這層薄殼有兩種取得方式：
 
 沒有建立這些角色檔案時，你會失去的是分工，不是功能：assignee 名稱要自己在
 對話中指定（不會自動代入 `backend-dev` 這類名字），而且只有一個主 session 在
-跑，無法把同一波裡沒有相依的任務分給不同角色同時開工。角色指引本身（`get_role`
+跑，無法把沒有相依的任務分給不同角色同時開工。角色指引本身（`get_role`
 能查到什麼）不受影響，因為它存在看板資料庫，與這層檔案殼無關。
 
 ### AGENTS.md 進版控
