@@ -23,7 +23,7 @@
       <level-one
         v-if="currentProjectId === null"
         :projects="projects"
-        @select="currentProjectId = $event"
+        @select="selectProject"
       ></level-one>
 
       <level-two
@@ -31,8 +31,9 @@
         :key="currentProjectId"
         :project-id="currentProjectId"
         :projects="projects"
-        @back="currentProjectId = null"
-        @jump="currentProjectId = $event"
+        :project-summary="selectedProject"
+        @back="showProjectList"
+        @jump="selectProject"
       ></level-two>
     </div>
   </div>

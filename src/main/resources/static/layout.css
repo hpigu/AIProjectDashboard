@@ -64,6 +64,77 @@
   padding: 48px 8px;
 }
 
+/* ---- 篩選器 ---- */
+.filter-panel,
+.filter-advanced {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.filter-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+.filter-field input,
+.filter-field select {
+  min-width: 0;
+  height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--text);
+  background: var(--ground);
+  font: 13px var(--font-body);
+}
+.filter-search { flex: 1 1 220px; }
+.filter-sort { flex: 0 1 160px; }
+.filter-choice { display: flex; }
+.filter-choice button,
+.filter-clear,
+.advanced-trigger {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--ground);
+  cursor: pointer;
+  font: 11px var(--font-data);
+}
+.filter-choice button { padding: 6px 8px; border-radius: 0; }
+.filter-choice button:first-child { border-radius: 3px 0 0 3px; }
+.filter-choice button:last-child { border-radius: 0 3px 3px 0; }
+.filter-choice button + button { border-left: 0; }
+.filter-choice button.selected { color: var(--text); background: var(--line); }
+.filter-clear,
+.advanced-trigger { padding: 6px 10px; border-radius: 3px; white-space: nowrap; }
+.filter-clear:disabled { cursor: default; opacity: .45; }
+.filter-check {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text);
+  white-space: nowrap;
+  font: 12px var(--font-body);
+}
+.filter-check input { accent-color: var(--st-progress); }
+.archive-badge {
+  display: inline-block;
+  padding: 2px 5px;
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+  color: var(--muted);
+  font: 10px var(--font-data);
+}
+
 /* ---- Level 1: 總覽 ---- */
 .project-row {
   display: block;
@@ -170,6 +241,14 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
 }
+.task-filters { grid-column: 1 / -1; margin: 0; }
+.filter-advanced { grid-column: 1 / -1; margin: -6px 0 0; }
+.filter-advanced .filter-field { flex: 1 1 190px; }
+.filter-sheet-head { display: contents; }
+.filter-sheet-head strong { color: var(--text); font: 13px var(--font-display); }
+.filter-sheet-head button { display: none; }
+.filter-help { margin: 0; max-width: 230px; color: var(--muted); font: 10px/1.45 var(--font-data); }
+.filter-sheet-backdrop { display: none; }
 .columns > div { min-width: 0; }
 @media (max-width: 700px) {
   .columns { grid-template-columns: 1fr; }
@@ -188,6 +267,7 @@
   font-size: 28px;
   margin-bottom: 12px;
 }
+.column-count small { color: var(--muted); font: 13px var(--font-data); }
 .task-card {
   display: block;
   width: 100%;
@@ -533,6 +613,49 @@ body.drawer-open { overflow: hidden; }
 }
 @media (max-width: 700px) {
   .app-shell { padding: 18px 14px; }
+  .filter-panel { align-items: stretch; flex-wrap: wrap; gap: 10px; padding: 12px; }
+  .project-filters .filter-search { flex-basis: 100%; }
+  .filter-sort { flex: 1 1 135px; }
+  .project-filters .filter-clear { margin-left: auto; }
+  .task-filters { display: grid; grid-template-columns: 1fr auto; }
+  .task-filters .filter-search { grid-column: 1 / -1; }
+  .task-filters .filter-field:not(.filter-search) { min-width: 0; }
+  .advanced-trigger { display: block; }
+  .filter-sheet-backdrop {
+    display: block;
+    position: fixed;
+    z-index: 150;
+    inset: 0;
+    background: rgb(0 0 0 / 58%);
+  }
+  .filter-advanced {
+    position: fixed;
+    z-index: 151;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 14px;
+    margin: 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 -12px 36px rgb(0 0 0 / 36%);
+  }
+  .filter-sheet-head { display: flex; align-items: center; justify-content: space-between; }
+  .filter-sheet-head button {
+    display: block;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    color: var(--text);
+    background: var(--ground);
+    font-size: 22px;
+  }
+  .filter-advanced .filter-field { min-width: 0; }
+  .filter-help { max-width: none; }
   .project-row { padding-inline: 14px; }
   .project-row-top { align-items: flex-start; }
   .project-name { min-width: 0; overflow-wrap: anywhere; }
