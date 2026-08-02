@@ -203,6 +203,10 @@ commit（例如新增了 `/api/health` 本身這個端點），單看 `version` 
    - 組裝完成後啟動，資料庫路徑落在 `BOARD_HOME_DIR` 指定的目錄下
    - 輪詢就緒後印出 `/api/health`：`version`、`databasePath`、
      `tools`（16 個，與程式實際註冊的一致）、`startedAt` 均正確回傳
+     （**注意**：`databasePath` 是撰寫本文件當時的回應內容，後續
+     `/api/health` 已收斂為不含資料庫路徑等敏感資訊的最小版本，該欄位
+     現在改由 `/api/diagnostics` 提供，見 README「MCP 工具」的 REST
+     端點表）
 4. 測試完畢後 `kill` 掉該臨時行程、刪除暫存目錄，並確認正式看板
    （8080）的 `/api/projects` 仍正常回應，未受影響
 

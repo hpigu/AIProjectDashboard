@@ -2,8 +2,11 @@
 
 本 repo 是集中式專案看板：一個常駐 Spring Boot 行程在
 `http://127.0.0.1:8080/mcp` 提供 Streamable HTTP MCP，並提供唯讀 REST/SSE
-與 Vue 3 CDN 前端。一個服務管理所有專案；專案由使用者明示名稱，不做目錄或
-git remote 自動偵測。
+與零建置 Vue 3 前端（完全離線，執行檔與字型皆 vendor 進 repo）。一個服務管理
+所有專案；專案由使用者明示名稱，不做目錄或 git remote 自動偵測。監聽位址
+`BOARD_HOST` 預設 `127.0.0.1`，`/mcp` 目前沒有 server-side 認證，不得改綁公開
+位址對外暴露；本 repo 也未提供或驗證任何雲端伺服器部署方式（例如 Oracle
+Cloud）。
 
 ## 必守架構
 
@@ -99,8 +102,10 @@ BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-<role>' ./mvnw test
 
 ## 前端與測試
 
-維持零建置 Vue 3 CDN 與既有 Andon tokens、字體、動畫。不引入 npm/Vite/SFC/
-TypeScript。IN_PROGRESS 與 BLOCKED 顯示 muted、IBM Plex Mono 的 `@assignee`。
+維持零建置 Vue 3（執行檔與字型皆 vendor 進 `static/vendor/`，完全離線可用，
+不連外部 CDN，見 `static/vendor/SOURCES.md`）與既有 Andon tokens、字體、動畫。
+不引入 npm/Vite/SFC/TypeScript。IN_PROGRESS 與 BLOCKED 顯示 muted、IBM Plex
+Mono 的 `@assignee`。
 
 執行 `./mvnw test` 與 `./mvnw clean package`。併發測試必須證明兩個 worker
 同時認領時只有一個取得同一任務，且前置未完成的任務在併發下仍不得被發放。
