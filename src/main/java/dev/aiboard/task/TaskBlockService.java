@@ -1,6 +1,8 @@
 package dev.aiboard.task;
 
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import dev.aiboard.common.BoardException;
 import dev.aiboard.event.BoardEvent;
@@ -147,6 +149,28 @@ public class TaskBlockService {
     @Transactional
     public void clearOpenBlockEvents(Long taskId) {
         taskBlockEventRepository.clearAllOpenForTask(taskId, LocalDateTime.now());
+    }
+
+    /**
+     * TaskService、TaskCompleteService 與 leader reset 都會在各自的狀態變更 transaction
+     * 中同步發布同一種 BoardEvent。直接監聽這個既有事件，可在不把 block repository
+     * 塞進 TaskService 建構子的前提下，讓所有「離開 BLOCKED」路徑一致補齊 audit
+     * timestamp。MANDATORY 保證回填和狀態變更共用同一個 transaction；任一方失敗
+     * 就一起 rollback，不會留下 status 與 audit trail 不一致的資料。
+     */
+    @EventListener(condition = "#event.type == 'task.status_changed'")
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void clearOpenBlockEventsAfterStatusChange(BoardEvent event) {
+        if (!TaskStatus.BLOCKED.name().equals(event.payload().get("from"))
+                || TaskStatus.BLOCKED.name().equals(event.payload().get("to"))) {
+            return;
+        }
+
+        Object rawTaskId = event.payload().get("taskId");
+        if (!(rawTaskId instanceof Number taskId)) {
+            throw new IllegalStateException("task.status_changed 事件缺少有效 taskId");
+        }
+        clearOpenBlockEvents(taskId.longValue());
     }
 
     private BlockReasonType parseReasonType(String raw) {
