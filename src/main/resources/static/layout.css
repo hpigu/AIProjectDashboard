@@ -236,6 +236,127 @@
   cursor: pointer;
 }
 
+.view-switch {
+  display: inline-flex;
+  margin: -6px 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.view-switch button,
+.graph-expand,
+.graph-category-filter button {
+  min-height: 34px;
+  border: 0;
+  color: var(--muted);
+  background: var(--surface);
+  cursor: pointer;
+  font: 11px var(--font-data);
+}
+.view-switch button { padding: 6px 12px; }
+.view-switch button + button { border-left: 1px solid var(--line); }
+.view-switch button.selected,
+.graph-category-filter button.selected { color: var(--text); background: var(--line); }
+
+/* ---- 相依圖 ---- */
+.dependency-view {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.dependency-toolbar {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.dependency-toolbar h3 { margin: 0; font: 16px var(--font-display); }
+.dependency-toolbar p,
+.graph-scope,
+.graph-chain,
+.graph-empty { margin: 5px 0 0; color: var(--muted); font: 11px/1.5 var(--font-data); }
+.graph-chain { color: var(--text); }
+.graph-expand {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--ground);
+  white-space: nowrap;
+}
+.graph-error { padding: 14px; border-left: 3px solid var(--st-blocked); background: var(--ground); }
+.graph-error p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.graph-category-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.graph-category-filter > span { margin-right: 3px; color: var(--muted); font: 11px var(--font-data); }
+.graph-category-filter button { min-height: 28px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; }
+.graph-category-filter .graph-reset { color: var(--text); background: transparent; }
+.dependency-scroll { overflow: auto; padding: 16px 0 4px; }
+.dependency-canvas {
+  position: relative;
+  display: grid;
+  min-width: 100%;
+  isolation: isolate;
+}
+.dependency-edges {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.dependency-edges path { fill: none; stroke: var(--muted); stroke-width: 1.4; opacity: .7; vector-effect: non-scaling-stroke; }
+.dependency-edges marker path { fill: var(--muted); stroke: none; opacity: 1; }
+.dependency-node {
+  z-index: 1;
+  min-width: 0;
+  width: calc(100% - 18px);
+  align-self: center;
+  justify-self: center;
+  display: grid;
+  gap: 4px;
+  padding: 10px 11px;
+  color: var(--text);
+  text-align: left;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 4px;
+  background: var(--ground);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+.dependency-node:hover { border-color: var(--muted); }
+.dependency-node.st-TODO { border-left-color: var(--st-todo); }
+.dependency-node.st-IN_PROGRESS { border-left-color: var(--st-progress); }
+.dependency-node.st-BLOCKED { border-left-color: var(--st-blocked); }
+.dependency-node.st-DONE { border-left-color: var(--st-done); }
+.dependency-node.on-longest-chain { box-shadow: 0 0 0 1px color-mix(in srgb, var(--st-progress) 75%, transparent), 0 2px 8px rgb(0 0 0 / 12%); }
+.dependency-id,
+.dependency-meta { color: var(--muted); font: 10px var(--font-data); }
+.dependency-title { min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.35; }
+.dependency-badge,
+.graph-legend span {
+  justify-self: start;
+  padding: 2px 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font: 10px var(--font-data);
+}
+.claimable-badge { color: var(--st-done); }
+.waiting-badge { color: var(--muted); }
+.longest-badge { color: var(--st-progress); }
+.graph-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+
 .columns {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -662,6 +783,14 @@ body.drawer-open { overflow: hidden; }
   .project-meta { flex: 0 0 auto; flex-direction: column; align-items: flex-end; gap: 2px; }
   .board-header { gap: 10px; }
   .board-title { flex-basis: calc(100% - 90px); overflow-wrap: anywhere; }
+  .view-switch { margin-bottom: 14px; }
+  .dependency-view { padding: 13px; }
+  .dependency-toolbar { align-items: stretch; flex-direction: column; gap: 10px; }
+  .dependency-toolbar .graph-expand { align-self: start; }
+  .dependency-scroll { padding-top: 8px; overflow-x: hidden; }
+  .dependency-canvas.vertical { min-width: 0; }
+  .dependency-canvas.vertical .dependency-node { width: calc(100% - 10px); padding: 8px 9px; }
+  .dependency-canvas.vertical .dependency-title { font-size: 12px; }
   .column-body { max-height: none; overflow-y: visible; }
   .detail-drawer { width: 100%; border-left: 0; padding: 20px 16px 36px; }
   .detail-toolbar { top: -20px; margin: -20px -16px 18px; padding: 12px 16px; }

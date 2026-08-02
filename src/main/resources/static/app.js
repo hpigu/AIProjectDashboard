@@ -198,6 +198,14 @@ const LevelTwo = {
       searchTimer: null,
       advancedOpen: window.matchMedia('(min-width: 701px)').matches,
       boardController: null,
+      viewMode: new URLSearchParams(window.location.search).get('view') === 'dependencies' ? 'dependencies' : 'kanban',
+      graph: null,
+      graphError: null,
+      graphLoading: false,
+      graphController: null,
+      graphExpanded: false,
+      graphHiddenCategories: {},
+      graphVertical: window.matchMedia('(max-width: 700px)').matches,
     };
   },
   computed: {
@@ -224,9 +232,115 @@ const LevelTwo = {
     hasTaskFilters() {
       return this.filters.query || this.filters.category || this.filters.assignee || this.filters.waiting || this.filters.claimable;
     },
+    graphLayout() {
+      if (!this.graph) return null;
+      const allNodes = this.graph.nodes || [];
+      const nodesById = new Map(allNodes.map(node => [node.id, node]));
+      const allEdges = (this.graph.edges || []).filter(edge =>
+        nodesById.has(edge.prerequisiteTaskId) && nodesById.has(edge.taskId));
+      const prerequisites = new Map(allNodes.map(node => [node.id, []]));
+      const downstream = new Map(allNodes.map(node => [node.id, []]));
+      allEdges.forEach(edge => {
+        prerequisites.get(edge.taskId).push(edge.prerequisiteTaskId);
+        downstream.get(edge.prerequisiteTaskId).push(edge.taskId);
+      });
+
+      const matches = (node) => {
+        const query = this.appliedQuery.trim().toLocaleLowerCase();
+        const titleMatches = !query || node.title.toLocaleLowerCase().startsWith(query);
+        const categoryMatches = !this.filters.category || node.category === this.filters.category;
+        const assigneeMatches = !this.filters.assignee
+          || (this.filters.assignee === '__unassigned__' ? !node.assignee : node.assignee === this.filters.assignee);
+        const waiting = prerequisites.get(node.id).some(id => nodesById.get(id).status !== 'DONE');
+        return titleMatches && categoryMatches && assigneeMatches
+          && (!this.filters.waiting || waiting) && (!this.filters.claimable || node.claimable);
+      };
+      const categoryVisible = (node) => !this.graphHiddenCategories[node.category];
+      const filteredNodes = allNodes.filter(node => matches(node) && categoryVisible(node));
+      let selectedIds = new Set(filteredNodes.map(node => node.id));
+
+      // Large boards start with work that can still move, plus its immediate context.
+      // This preserves useful local relationships without turning the first view into a wall of nodes.
+      if (!this.graphExpanded && filteredNodes.length > 24) {
+        const activeNodes = filteredNodes.filter(node => node.status !== 'DONE' || node.claimable);
+        const priorities = activeNodes.length ? activeNodes : filteredNodes;
+        const localIds = new Set(priorities.slice(0, 16).map(node => node.id));
+        priorities.slice(0, 16).forEach(node => {
+          prerequisites.get(node.id).forEach(id => localIds.add(id));
+          downstream.get(node.id).forEach(id => localIds.add(id));
+        });
+        selectedIds = new Set([...localIds].filter(id => {
+          const node = nodesById.get(id);
+          return node && matches(node) && categoryVisible(node);
+        }).slice(0, 24));
+      }
+
+      const nodes = filteredNodes.filter(node => selectedIds.has(node.id));
+      const edges = allEdges.filter(edge => selectedIds.has(edge.prerequisiteTaskId) && selectedIds.has(edge.taskId));
+      const incoming = new Map(nodes.map(node => [node.id, 0]));
+      const outgoing = new Map(nodes.map(node => [node.id, []]));
+      edges.forEach(edge => {
+        incoming.set(edge.taskId, incoming.get(edge.taskId) + 1);
+        outgoing.get(edge.prerequisiteTaskId).push(edge.taskId);
+      });
+      const order = new Map(nodes.map((node, index) => [node.id, index]));
+      const queue = nodes.filter(node => incoming.get(node.id) === 0).sort((a, b) => order.get(a.id) - order.get(b.id));
+      const layerById = new Map(nodes.map(node => [node.id, 0]));
+      const parentById = new Map();
+      const distanceById = new Map(nodes.map(node => [node.id, 1]));
+      for (let index = 0; index < queue.length; index += 1) {
+        const current = queue[index];
+        outgoing.get(current.id).forEach(nextId => {
+          const nextLayer = layerById.get(current.id) + 1;
+          if (nextLayer > layerById.get(nextId)) layerById.set(nextId, nextLayer);
+          const nextDistance = distanceById.get(current.id) + 1;
+          if (nextDistance > distanceById.get(nextId)) {
+            distanceById.set(nextId, nextDistance);
+            parentById.set(nextId, current.id);
+          }
+          incoming.set(nextId, incoming.get(nextId) - 1);
+          if (incoming.get(nextId) === 0) queue.push(nodesById.get(nextId));
+        });
+      }
+
+      const layers = [];
+      nodes.forEach(node => {
+        const layer = layerById.get(node.id) || 0;
+        if (!layers[layer]) layers[layer] = [];
+        layers[layer].push(node);
+      });
+      const maxRows = Math.max(1, ...layers.map(layer => (layer || []).length));
+      const maxLayer = Math.max(0, layers.length - 1);
+      const positioned = [];
+      layers.forEach((layer, layerIndex) => (layer || []).forEach((node, rowIndex) => {
+        positioned.push({ ...node, layer: layerIndex, row: rowIndex,
+          waiting: prerequisites.get(node.id).some(id => nodesById.get(id).status !== 'DONE') });
+      }));
+      const longestEnd = positioned.length ? positioned.reduce((best, node) =>
+        (distanceById.get(node.id) || 1) > (distanceById.get(best.id) || 1) ? node : best, positioned[0]) : null;
+      const longestPath = [];
+      let pathId = longestEnd && longestEnd.id;
+      while (pathId !== undefined && pathId !== null) {
+        longestPath.unshift(pathId);
+        pathId = parentById.get(pathId);
+      }
+      const positionById = new Map(positioned.map(node => [node.id, node]));
+      return {
+        nodes: positioned,
+        edges,
+        layers: Math.max(1, maxLayer + 1),
+        maxRows,
+        longestPath,
+        longestLength: longestPath.length,
+        partial: !this.graphExpanded && filteredNodes.length > nodes.length,
+        totalFiltered: filteredNodes.length,
+        positionById,
+      };
+    },
   },
   created() {
     this.loadBoard();
+    if (this.viewMode === 'dependencies') this.loadGraph();
     this._keyHandler = (e) => {
       if (e.key === 'Escape') {
         if (this.detailTaskId !== null) this.closeDetail();
@@ -243,6 +357,7 @@ const LevelTwo = {
     this._unsubscribe = window.__boardBus.on('task.status_changed', (payload) => {
       if (payload.projectId === this.projectId) {
         this.loadBoard();
+        if (this.graph || this.viewMode === 'dependencies') this.loadGraph();
         if (payload.taskId === this.detailTaskId) this.loadDetail(payload.taskId, true);
         this.highlightedTaskId = payload.taskId;
         setTimeout(() => { this.highlightedTaskId = null; }, 900);
@@ -251,11 +366,13 @@ const LevelTwo = {
     this._unsubscribeTasks = window.__boardBus.on('tasks.created', (payload) => {
       if (payload.projectId === this.projectId) {
         this.loadBoard();
+        if (this.graph || this.viewMode === 'dependencies') this.loadGraph();
         if (this.detailTaskId !== null) this.loadDetail(this.detailTaskId, true);
       }
     });
     this._resizeHandler = () => {
       if (window.matchMedia('(min-width: 701px)').matches) this.advancedOpen = true;
+      this.graphVertical = window.matchMedia('(max-width: 700px)').matches;
     };
     window.addEventListener('resize', this._resizeHandler);
   },
@@ -265,12 +382,20 @@ const LevelTwo = {
     window.removeEventListener('resize', this._resizeHandler);
     if (this.searchTimer) clearTimeout(this.searchTimer);
     if (this.boardController) this.boardController.abort();
+    if (this.graphController) this.graphController.abort();
     document.body.classList.remove('drawer-open');
     if (this._unsubscribe) this._unsubscribe();
     if (this._unsubscribeTasks) this._unsubscribeTasks();
   },
   watch: {
-    projectId() { this.loadBoard(); },
+    projectId() {
+      this.graph = null;
+      this.graphError = null;
+      this.graphExpanded = false;
+      this.graphHiddenCategories = {};
+      this.loadBoard();
+      if (this.viewMode === 'dependencies') this.loadGraph();
+    },
     'filters.query'() {
       this.syncFiltersToUrl();
       if (this.searchTimer) clearTimeout(this.searchTimer);
@@ -292,6 +417,78 @@ const LevelTwo = {
       } catch (e) {
         if (e.name !== 'AbortError') this.error = e.message;
       }
+    },
+    async loadGraph() {
+      if (this.graphController) this.graphController.abort();
+      const controller = new AbortController();
+      this.graphController = controller;
+      this.graphLoading = true;
+      this.graphError = null;
+      try {
+        this.graph = await fetchJson(`/api/projects/${this.projectId}/dependencies`, { signal: controller.signal });
+      } catch (e) {
+        if (e.name !== 'AbortError') this.graphError = e.message;
+      } finally {
+        if (!controller.signal.aborted) this.graphLoading = false;
+      }
+    },
+    setViewMode(mode) {
+      this.viewMode = mode;
+      const url = new URL(window.location.href);
+      if (mode === 'dependencies') url.searchParams.set('view', 'dependencies');
+      else url.searchParams.delete('view');
+      window.history.replaceState(window.history.state, '', url);
+      if (mode === 'dependencies' && !this.graph && !this.graphLoading) this.loadGraph();
+    },
+    toggleGraphCategory(category) {
+      this.graphHiddenCategories = {
+        ...this.graphHiddenCategories,
+        [category]: !this.graphHiddenCategories[category],
+      };
+    },
+    showAllGraphCategories() {
+      this.graphHiddenCategories = {};
+    },
+    graphNodeStyle(node) {
+      return this.graphVertical
+        ? { gridColumn: node.row + 1, gridRow: node.layer + 1 }
+        : { gridColumn: node.layer + 1, gridRow: node.row + 1 };
+    },
+    graphEdgePath(edge) {
+      const layout = this.graphLayout;
+      if (!layout) return '';
+      const from = layout.positionById.get(edge.prerequisiteTaskId);
+      const to = layout.positionById.get(edge.taskId);
+      if (!from || !to) return '';
+      const horizontal = !this.graphVertical;
+      const fromX = horizontal ? (from.layer + .5) * 100 : (from.row + .5) * 100;
+      const fromY = horizontal ? (from.row + .5) * 100 : (from.layer + .5) * 100;
+      const toX = horizontal ? (to.layer + .5) * 100 : (to.row + .5) * 100;
+      const toY = horizontal ? (to.row + .5) * 100 : (to.layer + .5) * 100;
+      return horizontal
+        ? `M ${fromX} ${fromY} C ${(fromX + toX) / 2} ${fromY}, ${(fromX + toX) / 2} ${toY}, ${toX} ${toY}`
+        : `M ${fromX} ${fromY} C ${fromX} ${(fromY + toY) / 2}, ${toX} ${(fromY + toY) / 2}, ${toX} ${toY}`;
+    },
+    graphViewBox() {
+      const layout = this.graphLayout;
+      if (!layout) return '0 0 100 100';
+      const width = this.graphVertical ? layout.maxRows * 100 : layout.layers * 100;
+      const height = this.graphVertical ? layout.layers * 100 : layout.maxRows * 100;
+      return `0 0 ${width} ${height}`;
+    },
+    graphCanvasStyle() {
+      const layout = this.graphLayout;
+      if (!layout) return {};
+      return this.graphVertical
+        ? { gridTemplateColumns: `repeat(${layout.maxRows}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${layout.layers}, 144px)` }
+        : { gridTemplateColumns: `repeat(${layout.layers}, minmax(220px, 1fr))`, gridTemplateRows: `repeat(${layout.maxRows}, 144px)` };
+    },
+    graphWaitingIds(node) {
+      if (!this.graph) return [];
+      const nodesById = new Map(this.graph.nodes.map(item => [item.id, item]));
+      return this.graph.edges
+        .filter(edge => edge.taskId === node.id && nodesById.get(edge.prerequisiteTaskId).status !== 'DONE')
+        .map(edge => edge.prerequisiteTaskId);
     },
     column(status) {
       return this.allTasks.filter(task => task.status === status && this.matchesTaskFilters(task));
@@ -452,9 +649,13 @@ const LevelTwo = {
           @click="$emit('jump', p.id)"
         >⚠ {{ p.name }}</button>
       </div>
+      <div v-if="board" class="view-switch" role="tablist" aria-label="專案檢視方式">
+        <button type="button" role="tab" :aria-selected="viewMode === 'kanban'" :class="{ selected: viewMode === 'kanban' }" @click="setViewMode('kanban')">看板</button>
+        <button type="button" role="tab" :aria-selected="viewMode === 'dependencies'" :class="{ selected: viewMode === 'dependencies' }" @click="setViewMode('dependencies')">相依圖</button>
+      </div>
       <div v-if="error" class="empty-state">{{ error }}</div>
       <div v-else-if="board && totalCount === 0" class="empty-state">這個專案還沒有任務。</div>
-      <div v-else-if="board" class="columns">
+      <div v-else-if="board && viewMode === 'kanban'" class="columns">
         <section class="filter-panel task-filters" aria-label="任務篩選">
           <label class="filter-field filter-search"><span>任務標題前綴</span>
             <input v-model="filters.query" type="search" placeholder="輸入任務標題" autocomplete="off">
@@ -504,6 +705,55 @@ const LevelTwo = {
           </transition-group>
         </div>
       </div>
+      <section v-else-if="board && viewMode === 'dependencies'" class="dependency-view" aria-label="任務相依圖">
+        <div class="dependency-toolbar">
+          <div>
+            <h3>相依關係</h3>
+            <p>箭頭由前置任務指向下游任務。</p>
+          </div>
+          <button v-if="graphLayout && graphLayout.partial" type="button" class="graph-expand" @click="graphExpanded = true">展開完整圖（{{ graphLayout.totalFiltered }}）</button>
+          <button v-else-if="graphExpanded" type="button" class="graph-expand" @click="graphExpanded = false">顯示局部關係</button>
+        </div>
+        <div v-if="graphLoading && !graph" class="empty-state">正在載入相依圖…</div>
+        <div v-else-if="graphError" class="graph-error" role="alert"><p>{{ graphError }}</p><button type="button" class="graph-expand" @click="loadGraph">重新載入</button></div>
+        <template v-else-if="graph && graphLayout">
+          <div class="graph-category-filter" aria-label="依類別顯示或隱藏">
+            <span>類別</span>
+            <button v-for="category in categories" :key="category" type="button" :aria-pressed="!graphHiddenCategories[category]" :class="{ selected: !graphHiddenCategories[category] }" @click="toggleGraphCategory(category)">{{ category }}</button>
+            <button v-if="Object.keys(graphHiddenCategories).some(category => graphHiddenCategories[category])" type="button" class="graph-reset" @click="showAllGraphCategories">全部顯示</button>
+          </div>
+          <p v-if="graphLayout.longestLength > 1" class="graph-chain">最長相依鏈：{{ graphLayout.longestPath.map(id => '#' + id).join(' → ') }}</p>
+          <p v-if="graphLayout.partial" class="graph-scope">目前顯示可進行工作及其直接關係；可展開完整圖。</p>
+          <p v-if="graph.edges.length === 0" class="graph-empty">尚未設定任務相依；以下是所有獨立任務。</p>
+          <p v-if="graphLayout.nodes.length === 0" class="graph-empty">目前的篩選條件或類別設定沒有可顯示的任務。</p>
+          <div v-else class="dependency-scroll">
+            <div class="dependency-canvas" :class="{ vertical: graphVertical }" :style="graphCanvasStyle()">
+              <svg class="dependency-edges" :viewBox="graphViewBox()" preserveAspectRatio="none" aria-hidden="true">
+                <defs><marker id="dependency-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z"></path></marker></defs>
+                <path v-for="edge in graphLayout.edges" :key="edge.prerequisiteTaskId + '-' + edge.taskId" :d="graphEdgePath(edge)" marker-end="url(#dependency-arrow)"></path>
+              </svg>
+              <button
+                v-for="node in graphLayout.nodes"
+                :key="node.id"
+                type="button"
+                class="dependency-node"
+                :class="['st-' + node.status, { claimable: node.claimable, waiting: node.waiting, 'on-longest-chain': graphLayout.longestPath.includes(node.id) }]"
+                :style="graphNodeStyle(node)"
+                @click="openDetail(node.id, $event)"
+                :aria-label="'查看任務 #' + node.id + '：' + node.title"
+              >
+                <span class="dependency-id">#{{ node.id }}</span>
+                <span class="dependency-title">{{ node.title }}</span>
+                <span class="dependency-meta">{{ node.category || '未分類' }} · {{ node.status }}</span>
+                <span v-if="node.claimable" class="dependency-badge claimable-badge">可認領</span>
+                <span v-else-if="node.waiting" class="dependency-badge waiting-badge">等待 {{ graphWaitingIds(node).map(id => '#' + id).join('、') }}</span>
+                <span v-if="graphLayout.longestPath.includes(node.id)" class="dependency-badge longest-badge">最長鏈</span>
+              </button>
+            </div>
+          </div>
+          <div class="graph-legend" aria-label="相依圖圖例"><span class="claimable-badge">可認領</span><span class="waiting-badge">等待前置</span><span class="longest-badge">最長鏈</span></div>
+        </template>
+      </section>
 
       <div
         v-if="detailTaskId !== null"
