@@ -149,6 +149,7 @@ public class TaskEditService {
         }
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
+        projectService.assertActiveForUpdate(task.getProjectId());
         ProjectService.ProjectDto project = projectService.getById(task.getProjectId());
         if ("ARCHIVED".equalsIgnoreCase(project.status())) {
             throw new BoardException("專案「%s」已封存，禁止編輯任務".formatted(project.name()));
