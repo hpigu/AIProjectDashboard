@@ -280,12 +280,15 @@ public class TaskService {
             return ClaimNextTaskResult.projectNotFound(projectService.listProjects(), category.name());
         }
 
+        boolean contentionObserved = false;
         for (int attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt++) {
             List<Task> candidates = taskRepository
                     .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                             project.get().id(), category.name(), TaskStatus.TODO.name());
             if (candidates.isEmpty()) {
-                return ClaimNextTaskResult.noTask(project.get(), category.name());
+                return contentionObserved
+                        ? ClaimNextTaskResult.contended(project.get(), category.name())
+                        : ClaimNextTaskResult.noTask(project.get(), category.name());
             }
 
             // 前置任務尚未 DONE 的候選一律跳過，讓沒有相依的任務可以先做。
@@ -320,9 +323,30 @@ public class TaskService {
                         TaskStatus.IN_PROGRESS.name(), claimed.getUpdatedAt().toString()));
                 return ClaimNextTaskResult.claimed(project.get(), toDto(claimed), category.name(), claimToken);
             }
+            contentionObserved = true;
         }
 
-        return ClaimNextTaskResult.noTask(project.get(), category.name());
+        // 三次 CAS 都輸掉後再讀一次，避免用過期候選推論目前狀態。即使競爭者已把
+        // 唯一候選領走，也必須回 CONTENDED，讓 leader 重新盤點；不可把已觀察到的
+        // 認領競爭誤報成「原本就沒有待辦」。若剩餘 TODO 全被前置卡住，則回傳更精確
+        // 的 BLOCKED_BY_DEPENDENCY。
+        List<Task> remainingCandidates = taskRepository
+                .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
+                        project.get().id(), category.name(), TaskStatus.TODO.name());
+        if (!remainingCandidates.isEmpty()) {
+            Map<Long, List<TaskDto>> waiting = getUnfinishedPrerequisites(
+                    remainingCandidates.stream().map(Task::getId).toList());
+            boolean allBlocked = remainingCandidates.stream()
+                    .allMatch(task -> waiting.containsKey(task.getId()));
+            if (allBlocked) {
+                return ClaimNextTaskResult.allBlocked(project.get(), category.name(),
+                        remainingCandidates.stream()
+                                .map(task -> new BlockedCandidate(toDto(task),
+                                        waiting.getOrDefault(task.getId(), List.of())))
+                                .toList());
+            }
+        }
+        return ClaimNextTaskResult.contended(project.get(), category.name());
     }
 
     /**
@@ -419,32 +443,50 @@ public class TaskService {
     public record BlockedCandidate(TaskDto task, List<TaskDto> waitingFor) {
     }
 
+    public enum ClaimOutcome {
+        CLAIMED,
+        NO_TASK,
+        BLOCKED_BY_DEPENDENCY,
+        CONTENDED,
+        PROJECT_NOT_FOUND
+    }
+
     /**
      * @param claimToken 高熵 token 原文，只有認領成功那一刻回傳這一次；
      *                   DB 只存 hash，這個欄位絕不能被序列化進 log 或存進資料庫。
      */
-    public record ClaimNextTaskResult(ProjectService.ProjectDto project, TaskDto task,
+    public record ClaimNextTaskResult(ClaimOutcome outcome,
+                                      ProjectService.ProjectDto project, TaskDto task,
                                       List<ProjectService.ProjectDto> availableProjects,
                                       String category, List<BlockedCandidate> blockedCandidates,
                                       String claimToken) {
         public static ClaimNextTaskResult claimed(ProjectService.ProjectDto project, TaskDto task,
                                                    String category, String claimToken) {
-            return new ClaimNextTaskResult(project, task, List.of(), category, List.of(), claimToken);
+            return new ClaimNextTaskResult(ClaimOutcome.CLAIMED,
+                    project, task, List.of(), category, List.of(), claimToken);
         }
 
         public static ClaimNextTaskResult noTask(ProjectService.ProjectDto project, String category) {
-            return new ClaimNextTaskResult(project, null, List.of(), category, List.of(), null);
+            return new ClaimNextTaskResult(ClaimOutcome.NO_TASK,
+                    project, null, List.of(), category, List.of(), null);
+        }
+
+        public static ClaimNextTaskResult contended(ProjectService.ProjectDto project, String category) {
+            return new ClaimNextTaskResult(ClaimOutcome.CONTENDED,
+                    project, null, List.of(), category, List.of(), null);
         }
 
         /** 該 category 還有 TODO，但全部都在等前置任務完成。 */
         public static ClaimNextTaskResult allBlocked(ProjectService.ProjectDto project, String category,
                                                       List<BlockedCandidate> blockedCandidates) {
-            return new ClaimNextTaskResult(project, null, List.of(), category, blockedCandidates, null);
+            return new ClaimNextTaskResult(ClaimOutcome.BLOCKED_BY_DEPENDENCY,
+                    project, null, List.of(), category, blockedCandidates, null);
         }
 
         public static ClaimNextTaskResult projectNotFound(
                 List<ProjectService.ProjectDto> availableProjects, String category) {
-            return new ClaimNextTaskResult(null, null, availableProjects, category, List.of(), null);
+            return new ClaimNextTaskResult(ClaimOutcome.PROJECT_NOT_FOUND,
+                    null, null, availableProjects, category, List.of(), null);
         }
 
         public boolean projectFound() {
@@ -452,11 +494,15 @@ public class TaskService {
         }
 
         public boolean claimed() {
-            return task != null;
+            return outcome == ClaimOutcome.CLAIMED;
         }
 
         public boolean blockedByDependency() {
-            return !blockedCandidates.isEmpty();
+            return outcome == ClaimOutcome.BLOCKED_BY_DEPENDENCY;
+        }
+
+        public boolean contended() {
+            return outcome == ClaimOutcome.CONTENDED;
         }
     }
 
