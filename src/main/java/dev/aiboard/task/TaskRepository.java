@@ -55,6 +55,12 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
             + "FROM Task t GROUP BY t.projectId, t.status")
     List<StatusCountProjection> countAllGroupedByProjectAndStatus();
 
+    @Query("SELECT t.projectId AS projectId, t.status AS status, COUNT(t) AS cnt, "
+            + "MAX(t.updatedAt) AS lastActivity "
+            + "FROM Task t WHERE t.projectId IN :projectIds GROUP BY t.projectId, t.status")
+    List<ProjectSummaryCountProjection> countGroupedByProjectIdsAndStatus(
+            @Param("projectIds") List<Long> projectIds);
+
     @Query("SELECT t.projectId AS projectId, MAX(t.updatedAt) AS lastActivity "
             + "FROM Task t GROUP BY t.projectId")
     List<LastActivityProjection> findLastActivityPerProject();
@@ -63,6 +69,10 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
         Long getProjectId();
         String getStatus();
         long getCnt();
+    }
+
+    interface ProjectSummaryCountProjection extends StatusCountProjection {
+        LocalDateTime getLastActivity();
     }
 
     interface LastActivityProjection {
