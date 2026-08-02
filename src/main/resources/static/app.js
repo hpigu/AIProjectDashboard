@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } = Vue;
 
 const STATUS_ORDER = ['DONE', 'IN_PROGRESS', 'BLOCKED', 'TODO'];
 const RAIL_FLASH_CLASS = {
@@ -85,6 +85,10 @@ const LevelTwo = {
       board: null,
       error: null,
       highlightedTaskId: null,
+      detailTaskId: null,
+      detail: null,
+      detailLoading: false,
+      detailError: null,
     };
   },
   computed: {
@@ -102,22 +106,37 @@ const LevelTwo = {
   created() {
     this.loadBoard();
     this._keyHandler = (e) => {
-      if (e.key === 'Escape') this.$emit('back');
+      if (e.key === 'Escape') {
+        if (this.detailTaskId !== null) this.closeDetail();
+        else this.$emit('back');
+      } else if (e.key === 'Tab' && this.detailTaskId !== null) {
+        this.keepFocusInDrawer(e);
+      }
     };
     window.addEventListener('keydown', this._keyHandler);
+    this._popstateHandler = () => {
+      if (this.detailTaskId !== null) this.dismissDetail();
+    };
+    window.addEventListener('popstate', this._popstateHandler);
     this._unsubscribe = window.__boardBus.on('task.status_changed', (payload) => {
       if (payload.projectId === this.projectId) {
         this.loadBoard();
+        if (payload.taskId === this.detailTaskId) this.loadDetail(payload.taskId, true);
         this.highlightedTaskId = payload.taskId;
         setTimeout(() => { this.highlightedTaskId = null; }, 900);
       }
     });
     this._unsubscribeTasks = window.__boardBus.on('tasks.created', (payload) => {
-      if (payload.projectId === this.projectId) this.loadBoard();
+      if (payload.projectId === this.projectId) {
+        this.loadBoard();
+        if (this.detailTaskId !== null) this.loadDetail(this.detailTaskId, true);
+      }
     });
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this._keyHandler);
+    window.removeEventListener('popstate', this._popstateHandler);
+    document.body.classList.remove('drawer-open');
     if (this._unsubscribe) this._unsubscribe();
     if (this._unsubscribeTasks) this._unsubscribeTasks();
   },
@@ -135,6 +154,87 @@ const LevelTwo = {
     },
     column(status) {
       return this.board ? (this.board.columns[status] || []) : [];
+    },
+    async openDetail(taskId, event) {
+      const switching = this.detailTaskId !== null;
+      if (!switching) {
+        this._detailOpener = event && event.currentTarget;
+        window.history.pushState({ taskDrawer: true, taskId }, '');
+      }
+      this.detailTaskId = taskId;
+      this.detail = null;
+      this.detailError = null;
+      document.body.classList.add('drawer-open');
+      if (switching && window.history.state && window.history.state.taskDrawer) {
+        window.history.replaceState({ taskDrawer: true, taskId }, '');
+      }
+      await nextTick();
+      if (this.$refs.detailClose) this.$refs.detailClose.focus();
+      this.loadDetail(taskId);
+    },
+    async loadDetail(taskId, preserveScroll = false) {
+      if (taskId === null || taskId === undefined) return;
+      const panel = this.$refs.detailPanel;
+      const previousScroll = preserveScroll && panel ? panel.scrollTop : 0;
+      if (!preserveScroll) this.detailLoading = true;
+      this.detailError = null;
+      try {
+        const payload = await fetchJson(`/api/projects/${this.projectId}/tasks/${taskId}`);
+        if (this.detailTaskId !== taskId) return;
+        this.detail = payload;
+        await nextTick();
+        if (preserveScroll && this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = previousScroll;
+      } catch (e) {
+        if (this.detailTaskId === taskId) this.detailError = e.message;
+      } finally {
+        if (this.detailTaskId === taskId) this.detailLoading = false;
+      }
+    },
+    closeDetail() {
+      if (window.history.state && window.history.state.taskDrawer) window.history.back();
+      else this.dismissDetail();
+    },
+    dismissDetail() {
+      const opener = this._detailOpener;
+      this.detailTaskId = null;
+      this.detail = null;
+      this.detailError = null;
+      this.detailLoading = false;
+      document.body.classList.remove('drawer-open');
+      nextTick(() => {
+        if (opener && document.contains(opener)) opener.focus();
+        this._detailOpener = null;
+      });
+    },
+    keepFocusInDrawer(event) {
+      const panel = this.$refs.detailPanel;
+      if (!panel) return;
+      const focusable = Array.from(panel.querySelectorAll(
+        'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+      ));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
+    formatDate(value) {
+      if (!value) return '—';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return new Intl.DateTimeFormat('zh-TW', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      }).format(date);
+    },
+    statusChange(entry) {
+      if (!entry.fromStatus) return `建立為 ${entry.toStatus}`;
+      return `${entry.fromStatus} → ${entry.toStatus}`;
     },
   },
   template: `
@@ -157,11 +257,14 @@ const LevelTwo = {
           <div class="column-head">{{ status }}</div>
           <div class="column-count">{{ column(status).length }}</div>
           <transition-group name="task" tag="div" class="column-body">
-            <div
+            <button
               v-for="task in column(status)"
               :key="task.id"
+              type="button"
               class="task-card"
               :class="['st-' + status, { highlight: task.id === highlightedTaskId }]"
+              @click="openDetail(task.id, $event)"
+              :aria-label="'查看任務 #' + task.id + '：' + task.title"
             >
               <div class="task-id">#{{ task.id }}</div>
               <div>{{ task.title }}</div>
@@ -175,10 +278,107 @@ const LevelTwo = {
                 class="task-waiting"
                 :title="'前置任務完成前不會被認領'"
               >等待 {{ task.waitingFor.map(id => '#' + id).join('、') }}</div>
-            </div>
+            </button>
           </transition-group>
         </div>
       </div>
+
+      <div
+        v-if="detailTaskId !== null"
+        class="detail-backdrop"
+        @mousedown.self="closeDetail"
+        aria-hidden="true"
+      ></div>
+      <aside
+        v-if="detailTaskId !== null"
+        ref="detailPanel"
+        class="detail-drawer"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="'task-detail-title-' + detailTaskId"
+      >
+        <div class="detail-toolbar">
+          <span class="detail-kicker">TASK #{{ detailTaskId }}</span>
+          <button ref="detailClose" type="button" class="detail-close" @click="closeDetail" aria-label="關閉任務詳情">×</button>
+        </div>
+
+        <div v-if="detailLoading" class="detail-skeleton" aria-live="polite" aria-label="正在載入任務詳情">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div v-else-if="detailError" class="detail-error" role="alert">
+          <p>{{ detailError }}</p>
+          <button type="button" class="detail-retry" @click="loadDetail(detailTaskId)">重新載入</button>
+        </div>
+        <div v-else-if="detail" class="detail-content">
+          <div class="detail-heading">
+            <span class="detail-status" :class="'st-' + detail.status">{{ detail.status }}</span>
+            <span class="detail-category">{{ detail.category }}</span>
+          </div>
+          <h2 :id="'task-detail-title-' + detail.id" class="detail-title">{{ detail.title }}</h2>
+
+          <dl class="detail-meta">
+            <div><dt>ASSIGNEE</dt><dd>{{ detail.assignee ? '@' + detail.assignee : '—' }}</dd></div>
+            <div><dt>CLAIMED</dt><dd>{{ formatDate(detail.claimedAt) }}</dd></div>
+            <div><dt>UPDATED</dt><dd>{{ formatDate(detail.updatedAt) }}</dd></div>
+            <div><dt>SORT</dt><dd>{{ detail.sortOrder }}</dd></div>
+          </dl>
+
+          <section class="detail-section">
+            <h3>說明</h3>
+            <p v-if="detail.description" class="detail-description">{{ detail.description }}</p>
+            <p v-else class="detail-empty">沒有說明</p>
+          </section>
+
+          <section v-if="detail.currentBlocker" class="detail-section detail-blocker">
+            <h3>目前阻塞</h3>
+            <p class="detail-description">{{ detail.currentBlocker.detail }}</p>
+            <div class="detail-note">{{ detail.currentBlocker.reasonType }} · @{{ detail.currentBlocker.blockedBy }} · {{ formatDate(detail.currentBlocker.blockedAt) }}</div>
+          </section>
+
+          <section class="detail-section">
+            <h3>前置任務 <span>{{ detail.prerequisites.length }}</span></h3>
+            <div v-if="detail.prerequisites.length" class="related-list">
+              <button v-for="item in detail.prerequisites" :key="item.id" type="button" @click="openDetail(item.id, $event)">
+                <span>#{{ item.id }} · {{ item.title }}</span><small>{{ item.status }}</small>
+              </button>
+            </div>
+            <p v-else class="detail-empty">無</p>
+          </section>
+
+          <section class="detail-section">
+            <h3>下游任務 <span>{{ detail.downstreamTasks.length }}</span></h3>
+            <div v-if="detail.downstreamTasks.length" class="related-list">
+              <button v-for="item in detail.downstreamTasks" :key="item.id" type="button" @click="openDetail(item.id, $event)">
+                <span>#{{ item.id }} · {{ item.title }}</span><small>{{ item.status }}</small>
+              </button>
+            </div>
+            <p v-else class="detail-empty">無</p>
+          </section>
+
+          <section v-if="detail.completionEvidence" class="detail-section">
+            <h3>完成證據</h3>
+            <p class="detail-description">{{ detail.completionEvidence.summary }}</p>
+            <div v-if="detail.completionEvidence.commitRef" class="detail-note">COMMIT {{ detail.completionEvidence.commitRef }}</div>
+            <ul v-if="detail.completionEvidence.verifications.length" class="verification-list">
+              <li v-for="item in detail.completionEvidence.verifications" :key="item.id">
+                <strong>{{ item.name }}</strong><span>{{ item.result }}</span><p v-if="item.detail">{{ item.detail }}</p>
+              </li>
+            </ul>
+          </section>
+
+          <section class="detail-section">
+            <h3>完整歷史 <span>{{ detail.history.length }}</span></h3>
+            <ol v-if="detail.history.length" class="history-timeline">
+              <li v-for="entry in detail.history" :key="entry.id">
+                <time>{{ formatDate(entry.createdAt) }}</time>
+                <strong>{{ statusChange(entry) }}</strong>
+                <p v-if="entry.note">{{ entry.note }}</p>
+              </li>
+            </ol>
+            <p v-else class="detail-empty">沒有歷史紀錄</p>
+          </section>
+        </div>
+      </aside>
     </div>
   `,
 };
