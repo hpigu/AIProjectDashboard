@@ -302,9 +302,8 @@ Claude Code 這層薄殼有兩種取得方式：
   `~/.codex/AGENTS.md` 再維護一份完整角色規則，以免與看板及 plugin 漂移。
 
 `reviewer` 不認領 category 任務，因此 `RoleSeeder` 只初始化上述五個 worker
-角色，不會另外建立 reviewer 的資料庫指引。兩套 plugin 的 reviewer 薄殼本身
-包含完整唯讀審查 fallback；若使用者另外用 `upsert_role` 建立 reviewer 指引，
-它才會優先採用看板版本。
+角色。兩套 plugin 的 reviewer 薄殼本身包含不可覆蓋的唯讀審查邊界；看板中若有
+使用者另外用 `upsert_role` 建立的 reviewer 指引，它只能補充唯讀審查準則。
 
 每個角色只認領自己類別的任務、只碰自己職責內的檔案；同一類別同時只有一個角色
 在跑，且**做完一件就提交、回報、結束，不自行 DONE 或認領下一件**。Leader 將
