@@ -1,5 +1,7 @@
 package dev.aiboard.web;
 
+import dev.aiboard.task.DependencyGraphService;
+import dev.aiboard.task.DependencyCycleException;
 import dev.aiboard.task.TaskService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,6 +29,9 @@ class BoardControllerTest {
 
     @MockBean
     private TaskService taskService;
+
+    @MockBean
+    private DependencyGraphService dependencyGraphService;
 
     @Test
     void getBoard_allFourColumnKeysPresentEvenWhenEmpty() throws Exception {
@@ -66,5 +71,34 @@ class BoardControllerTest {
                 .andExpect(jsonPath("$[0].toStatus").value("TODO"))
                 .andExpect(jsonPath("$[1].fromStatus").value("TODO"))
                 .andExpect(jsonPath("$[1].toStatus").value("IN_PROGRESS"));
+    }
+
+    @Test
+    void getDependencies_returnsNodesAndPrerequisiteToTaskEdges() throws Exception {
+        when(dependencyGraphService.getDependencyGraph(12L)).thenReturn(
+                new DependencyGraphService.DependencyGraph(
+                        List.of(new DependencyGraphService.DependencyNode(
+                                5L, "建立 schema", "BACKEND", "DONE", "backend-dev", false),
+                                new DependencyGraphService.DependencyNode(
+                                        6L, "實作 API", "BACKEND", "TODO", null, true)),
+                        List.of(new DependencyGraphService.DependencyEdge(5L, 6L))));
+
+        mockMvc.perform(get("/api/projects/12/dependencies"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nodes[0].id").value(5))
+                .andExpect(jsonPath("$.nodes[1].claimable").value(true))
+                .andExpect(jsonPath("$.edges[0].prerequisiteTaskId").value(5))
+                .andExpect(jsonPath("$.edges[0].taskId").value(6));
+    }
+
+    @Test
+    void getDependencies_whenStoredGraphContainsCycle_returnsDiagnosticConflict() throws Exception {
+        when(dependencyGraphService.getDependencyGraph(12L))
+                .thenThrow(new DependencyCycleException("偵測到任務相依循環：#5 -> #6 -> #5"));
+
+        mockMvc.perform(get("/api/projects/12/dependencies"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("DEPENDENCY_CYCLE"))
+                .andExpect(jsonPath("$.message").value("偵測到任務相依循環：#5 -> #6 -> #5"));
     }
 }
