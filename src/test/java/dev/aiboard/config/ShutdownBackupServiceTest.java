@@ -10,6 +10,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -143,19 +144,62 @@ class ShutdownBackupServiceTest {
         }
     }
 
+    @Test
+    void shutdownBackupRemovesTmpAndKeepsAtLeastSevenOldBackups() throws Exception {
+        Path dbDir = tempDir.resolve("retention-db");
+        Path backupDir = tempDir.resolve("retention-backups");
+        Files.createDirectories(dbDir);
+        Files.createDirectories(backupDir);
+
+        FileTime old = FileTime.from(java.time.Instant.now().minusSeconds(31L * 86400));
+        for (int i = 0; i < 10; i++) {
+            Path backup = backupDir.resolve("board-shutdown-20240101T0000"
+                    + String.format("%02d", i) + "Z-UTC.zip");
+            Files.writeString(backup, "old-" + i);
+            Files.setLastModifiedTime(backup, old);
+        }
+        Files.writeString(backupDir.resolve("board-shutdown-20231231T235959Z-UTC.zip.tmp"), "partial");
+
+        String dbUrl = "jdbc:h2:file:" + dbDir.resolve("board") + ";DB_CLOSE_ON_EXIT=FALSE";
+        context = buildContext(dbUrl, backupDir, 30, 7);
+        context.close();
+
+        assertThat(listShutdownBackups(backupDir))
+                .as("超過 30 天的 shutdown 備份清理後仍至少保留最新七份")
+                .hasSize(7);
+        try (Stream<Path> stream = Files.list(backupDir)) {
+            assertThat(stream.filter(path -> path.getFileName().toString().endsWith(".tmp")))
+                    .as("成功備份不得留下可被誤認為成品的 tmp")
+                    .isEmpty();
+        }
+    }
+
     private ConfigurableApplicationContext buildContext(String dbUrl, Path backupDir) {
+        return buildContext(dbUrl, backupDir, 30, 7);
+    }
+
+    private ConfigurableApplicationContext buildContext(String dbUrl, Path backupDir,
+                                                         int retentionDays, int retentionMinCount) {
         SpringApplicationBuilder builder = new SpringApplicationBuilder(DashboardApplication.class)
                 .web(org.springframework.boot.WebApplicationType.SERVLET);
-        ConfigurableApplicationContext ctx = builder.application().run(buildArgs(dbUrl, backupDir));
+        ConfigurableApplicationContext ctx = builder.application().run(
+                buildArgs(dbUrl, backupDir, retentionDays, retentionMinCount));
         return ctx;
     }
 
     private String[] buildArgs(String dbUrl, Path backupDir) {
+        return buildArgs(dbUrl, backupDir, 30, 7);
+    }
+
+    private String[] buildArgs(String dbUrl, Path backupDir,
+                               int retentionDays, int retentionMinCount) {
         List<String> args = new ArrayList<>();
         args.add("--spring.datasource.url=" + dbUrl);
         args.add("--spring.datasource.username=sa");
         args.add("--spring.datasource.password=");
         args.add("--board.backup.dir=" + backupDir);
+        args.add("--board.backup.retention-days=" + retentionDays);
+        args.add("--board.backup.retention-min-count=" + retentionMinCount);
         args.add("--server.port=0");
         args.add("--logging.file.name=" + tempDir.resolve("test.log"));
         return args.toArray(new String[0]);
