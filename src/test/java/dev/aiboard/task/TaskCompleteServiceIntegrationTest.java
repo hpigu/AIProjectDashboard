@@ -161,13 +161,16 @@ class TaskCompleteServiceIntegrationTest {
     }
 
     @Test
-    void updateTaskStatus_stillWorksDirectlyToDone_backwardCompatible() {
-        // #114 不修改既有 update_task_status 的相容行為：#112 已確立的 per-task
-        // token 策略維持不變，通用工具仍可用於已認領任務的既有流程，
-        // 只是不會產生結構化完成證據（那是 complete_task 額外提供的能力）。
+    void updateTaskStatus_legacyTaskWithoutRequireEvidence_stillWorksDirectlyToDone() {
+        // #131 之後：update_task_status 對 require_evidence=false 的任務
+        // （模擬 migration 前既有資料，行為完全不變）行為與 #114 之前一致——
+        // #112 已確立的 per-task token 策略維持不變，通用工具仍可用於已認領
+        // 任務的既有流程，只是不會產生結構化完成證據
+        // （那是 complete_task 額外提供的能力）。
         var project = projectService.createProject("相容性測試", null).project();
-        taskService.createTasks(project.id(), List.of(
-                new TaskService.TaskInput("任務", null, "BACKEND")));
+        Task legacyTask = new Task(project.id(), "任務", null, "BACKEND", 0);
+        legacyTask.setRequireEvidence(false);
+        taskRepository.save(legacyTask);
         var claimed = taskService.claimNextTask("相容性測試", "BACKEND", "backend-dev");
         Long taskId = claimed.task().id();
 
@@ -176,5 +179,60 @@ class TaskCompleteServiceIntegrationTest {
         assertThat(result.changed()).isTrue();
         assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("DONE");
         assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
+    }
+
+    @Test
+    void updateTaskStatus_newlyCreatedTaskRequiringEvidence_isRejectedDirectlyToDone() {
+        // #131 方案 B1：createTasks 建立的任務一律 require_evidence=true，
+        // 不可再用 update_task_status 直接轉 DONE，必須改用 complete_task。
+        var project = projectService.createProject("evidence 強制測試", null).project();
+        taskService.createTasks(project.id(), List.of(
+                new TaskService.TaskInput("任務", null, "BACKEND")));
+        var claimed = taskService.claimNextTask("evidence 強制測試", "BACKEND", "backend-dev");
+        Long taskId = claimed.task().id();
+
+        assertThatThrownBy(() -> taskService.updateStatus(taskId, "DONE", null, claimed.claimToken()))
+                .isInstanceOf(dev.aiboard.common.BoardException.class)
+                .hasMessageContaining("complete_task");
+
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
+    }
+
+    @Test
+    void completeTask_worksForBothRequireEvidenceTrueAndFalseTasks() {
+        // #131：complete_task 是不受 require_evidence 影響的完成路徑——不論任務
+        // 是新建（require_evidence=true）還是既有資料（require_evidence=false），
+        // 都必須能透過 complete_task 正常完成。
+        var project = projectService.createProject("complete_task 相容 evidence 測試", null).project();
+
+        // 新建任務：require_evidence=true。
+        taskService.createTasks(project.id(), List.of(
+                new TaskService.TaskInput("新建任務", null, "BACKEND")));
+        var claimedNew = taskService.claimNextTask(
+                "complete_task 相容 evidence 測試", "BACKEND", "backend-dev");
+        Long newTaskId = claimedNew.task().id();
+
+        var resultForNew = taskCompleteService.completeTask(newTaskId, claimedNew.claimToken(),
+                "完成新建任務",
+                List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
+                null, null, null);
+        assertThat(resultForNew.task().status()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(newTaskId).orElseThrow().getStatus()).isEqualTo("DONE");
+
+        // 既有資料任務：require_evidence=false（繞過 createTasks）。
+        Task legacyTask = new Task(project.id(), "既有資料任務", null, "BACKEND", 1);
+        legacyTask.setRequireEvidence(false);
+        taskRepository.save(legacyTask);
+        var claimedLegacy = taskService.claimNextTask(
+                "complete_task 相容 evidence 測試", "BACKEND", "backend-dev");
+        Long legacyTaskId = claimedLegacy.task().id();
+
+        var resultForLegacy = taskCompleteService.completeTask(legacyTaskId, claimedLegacy.claimToken(),
+                "完成既有資料任務",
+                List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
+                null, null, null);
+        assertThat(resultForLegacy.task().status()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(legacyTaskId).orElseThrow().getStatus()).isEqualTo("DONE");
     }
 }

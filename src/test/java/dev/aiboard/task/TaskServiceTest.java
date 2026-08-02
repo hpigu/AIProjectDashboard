@@ -447,6 +447,60 @@ class TaskServiceTest {
     }
 
     @Test
+    void createTasks_alwaysSetsRequireEvidenceTrueRegardlessOfInput() {
+        // #131 方案 B1：createTasks 建立的任務一律 require_evidence=true，
+        // 這是系統策略決定，TaskInput 不開放參數覆寫這個欄位。
+        Long projectId = 12L;
+        doNothing().when(projectService).assertExistsForUpdate(projectId);
+        when(taskRepository.findMaxSortOrder(projectId)).thenReturn(-1);
+        ArgumentCaptor<Task> taskCaptor = ArgumentCaptor.forClass(Task.class);
+        when(taskRepository.save(taskCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        taskService.createTasks(projectId, List.of(
+                new TaskService.TaskInput("任務 A", null, "BACKEND"),
+                new TaskService.TaskInput("任務 B", null, "TEST")));
+
+        assertThat(taskCaptor.getAllValues())
+                .allSatisfy(task -> assertThat(task.isRequireEvidence()).isTrue());
+    }
+
+    @Test
+    void updateStatus_whenRequireEvidenceTrue_rejectsDirectTransitionToDoneAndPointsToCompleteTask() {
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "任務", "BACKEND", 0, "backend-dev");
+        task.setRequireEvidence(true);
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "DONE", null))
+                .isInstanceOf(BoardException.class)
+                .hasMessageContaining("complete_task");
+
+        assertThat(task.getStatus()).isEqualTo("IN_PROGRESS");
+        verify(taskLogRepository, never()).save(any(TaskLog.class));
+        verify(eventPublisher, never()).publish(any(BoardEvent.class));
+    }
+
+    @Test
+    void updateStatus_whenRequireEvidenceFalse_behavesExactlyLikeLegacyDataAndAllowsDirectDone() {
+        // require_evidence=false 模擬既有資料（migration 後預設值），行為必須
+        // 與 #131 之前完全一致：updateStatus 仍可直接把任務轉 DONE。
+        Long projectId = 12L;
+        Task task = claimedTask(projectId, 4L, "既有資料任務", "BACKEND", 0, "backend-dev");
+        // requireEvidence 預設就是 false，這裡明講出來以強調測試意圖。
+        task.setRequireEvidence(false);
+        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
+
+        TaskService.TaskStatusChangeResult result = taskService.updateStatus(4L, "DONE", null);
+
+        assertThat(result.changed()).isTrue();
+        assertThat(task.getStatus()).isEqualTo("DONE");
+    }
+
+    @Test
     void createTasks_whenDependencyIndexOutOfRange_throws() {
         doNothing().when(projectService).assertExistsForUpdate(12L);
 
