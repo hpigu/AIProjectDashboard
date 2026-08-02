@@ -12,6 +12,15 @@ public interface TaskDependencyRepository extends JpaRepository<TaskDependency, 
 
     List<TaskDependency> findByTaskIdIn(List<Long> taskIds);
 
+    /**
+     * 讀取單一專案完整的規劃相依關係。由 task_id 所屬專案界定範圍，讓相依圖可以
+     * 用一筆查詢取得所有 edge，而不是逐一查每個 task 的前置。
+     */
+    @Query("SELECT d FROM TaskDependency d, Task t "
+            + "WHERE d.taskId = t.id AND t.projectId = :projectId "
+            + "ORDER BY d.dependsOnTaskId ASC, d.taskId ASC")
+    List<TaskDependency> findByProjectId(@Param("projectId") Long projectId);
+
     void deleteByTaskId(Long taskId);
 
     /**
