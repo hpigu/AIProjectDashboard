@@ -66,6 +66,8 @@ public class ShutdownBackupService {
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneId.of("UTC"));
     private static final Pattern SHUTDOWN_BACKUP_NAME =
             Pattern.compile("^board-shutdown-\\d{8}T\\d{6}Z-.+\\.zip$");
+    private static final Pattern SHUTDOWN_BACKUP_TMP_NAME =
+            Pattern.compile("^board-shutdown-\\d{8}T\\d{6}Z-.+\\.zip\\.tmp$");
 
     private final DataSource dataSource;
     private final String datasourceUrl;
@@ -118,14 +120,11 @@ public class ShutdownBackupService {
         Path target = backupDir.resolve(fileName);
         Path tmpTarget = backupDir.resolve(fileName + ".tmp");
 
-        // 若前一次留下未清乾淨的同名 tmp（理論上時間戳精度到秒，極端情況下
-        // 短時間內重複呼叫才可能撞名），先清掉避免 BACKUP TO 對既有檔案的
-        // 行為不明確。
-        try {
-            Files.deleteIfExists(tmpTarget);
-        } catch (IOException ignored) {
-            // 刪不掉就讓後面的 BACKUP TO 自然失敗並記錄，不特別處理。
-        }
+        // 清理先前中斷（例如 kill -9、崩潰）留下的殘留 tmp，不限於本次同名
+        // 檔案：只要符合 shutdown tmp 的命名慣例、且不是本次即將寫入的
+        // tmpTarget，都視為過期殘留一併清掉，避免永久累積。任何清理失敗
+        // 都不影響後續備份流程。
+        cleanupStaleTmpFiles(tmpTarget);
 
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
@@ -192,6 +191,47 @@ public class ShutdownBackupService {
             tzAbbr = "local";
         }
         return "board-shutdown-" + tsUtc + "-" + tzAbbr + ".zip";
+    }
+
+    /**
+     * 清理 {@code board-shutdown-*.zip.tmp} 殘留檔案。
+     *
+     * <p>正常流程中 tmp 檔案會在 {@code BACKUP TO} 完成後被原子改名為正式
+     * 備份（{@link #performShutdownBackup()} 內的 {@code Files.move}），只有
+     * 在上一次關閉流程被異常中斷（例如 {@code kill -9}、JVM crash）、來不及
+     * 改名或清掉自己建立的 tmp 時，才會留下這類殘留檔案。這裡在每次關閉前
+     * 備份流程開始時掃描一次，安全地清掉「符合命名慣例」且「不是本次正在
+     * 使用中」的 tmp 檔案。
+     *
+     * <p>刻意只比對嚴格的命名 pattern（{@link #SHUTDOWN_BACKUP_TMP_NAME}），
+     * 不會動到正式備份（{@code .zip}，無 {@code .tmp} 後綴）或目錄中其他
+     * 非本服務產生的檔案，避免誤刪。任何 I/O 例外都只記錄、不拋出，符合
+     * 「備份失敗不阻塞 shutdown」的要求。
+     */
+    private void cleanupStaleTmpFiles(Path currentTmpTarget) {
+        if (!Files.isDirectory(backupDir)) {
+            return;
+        }
+
+        List<Path> staleTmpFiles = new ArrayList<>();
+        try (Stream<Path> stream = Files.list(backupDir)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(p -> SHUTDOWN_BACKUP_TMP_NAME.matcher(p.getFileName().toString()).matches())
+                    .filter(p -> !p.equals(currentTmpTarget))
+                    .forEach(staleTmpFiles::add);
+        } catch (IOException ex) {
+            log.warn("[shutdown-backup] 掃描殘留 tmp 檔案時列出備份目錄失敗，略過清理：{}", backupDir, ex);
+            return;
+        }
+
+        for (Path stale : staleTmpFiles) {
+            try {
+                Files.delete(stale);
+                log.info("[shutdown-backup] 已清除前次中斷遺留的殘留 tmp 檔案：{}", stale);
+            } catch (IOException ex) {
+                log.warn("[shutdown-backup] 清除殘留 tmp 檔案失敗，略過：{}", stale, ex);
+            }
+        }
     }
 
     private boolean isEmptyOrUnreadable(Path path) {
