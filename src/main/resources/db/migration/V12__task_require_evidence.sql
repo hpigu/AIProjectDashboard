@@ -1,0 +1,14 @@
+-- #131 是否強制 complete_task 取代通用轉 DONE：方案 B1。
+--
+-- require_evidence 標記「這筆任務完成時是否必須經過 complete_task（結構化完成
+-- 證據）」。只對新任務生效，不回填既有資料：
+-- - 部署前既有、由舊流程建立/認領的任務，遷移後這個欄位一律是 FALSE，
+--   update_task_status 仍可直接把它們轉 DONE，行為完全不變。
+-- - 遷移之後由 create_tasks 建立的新任務，一律設為 TRUE（由應用層的
+--   TaskService.createTasks 決定，這裡的 DEFAULT FALSE 只是既有資料與未來
+--   任何未經應用層邏輯插入資料時的保守預設值）。
+--
+-- 這個相容策略與 #112 的 claim_token_hash per-task 判斷同一種模式：由該筆任務
+-- 自己的欄位值決定是否套用新規則，不是全域開關，避免讓正式看板上大量既有
+-- 無 token 的 IN_PROGRESS/BLOCKED 任務因為規則變嚴而卡死。
+ALTER TABLE task ADD COLUMN require_evidence BOOLEAN NOT NULL DEFAULT FALSE;

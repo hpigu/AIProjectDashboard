@@ -47,6 +47,15 @@ public class Task {
     private String claimTokenHash;
 
     /**
+     * #131 方案 B1：這筆任務完成時是否必須經由 complete_task 產生結構化完成
+     * 證據。只在建立當下由 {@link TaskService#createTasks} 決定（一律 true），
+     * 之後不可再變更；既有資料遷移後維持 FALSE，update_task_status 對它們的
+     * 行為不受影響，與 claimTokenHash 是否為 NULL 屬於同一種 per-task 相容模式。
+     */
+    @Column(name = "require_evidence", nullable = false)
+    private boolean requireEvidence = false;
+
+    /**
      * 目前有效的 BLOCKED 事件（指向 task_block_event.id）；只有 BLOCKED 狀態會非
      * NULL。離開 BLOCKED 時清空這個指標，但該筆事件本身在 task_block_event 永久
      * 保留、只補上 clearedAt，供歷史追溯。
@@ -121,6 +130,15 @@ public class Task {
 
     public void setClaimTokenHash(String claimTokenHash) {
         this.claimTokenHash = claimTokenHash;
+    }
+
+    public boolean isRequireEvidence() {
+        return requireEvidence;
+    }
+
+    /** 只在建立任務當下由 {@link TaskService#createTasks} 呼叫一次，之後不可變更。 */
+    public void setRequireEvidence(boolean requireEvidence) {
+        this.requireEvidence = requireEvidence;
     }
 
     public Long getCurrentBlockEventId() {
