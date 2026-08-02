@@ -20,9 +20,27 @@ public interface TaskDependencyRepository extends JpaRepository<TaskDependency, 
             + "ORDER BY d.taskId ASC, t.id ASC")
     List<UnfinishedPrerequisite> findUnfinishedPrerequisites(@Param("taskIds") List<Long> taskIds);
 
+    @Query("SELECT t.id AS id, t.title AS title, t.status AS status, t.category AS category, "
+            + "t.assignee AS assignee FROM TaskDependency d, Task t "
+            + "WHERE d.dependsOnTaskId = t.id AND d.taskId = :taskId ORDER BY t.id ASC")
+    List<RelatedTaskProjection> findPrerequisites(@Param("taskId") Long taskId);
+
+    @Query("SELECT t.id AS id, t.title AS title, t.status AS status, t.category AS category, "
+            + "t.assignee AS assignee FROM TaskDependency d, Task t "
+            + "WHERE d.taskId = t.id AND d.dependsOnTaskId = :taskId ORDER BY t.id ASC")
+    List<RelatedTaskProjection> findDownstreamTasks(@Param("taskId") Long taskId);
+
     interface UnfinishedPrerequisite {
         Long getTaskId();
 
         Task getPrerequisite();
+    }
+
+    interface RelatedTaskProjection {
+        Long getId();
+        String getTitle();
+        String getStatus();
+        String getCategory();
+        String getAssignee();
     }
 }
