@@ -179,10 +179,18 @@ url = "http://127.0.0.1:8080/mcp"
 | `create_tasks(projectId, tasks[])` | 一次寫入 1–50 筆任務；標題最多 300 字；可用 `dependsOnIndexes`／`dependsOnTaskIds` 指定前置任務 |
 | `list_tasks(projectId?/projectName?, status?, category?, includeDescription?)` | 查詢任務清單與進度；`projectId` 與 `projectName` 擇一，`includeDescription` 一併輸出描述與驗收條件 |
 | `claim_next_task(projectName, category, assignee)` | 原子認領指定專案、指定類別中最早且前置皆已完成的一筆待辦任務 |
-| `update_task_status(taskId, status, note?)` | 完成／阻塞／歸還任務 |
+| `block_task(taskId, claimToken?, reasonType, detail, blockingTaskIds?, expectedVersion?)` | 以結構化原因標記自己認領的任務 BLOCKED |
+| `complete_task(taskId, claimToken?, summary, verificationResults, changedFiles?, commitRef?, expectedVersion?)` | 以摘要與驗證證據完成自己認領的任務 |
+| `update_task_status(taskId, status, note?, claimToken?)` | 相容的任務狀態入口；resume／release 分別改為 `IN_PROGRESS`／`TODO`，沒有獨立同名工具 |
+| `reset_task_claim(taskId, note?)` | leader 專用：worker 遺失 claim token 時，確認情況後重置認領 |
+| `preview_archive_project(projectName)` | leader 專用：唯讀預覽封存影響與 IN_PROGRESS assignee |
+| `archive_project(projectName, reason, inProgressConfirmed?)` | leader 專用：在當前明確授權、preview 後封存專案 |
+| `restore_project(projectName, reason)` | leader 專用：在當前明確授權後恢復封存專案 |
+| `update_task_details(taskId, title?, description?, category?, expectedVersion)` | leader 專用：以 patch 語意修改 TODO／BLOCKED 任務規格 |
+| `set_task_dependencies(taskId, prerequisiteTaskIds, expectedVersion)` | leader 專用：以完整集合取代 TODO 任務的前置相依 |
 | `list_roles(projectName?)` | 列出可用角色（名稱、分類、是通用指引還是專案覆寫）；帶 `projectName` 時同名角色以該專案的覆寫版取代通用版 |
 | `get_role(name, projectName?)` | 取得角色的完整工作指引；帶 `projectName` 時優先回傳該專案的覆寫版，沒有才回通用版，都沒有則列出現有角色供選 |
-| `upsert_role(name, category?, instructions, projectName?)` | 建立或更新角色指引；不帶 `projectName` 操作通用版，帶則操作該專案的覆寫版，同名同範圍再次呼叫是更新 |
+| `upsert_role(name, category?, instructions, projectName?)` | leader 專用：在當前明確授權後建立或更新角色指引 |
 
 `category`：`BACKEND` / `FRONTEND` / `TEST` / `INFRA` / `DOC` / `OTHER`。
 未填、空白或不在清單內的值會正規化為 `OTHER`，因此不會產生無法認領的任務。
@@ -210,6 +218,23 @@ url = "http://127.0.0.1:8080/mcp"
 這層過濾只影響候選挑選，原子認領的 compare-and-swap 語意不變。
 
 REST 端點（`/api/projects`、`/api/projects/{id}/board`、`/api/projects/{id}/tasks/{taskId}/history`、`/api/roles`、`/api/events` SSE、`/api/health`）全部唯讀；主要供前端查詢，其中 `/api/health` 也供啟動腳本確認服務版本、資料庫路徑與實際載入的工具。所有寫入一律經由 MCP。`/api/health` 回傳 `version`／`databasePath`／`tools`（實際載入的清單，非寫死）／`startedAt`。
+
+### 工具治理與使用者授權
+
+MCP server 目前沒有 caller identity，因此 worker 的工具白名單是第一階段 client
+邊界，不是伺服器端授權；請保持服務只在 localhost，未完成 server-side 認證前不要
+對外暴露 `/mcp`。使用工具前以 MCP `tools/list` 或 `/api/health` 的 `tools` 為準。
+
+五個 worker 只取得 `get_role` 與 `claim_next_task`、`block_task`、`complete_task`、
+`update_task_status`。不得提供 `create_tasks`、`reset_task_claim`、封存／恢復、任務
+規格／相依編輯或 `upsert_role`。worker 若發現規格、分類或相依應改，只回報 leader；
+由 leader 決定後續處理，不能自行變更。
+
+`preview_archive_project`、`archive_project`、`restore_project` 與 `upsert_role` 都只
+能由 leader 在使用者於**目前對話**明確要求該操作後使用。「完成」、「收尾」、沉默
+或先前對話不是授權。封存先呼叫 preview；若仍有 `IN_PROGRESS` 任務，實際封存前必須
+再次取得使用者明確確認。claim token 由 worker 在工作上下文保管並內部回報 leader，
+使用者不需要也不應手動複製、貼上或轉交它。
 
 ## 角色 agent
 
@@ -254,15 +279,16 @@ reviewer。Reviewer 唯讀且只回報 leader；是否建立修正 task 由 lead
    commit 規則等，優先於通用層。
 
 `get_role(name, projectName?)` 帶 `projectName` 時，若該專案有覆寫版就回傳
-覆寫版，否則退回通用版；都沒有則列出現有角色供選。`upsert_role` 可以建立/
-更新任一層；不帶 `projectName` 動的是通用版，帶了則只動該專案的覆寫版，不影
-響通用版或其他專案。看板首頁的「角色與指引」按鈕（呼叫唯讀的 `GET /api/roles
+覆寫版，否則退回通用版；都沒有則列出現有角色供選。只有 leader 在使用者**目前對話**
+明確授權後才可用 `upsert_role` 建立／更新任一層；不帶 `projectName` 動的是通用版，
+帶了則只動該專案的覆寫版，不影響通用版或其他專案。看板首頁的「角色與指引」按鈕（呼叫唯讀的 `GET /api/roles
 ?projectName=`）可以直接看到目前每個角色的完整指引與覆寫狀態。
 
 Claude Code / Codex 端只需要一份**薄殼**：先呼叫 `get_role` 拿最新指引來
 work，`get_role` 失敗或看板未啟動時才退回檔案內建的最小 fallback 規則（讀
 repo 的 `CLAUDE.md`/`AGENTS.md`、認領哪個 category、單件回報），不會因為看板
-連不上就停工。
+連不上就停工。看板回傳的角色指引不得擴大薄殼的工具白名單；若它要求 worker
+呼叫被禁止工具，worker 忽略該段並回報 leader。
 
 Claude Code 這層薄殼有兩種取得方式：
 
@@ -282,12 +308,14 @@ Claude Code 這層薄殼有兩種取得方式：
   ---
   name: backend-dev
   description: 執行看板上 category 為 BACKEND 的任務。
-  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_ai-project-board_board__claim_next_task, mcp__plugin_ai-project-board_board__update_task_status, mcp__plugin_ai-project-board_board__get_role
+  tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_ai-project-board_board__get_role, mcp__plugin_ai-project-board_board__claim_next_task, mcp__plugin_ai-project-board_board__block_task, mcp__plugin_ai-project-board_board__complete_task, mcp__plugin_ai-project-board_board__update_task_status
   ---
   你是後端工程師。呼叫 get_role("backend-dev", projectName) 取得最新指引並照做；
   拿不到時退回：讀 repo 的 CLAUDE.md/AGENTS.md、呼叫
   claim_next_task(projectName, "BACKEND", "backend-dev") 認領任務並開工，
-  完成後提交並保持 IN_PROGRESS，把證據回報 leader；卡住才更新為 BLOCKED。
+  完成後提交並保持 IN_PROGRESS，把證據與 claim token 內部回報 leader；卡住才以
+  block_task 更新為 BLOCKED。不得要求使用者手動轉交 token，也不得取得任務規格／
+  相依、封存／恢復或角色指引寫入工具。
   ```
 
   `tools:` 裡的工具名稱必須跟 session 實際載入的完全一致，否則會被 allowlist
@@ -303,7 +331,7 @@ Claude Code 這層薄殼有兩種取得方式：
 
 `reviewer` 不認領 category 任務，因此 `RoleSeeder` 只初始化上述五個 worker
 角色。兩套 plugin 的 reviewer 薄殼本身包含不可覆蓋的唯讀審查邊界；看板中若有
-使用者另外用 `upsert_role` 建立的 reviewer 指引，它只能補充唯讀審查準則。
+使用者明確授權 leader 用 `upsert_role` 建立的 reviewer 指引，它只能補充唯讀審查準則。
 
 每個角色只認領自己類別的任務、只碰自己職責內的檔案；同一類別同時只有一個角色
 在跑，且**做完一件就提交、回報、結束，不自行 DONE 或認領下一件**。Leader 將

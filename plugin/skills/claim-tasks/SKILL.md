@@ -8,6 +8,29 @@ description: 從 AI 專案看板認領並執行指定專案的任務。當使用
 主 session 擔任 leader，只直接處理明確指定給 leader 的 OTHER；五個 worker
 角色必須交給對應 agent。不要讓 leader 假扮 worker，也不要讓 agent 自行連續認領。
 
+## 工具治理與授權邊界
+
+以下是目前 server 實際註冊的任務生命週期名稱：`claim_next_task`、`block_task`、
+`complete_task`、`update_task_status`。沒有獨立的 `resume_task` 或 `release_task`；
+兩者皆由 `update_task_status` 處理（分別轉為 `IN_PROGRESS` 與 `TODO`）。
+
+派給五個 worker 時，只提供 `get_role` 與上述四個生命週期工具；不要提供
+`create_tasks`、`reset_task_claim`、`preview_archive_project`、`archive_project`、
+`restore_project`、`update_task_details`、`set_task_dependencies` 或 `upsert_role`。
+worker 發現任務規格、分類或前置相依需要調整時，只回報事實、風險與建議，由 leader
+處理；不可自行改規格或相依。`reset_task_claim` 也是 leader 處理遺失 token 的例外
+復原工具，worker 不得用它繞過 token 驗證。
+
+這是 client 工具白名單的第一階段邊界，不是 server-side 授權：MCP server 目前沒有
+caller identity，任何能連上 `/mcp` 的 client 都可能呼叫其獲得的工具。服務必須維持
+localhost；在有 server-side 身分驗證前，不得將 MCP 對外暴露。
+
+`preview_archive_project`、`archive_project`、`restore_project`、`upsert_role` 只由
+leader 在使用者**目前對話中明確要求該項操作**後呼叫；「完成」、「收尾」、沉默或
+先前對話都不是授權。封存先做 preview；若 preview 有 `IN_PROGRESS`，封存前還要再
+取得一次明確確認。leader 不得要求使用者手動複製 claim token：worker 在工作上下文
+保留它，只在內部回報給 leader，且不得寫入檔案、commit 或 task log。
+
 ## 1. 確認專案與規則
 
 從使用者訊息取得完整 `projectName`。取不到就詢問；不得從 cwd、資料夾或
@@ -21,7 +44,7 @@ list_tasks(projectName=<名稱>, includeDescription=true)
 
 記錄本次 batch manifest：啟動時納入的 task IDs、基準 commit 與後續新增項目。
 
-- 納入：初始 IDs、QA 發現的 production bug、使用者核准的修正、必要前置、
+- 納入：初始 IDs、QA 回報且 leader 建立的 production bug、使用者核准的修正、必要前置、
   reviewer 的必修 task。
 - 不自動納入執行途中出現的不相關 task；詢問要放本批或下一批。
 - 全部 DONE 也不得自行封存專案；封存只接受使用者當前明確指示。
@@ -85,7 +108,8 @@ Claude Code 優先直接叫用 plugin 提供的具名 agent。若執行環境無
 - 先呼叫 `get_role` 並遵守 repo 指引與角色邊界。
 - 驗證、commit、回報 changed files／commit／測試結果／完成摘要。
 - 完成時保持 `IN_PROGRESS`，不要自行標 `DONE`；若工具回傳 claim token，僅在回報
-  leader 時傳遞，不寫入檔案、commit、task_log 或 application log。
+  leader 時傳遞，不寫入檔案、commit、task_log 或 application log，也不要要求使用者
+  手動複製或轉交。
 
 ## 5. Agent 回報與 leader 表面驗收
 
@@ -101,8 +125,8 @@ Agent 完成修改、驗證與 commit 後結束。Leader 只做表面 gate：
 新 task；語意衝突則暫停相關 merge／下游並詢問使用者。無關工作繼續。
 
 通過後由 leader 執行 `git merge --no-ff` 將 task branch 合併到 `dev`。只有 merge
-成功後才用 server 當下支援的完成工具將 task 標成 `DONE`；有 `complete_task` 時提交
-agent 回報的摘要與驗證證據。下游只在此時解鎖。
+成功後才以 `complete_task` 將 task 標成 `DONE`，並提交 agent 內部回報的 claim token、
+摘要與驗證證據。下游只在此時解鎖。
 
 合併後確認 worktree 乾淨再移除 worktree，task branch 保留到整批進入 `main`。
 

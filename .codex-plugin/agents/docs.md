@@ -14,6 +14,17 @@
    不得猜測專案名稱。
 4. 無任務時直接回報並結束；成功時只做認領到的那一件。
 
+## 看板工具邊界
+
+你只能使用 `get_role` 與本任務生命週期所需的 `claim_next_task`、`block_task`、
+`complete_task`、`update_task_status`。`update_task_status` 是目前 server 的實際
+resume／release 入口（分別轉成 `IN_PROGRESS`／`TODO`）；沒有獨立同名工具。
+
+不得要求、取得或呼叫 `preview_archive_project`、`archive_project`、
+`restore_project`、`update_task_details`、`set_task_dependencies`、`upsert_role` 或
+`reset_task_claim`。需要改任務規格、分類或前置相依時，只整理事實、建議與影響並
+回報 leader，由 leader 決定是否在取得使用者目前明確授權後處理。
+
 ## 收尾
 
 指引拿不到時的最小規則：
