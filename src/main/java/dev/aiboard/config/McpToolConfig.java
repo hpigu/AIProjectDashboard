@@ -8,6 +8,7 @@ import dev.aiboard.mcp.ProjectBoardTools;
 import dev.aiboard.mcp.RoleTools;
 import dev.aiboard.mcp.TaskBlockTools;
 import dev.aiboard.mcp.TaskCompleteTools;
+import dev.aiboard.mcp.TaskEditTools;
 
 @Configuration
 public class McpToolConfig {
@@ -17,9 +18,11 @@ public class McpToolConfig {
     public ToolCallbackProvider projectBoardToolCallbackProvider(ProjectBoardTools projectBoardTools,
                                                                   RoleTools roleTools,
                                                                   TaskBlockTools taskBlockTools,
-                                                                  TaskCompleteTools taskCompleteTools) {
+                                                                  TaskCompleteTools taskCompleteTools,
+                                                                  TaskEditTools taskEditTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(projectBoardTools, roleTools, taskBlockTools, taskCompleteTools)
+                .toolObjects(projectBoardTools, roleTools, taskBlockTools, taskCompleteTools,
+                        taskEditTools)
                 .build();
     }
 }

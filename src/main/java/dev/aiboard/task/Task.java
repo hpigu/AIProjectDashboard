@@ -144,6 +144,25 @@ public class Task {
         return version;
     }
 
+    /** Leader 編輯任務規格時使用；狀態與輸入限制由 TaskEditService 統一驗證。 */
+    public void updateDetails(String title, String description, String category) {
+        if (title != null) {
+            this.title = title;
+        }
+        if (description != null) {
+            this.description = description;
+        }
+        if (category != null) {
+            this.category = category;
+        }
+        touch();
+    }
+
+    /** 相依集合本身不在 Task entity 上，仍需 touch 以提供同一筆任務的 optimistic lock。 */
+    public void touch() {
+        this.updatedAt = LocalDateTime.now();
+    }
+
     public void changeStatus(TaskStatus newStatus) {
         this.status = newStatus.name();
         if (newStatus == TaskStatus.TODO) {

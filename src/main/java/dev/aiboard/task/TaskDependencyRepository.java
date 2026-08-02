@@ -8,6 +8,12 @@ import java.util.List;
 
 public interface TaskDependencyRepository extends JpaRepository<TaskDependency, Long> {
 
+    List<TaskDependency> findByTaskIdOrderByDependsOnTaskIdAsc(Long taskId);
+
+    List<TaskDependency> findByTaskIdIn(List<Long> taskIds);
+
+    void deleteByTaskId(Long taskId);
+
     /**
      * 一次查出這批任務各自還在等哪些尚未 DONE 的前置任務。
      * 沒有未完成前置的任務不會出現在結果中，因此空結果代表全部可認領。
