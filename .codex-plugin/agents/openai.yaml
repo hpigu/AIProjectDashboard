@@ -1,4 +1,4 @@
 interface:
   display_name: "AI Project Board"
-  short_description: "認領/更新看板任務、依角色取得工作指引"
-  default_prompt: "認領 AgentDashboard 的任務，依角色指引完成工作並回報。"
+  short_description: "以角色鎖、task branch 與 dev 整合執行看板任務"
+  default_prompt: "認領 AgentDashboard 的任務，由 leader 依角色與相依關係派工。"

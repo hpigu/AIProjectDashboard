@@ -46,8 +46,17 @@ TODO 的 assignee/claimed_at 必為 NULL，IN_PROGRESS 必有認領者，BLOCKED
 
 ## 分派模式
 
-主 session 擔任 leader：盤點 → 依相依決定波次 → 每個角色每次只派一件 →
-agent 完成即回報結束 → leader 驗收後再派下一件。角色 agent 不自行循序認領。
+主 session 擔任 leader，使用事件驅動排程而非同步波次。BACKEND、FRONTEND、TEST、
+INFRA、DOC 各有一把 live-agent 鎖：同角色同時最多一個 agent，每個 agent 只認領
+一件，完成提交與驗證後保持 IN_PROGRESS、回報 leader 並結束，不自行標 DONE 或
+認領下一件。
+
+每筆任務從長期 `dev` 建立獨立 `task/<task-id>-<role>` branch/worktree。Leader
+表面驗收通過後以 `--no-ff` 合併 task branch 到 `dev`，成功後才將任務標 DONE；
+相依任務此時才解鎖。任一 agent 結束就重新盤點並填滿空閒角色，不等待其他角色。
+整個 batch 全部完成且無 unresolved BLOCKED 後，既有 reviewer 唯讀審查完整
+`main...dev`；reviewer 只回報，是否建立修正 task 由 leader 決定。Reviewer 無必修
+後才由 leader 以 `--no-ff` 合併 `dev` 到 `main`，不自動 push、部署或重啟服務。
 
 ## 開發用埠號與資料庫（必讀）
 
@@ -88,8 +97,8 @@ TypeScript。IN_PROGRESS 與 BLOCKED 顯示 muted、IBM Plex Mono 的 `@assignee
   也不會重複匯入。要把新版指引推到既有看板必須呼叫 `upsert_role`，改
   `RoleSeeder` 裡的常數只影響「還沒有該角色的全新看板」。
 
-`plugin/agents/*.md`、`.codex-plugin/agents/*.md`（或手動安裝時的
-`~/.claude/agents/*.md`、`~/.codex/AGENTS.md`）這層是 client 專用的**薄殼**：
+`plugin/agents/*.md`、`.codex-plugin/agents/*.md`（或 Claude 手動安裝時的
+`~/.claude/agents/*.md`）這層是 client 專用的**薄殼**：
 先呼叫 `get_role` 取得看板上的最新指引並照做；只有在 `get_role` 失敗或看板
 未啟動時，才退回檔案內建的最小 fallback 規則（讀 repo 的
 `CLAUDE.md`/`AGENTS.md`、呼叫對應 category 的 `claim_next_task`、單件回報不
