@@ -73,11 +73,29 @@ Worker 負責：
 - 回報摘要、changed files、commit、驗證結果，以及 claim token（若工具有提供）。
 - 保持 `IN_PROGRESS` 並結束；卡住才標 `BLOCKED`。
 
+Worker 只取得 `get_role`、`claim_next_task`、`block_task`、`complete_task` 與
+`update_task_status`。目前沒有獨立 `resume_task`／`release_task`：兩者都透過
+`update_task_status` 改為 `IN_PROGRESS`／`TODO`。claim token 在 worker 的工作上下文
+保留並內部傳給 leader，不能寫入檔案、commit 或 task log，使用者也不需要手動複製。
+
+Worker 不取得 `create_tasks`、`reset_task_claim`、`preview_archive_project`、
+`archive_project`、`restore_project`、`update_task_details`、`set_task_dependencies` 或
+`upsert_role`。發現任務規格、分類或前置相依需要調整時，只回報 leader；不得自己改。
+
 Leader 負責：
 
 - 檢查修改範圍、commit、驗證證據與 worktree 狀態。
 - 合併 task branch 到 `dev`。
-- 合併成功後使用當下 server 支援的完成工具標記 `DONE`。
+- 合併成功後以 `complete_task` 標記 `DONE`。
+
+Leader 以 worker 內部回報的 token、摘要與驗證證據呼叫 `complete_task`。僅在使用者
+於**目前對話**明確要求時，leader 才能呼叫 `preview_archive_project`、
+`archive_project`、`restore_project` 或 `upsert_role`；「完成」、「收尾」、沉默和
+先前對話都不算授權。封存一律先 preview，preview 有 `IN_PROGRESS` 時，封存前再向
+使用者取得一次明確確認。
+
+MCP server 沒有 caller identity，因此上述白名單只是 Claude/Codex 的第一階段 client
+邊界，不是 server-side 存取控制。服務必須維持 localhost，直到有 server-side 認證。
 
 這個順序避免「看板已 DONE、下游已開始，但程式碼尚未進入 `dev`」的競態。
 
