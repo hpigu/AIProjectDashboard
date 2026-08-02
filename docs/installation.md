@@ -175,8 +175,9 @@ leader 流程應保持一致；更新其中一份時需同步檢查另一份。
 
 `reviewer` 是 leader 驗收階段直接呼叫的唯讀角色，不認領 category 任務，因而
 不在 `RoleSeeder` 初始化的五個 worker 角色內。Claude Code 與 Codex plugin 的
-reviewer 薄殼都含完整 fallback；除非使用者另用 `upsert_role` 建立 reviewer
-指引，否則 `get_role("reviewer", projectName)` 找不到時會直接依薄殼工作。
+reviewer 薄殼都含完整 fallback，且「不修改、不建 task、不認領、不分派、不合併、
+只回報 leader」是不可被資料庫 role 覆蓋的硬邊界。看板若另有 reviewer 指引，
+只能補充唯讀審查準則；找不到時則直接依薄殼工作。
 
 ### 版本號無法區分同版本號跨多次 commit 的新舊 build
 
