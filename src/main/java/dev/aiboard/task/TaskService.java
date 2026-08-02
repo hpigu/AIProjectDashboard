@@ -72,6 +72,9 @@ public class TaskService {
             TaskCategory category = TaskCategory.fromStringOrOther(input.category());
             Task task = new Task(projectId, input.title().trim(), input.description(),
                     category.name(), startSortOrder + i);
+            // #131 方案 B1：新建任務一律要求走 complete_task 產生結構化完成證據，
+            // 由系統策略決定、不開放呼叫端覆寫；既有任務遷移後維持 FALSE 不受影響。
+            task.setRequireEvidence(true);
             Task saved = taskRepository.save(task);
             taskLogRepository.save(new TaskLog(saved.getId(), null, TaskStatus.TODO.name(), null));
             createdIds.add(saved.getId());
@@ -153,6 +156,16 @@ public class TaskService {
         if (!current.canTransitionTo(target)) {
             throw new BoardException(
                     "不合法的狀態轉移：#%d 目前是 %s，無法轉移至 %s".formatted(taskId, current, target));
+        }
+
+        // #131 方案 B1：require_evidence 為 true 的任務（一律是遷移後新建立的
+        // 任務）不能用通用的 update_task_status 直接轉 DONE，必須改用
+        // complete_task 留下結構化完成證據。既有資料（require_evidence 為
+        // false）不受影響，行為與之前完全相同。
+        if (target == TaskStatus.DONE && task.isRequireEvidence()) {
+            throw new BoardException("任務 #" + taskId
+                    + " 要求完成證據，請改用 complete_task（需附上 summary 與"
+                    + " verificationResults），不能用 update_task_status 直接轉 DONE");
         }
 
         if (target == TaskStatus.IN_PROGRESS
