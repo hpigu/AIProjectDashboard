@@ -120,6 +120,22 @@ class ProjectQueryTest {
         assertThat(summaries).hasSize(2);
     }
 
+    @Test
+    void listSummaries_prefixFilterEscapesLikeMetacharactersAndUsesOneBatchAggregate() {
+        Project matching = new Project("A_B release", null);
+        setId(matching, 8L);
+        when(projectRepository.findByNormalizedNamePrefixAndStatus("a\\_b", "ACTIVE"))
+                .thenReturn(List.of(matching));
+        when(taskRepository.countGroupedByProjectIdsAndStatus(List.of(8L))).thenReturn(List.of());
+
+        List<ProjectQuery.ProjectSummary> summaries = projectQuery.listSummaries(
+                " A_B ", "ACTIVE", null, "NAME");
+
+        assertThat(summaries).extracting(ProjectQuery.ProjectSummary::id).containsExactly(8L);
+        verify(projectRepository).findByNormalizedNamePrefixAndStatus("a\\_b", "ACTIVE");
+        verify(taskRepository, times(1)).countGroupedByProjectIdsAndStatus(List.of(8L));
+    }
+
     private static void setId(Project project, Long id) {
         try {
             var field = Project.class.getDeclaredField("id");
