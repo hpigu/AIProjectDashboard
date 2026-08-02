@@ -2,6 +2,8 @@ package dev.aiboard.health;
 
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +26,8 @@ import java.util.List;
  */
 @Service
 public class ReadinessService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReadinessService.class);
 
     private final DataSource dataSource;
     private final Flyway flyway;
@@ -53,7 +57,8 @@ public class ReadinessService {
                     ? CheckResult.ok("database")
                     : CheckResult.fail("database", "連線取得但驗證未通過");
         } catch (SQLException ex) {
-            return CheckResult.fail("database", "無法取得資料庫連線：" + ex.getMessage());
+            log.warn("readiness 檢查失敗：無法取得資料庫連線", ex);
+            return CheckResult.fail("database", "無法取得資料庫連線，詳情請查閱伺服器日誌");
         }
     }
 
