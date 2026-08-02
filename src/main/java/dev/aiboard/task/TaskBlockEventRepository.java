@@ -12,6 +12,16 @@ public interface TaskBlockEventRepository extends JpaRepository<TaskBlockEvent, 
 
     List<TaskBlockEvent> findByTaskIdOrderByIdAsc(Long taskId);
 
+    @Query("SELECT e.id AS eventId, e.reasonType AS reasonType, e.detail AS detail, "
+            + "e.blockedBy AS blockedBy, e.blockedAt AS blockedAt, e.clearedAt AS clearedAt, "
+            + "blocking.id AS blockingTaskId, blocking.title AS blockingTaskTitle, "
+            + "blocking.status AS blockingTaskStatus "
+            + "FROM TaskBlockEvent e "
+            + "LEFT JOIN TaskBlockDependency d ON d.blockEventId = e.id "
+            + "LEFT JOIN Task blocking ON blocking.id = d.blockingTaskId "
+            + "WHERE e.id = :eventId ORDER BY d.id ASC")
+    List<CurrentBlockerProjection> findCurrentBlocker(@Param("eventId") Long eventId);
+
     /**
      * 任務離開 BLOCKED（不論是透過 block_task 之外的既有 update_task_status resume，
      * 或其他任何轉移）時呼叫，把該任務尚未 clear 的事件補上 clearedAt。
@@ -29,4 +39,16 @@ public interface TaskBlockEventRepository extends JpaRepository<TaskBlockEvent, 
     @Query("UPDATE TaskBlockEvent e SET e.clearedAt = :clearedAt "
             + "WHERE e.taskId = :taskId AND e.clearedAt IS NULL")
     int clearAllOpenForTask(@Param("taskId") Long taskId, @Param("clearedAt") LocalDateTime clearedAt);
+
+    interface CurrentBlockerProjection {
+        Long getEventId();
+        String getReasonType();
+        String getDetail();
+        String getBlockedBy();
+        LocalDateTime getBlockedAt();
+        LocalDateTime getClearedAt();
+        Long getBlockingTaskId();
+        String getBlockingTaskTitle();
+        String getBlockingTaskStatus();
+    }
 }

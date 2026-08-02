@@ -18,6 +18,15 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     List<Task> findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
             Long projectId, String category, String status);
 
+    @Query("SELECT t.id AS id, t.projectId AS projectId, t.title AS title, "
+            + "t.description AS description, t.status AS status, t.category AS category, "
+            + "t.sortOrder AS sortOrder, t.assignee AS assignee, t.claimedAt AS claimedAt, "
+            + "t.createdAt AS createdAt, t.updatedAt AS updatedAt, t.version AS version, "
+            + "t.currentBlockEventId AS currentBlockEventId "
+            + "FROM Task t WHERE t.projectId = :projectId AND t.id = :taskId")
+    Optional<TaskDetailProjection> findDetailByProjectIdAndId(
+            @Param("projectId") Long projectId, @Param("taskId") Long taskId);
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Task t SET t.status = 'IN_PROGRESS', t.assignee = :assignee, "
             + "t.claimedAt = :claimedAt, t.claimTokenHash = :claimTokenHash, "
@@ -59,5 +68,21 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     interface LastActivityProjection {
         Long getProjectId();
         LocalDateTime getLastActivity();
+    }
+
+    interface TaskDetailProjection {
+        Long getId();
+        Long getProjectId();
+        String getTitle();
+        String getDescription();
+        String getStatus();
+        String getCategory();
+        Integer getSortOrder();
+        String getAssignee();
+        LocalDateTime getClaimedAt();
+        LocalDateTime getCreatedAt();
+        LocalDateTime getUpdatedAt();
+        Long getVersion();
+        Long getCurrentBlockEventId();
     }
 }
