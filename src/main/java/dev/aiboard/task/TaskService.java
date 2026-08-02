@@ -59,6 +59,7 @@ public class TaskService {
         }
         // Serialize sort-order allocation per project.
         projectService.assertExistsForUpdate(projectId);
+        projectService.assertActiveForUpdate(projectId);
 
         int startSortOrder = taskRepository.findMaxSortOrder(projectId) + 1;
 
@@ -146,6 +147,7 @@ public class TaskService {
         TaskStatus target = parseStatus(targetStatusRaw);
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
+        projectService.assertActiveForUpdate(task.getProjectId());
         TaskStatus current = parseStatus(task.getStatus());
 
         if (!current.canTransitionTo(target)) {
@@ -202,6 +204,7 @@ public class TaskService {
     public TaskStatusChangeResult resetClaimAsLeader(Long taskId, String note) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
+        projectService.assertActiveForUpdate(task.getProjectId());
         TaskStatus current = parseStatus(task.getStatus());
 
         if (current == TaskStatus.DONE) {
@@ -279,6 +282,7 @@ public class TaskService {
         if (project.isEmpty()) {
             return ClaimNextTaskResult.projectNotFound(projectService.listProjects(), category.name());
         }
+        projectService.assertActiveForUpdate(project.get().id());
 
         boolean contentionObserved = false;
         for (int attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt++) {

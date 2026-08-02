@@ -111,6 +111,7 @@ public class RoleService {
             }
             project = found.get();
             projectId = project.id();
+            projectService.assertActiveForUpdate(projectId);
         }
 
         Optional<Role> existing = projectId == null
@@ -151,6 +152,7 @@ public class RoleService {
             }
             project = found.get();
             projectId = project.id();
+            projectService.assertActiveForUpdate(projectId);
         }
 
         Optional<Role> existing = projectId == null

@@ -76,6 +76,16 @@ public class Project {
         return updatedAt;
     }
 
+    public void archive() {
+        this.status = "ARCHIVED";
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public void restore() {
+        this.status = "ACTIVE";
+        this.updatedAt = LocalDateTime.now();
+    }
+
     public static String normalizeName(String name) {
         return name.trim().toLowerCase(Locale.ROOT);
     }

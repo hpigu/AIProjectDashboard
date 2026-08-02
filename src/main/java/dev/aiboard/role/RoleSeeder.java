@@ -60,6 +60,10 @@ public class RoleSeeder implements ApplicationRunner {
             log.info("看板上尚無「{}」專案，略過專屬指引匯入", AGENT_DASHBOARD_PROJECT_NAME);
             return;
         }
+        if (!"ACTIVE".equals(project.get().status())) {
+            log.info("「{}」已封存，略過專屬指引匯入以維持唯讀狀態", AGENT_DASHBOARD_PROJECT_NAME);
+            return;
+        }
         int created = seedAll(AGENT_DASHBOARD_SEEDS, AGENT_DASHBOARD_PROJECT_NAME);
         log.info("AgentDashboard 專屬角色指引：新建 {} 筆，已存在保留 {} 筆",
                 created, AGENT_DASHBOARD_SEEDS.size() - created);
