@@ -119,6 +119,8 @@ public class ProjectBoardTools {
             description = "認領指定專案、指定類別中最優先的一個待辦任務。此工具會原子性地"
                     + "把任務標記為 IN_PROGRESS 並記錄認領者，因此不會有兩個 agent"
                     + "拿到同一個任務。認領成功後立即開始執行該任務。"
+                    + "結果會區分已認領、真正無待辦、被前置相依卡住、認領競爭與找不到專案；"
+                    + "遇到認領競爭時 leader 應重新讀取看板後再決定是否派工。"
                     + "回應會附上一組 claimToken，只會顯示這一次，請自行保管；"
                     + "之後對這筆任務呼叫 update_task_status（block／complete／resume／release）"
                     + "都要帶上它，遺失的話不要自己想辦法繞過，回報 leader 走專用的重置流程。")
@@ -139,6 +141,11 @@ public class ProjectBoardTools {
                             result.blockedCandidates().stream()
                                     .map(ProjectBoardTools::describeBlockedCandidate)
                                     .collect(Collectors.joining("\n")));
+        }
+        if (result.contended()) {
+            return ("%s 認領時發生競爭，三次 compare-and-swap 均未取得任務。"
+                    + "請 leader 重新讀取看板，再決定是否重新派工。")
+                    .formatted(result.category());
         }
         if (!result.claimed()) {
             return "%s 目前沒有待辦任務。".formatted(result.category());
