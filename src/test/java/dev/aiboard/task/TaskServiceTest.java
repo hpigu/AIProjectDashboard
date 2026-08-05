@@ -275,6 +275,13 @@ class TaskServiceTest {
         ArgumentCaptor<BoardEvent> eventCaptor = ArgumentCaptor.forClass(BoardEvent.class);
         verify(eventPublisher).publish(eventCaptor.capture());
         assertThat(eventCaptor.getValue().type()).isEqualTo("task.status_changed");
+        // 標題是給訂閱端組人看得懂的訊息用的（前端的 BLOCKED 桌面通知只有 taskId
+        // 的話，內容會是「任務 #4 → BLOCKED」，讀了還是得回看板查是哪一個任務）。
+        assertThat(eventCaptor.getValue().payload())
+                .containsEntry("taskId", taskId)
+                .containsEntry("title", "實作交易 CRUD API")
+                .containsEntry("from", "BLOCKED")
+                .containsEntry("to", "IN_PROGRESS");
     }
 
     @Test

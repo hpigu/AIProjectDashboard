@@ -240,24 +240,77 @@ if (`$sent) { exit 0 } else { exit 3 }
 }
 
 # ---------------------------------------------------------------------------
-# 強制終止的收尾：殺掉指定 PID 之後，再確認埠號沒有被遺留的看板行程握著。
+# 收集「這一次停止要盯著的所有看板行程」。
 #
-# 理由同 Invoke-BoardStop 的等待迴圈：PID 檔可能記到 Oracle javapath 的 launcher
-# stub，殺掉 stub 不會帶走真正跑 JVM 的子行程，那個子行程會繼續持有埠號與 H2 的
-# .mv.db 鎖，下一次 start 只會撞上 MVStoreException。
+# 只盯 PID 檔裡那一個是不夠的，有兩個實際踩到的情況：
 #
-# 一定要經過 Test-BoardProcess 才動手：埠號在看板死掉之後可能被其他服務接手，
-# 對陌生行程送 -Force 是這類腳本最典型的災難。
+#  1. Oracle JDK 官方安裝檔建立的 javapath\java.exe 不是 symlink，而是會再 spawn
+#     一個真正跑 JVM（也就是跑 shutdown hook、寫關閉前備份）的子行程；PID 檔記到
+#     的是 stub。stub 先結束的話，只看它會在備份寫完前就回報成功。
+#  2. 埠號釋放只是 Spring 關閉序列的早期步驟，不代表 JVM 已經退出。實測：瀏覽器
+#     開著看板頁面時，SSE 連線會讓 graceful shutdown 一直等，埠號早就釋放、stub
+#     也早就結束，JVM 卻還活著並持續持有 H2 的 .mv.db 鎖。
+#
+# 因此在送出 Ctrl+C 之前先把「PID 檔的行程 + 埠號持有者 + 前者的看板子行程」都
+# 記下來，之後等到這一組全部消失才算停妥。
+#
+# 每一個候選都要經過 Test-BoardProcess（比對命令列）：埠號可能在看板死後被別的
+# 服務接手，PID 也可能被回收，對陌生行程動手是這類腳本最典型的災難。
 # ---------------------------------------------------------------------------
-function Stop-BoardProcessTree {
+function Get-BoardRelatedPids {
     param([int]$ProcessId)
 
-    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    $ids = New-Object System.Collections.Generic.List[int]
+
+    if ($ProcessId -gt 0 -and (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+        $ids.Add($ProcessId)
+    }
+
+    $portPid = Get-BoardPidFromPort
+    if ($portPid -gt 0 -and -not $ids.Contains($portPid) -and (Test-BoardProcess -ProcessId $portPid)) {
+        $ids.Add($portPid)
+    }
+
+    if ($ProcessId -gt 0) {
+        $children = @()
+        try {
+            $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction Stop)
+        } catch {
+            $children = @()
+        }
+        foreach ($child in $children) {
+            $childId = [int]$child.ProcessId
+            if (-not $ids.Contains($childId) -and (Test-BoardProcess -ProcessId $childId)) {
+                $ids.Add($childId)
+            }
+        }
+    }
+
+    return $ids
+}
+
+function Test-AnyBoardProcessAlive {
+    param([System.Collections.Generic.List[int]]$ProcessIds)
+
+    foreach ($id in $ProcessIds) {
+        if (Get-Process -Id $id -ErrorAction SilentlyContinue) { return $true }
+    }
+    return $false
+}
+
+# 強制終止：對整組看板行程動手，而不是只對 PID 檔裡那一個。
+function Stop-BoardProcessTree {
+    param([System.Collections.Generic.List[int]]$ProcessIds)
+
+    foreach ($id in $ProcessIds) {
+        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+    }
     Start-Sleep -Seconds 1
 
+    # 殺掉 stub 之後才浮現的子行程（stub 存活期間 CIM 查詢可能還沒列到它）。
     $lingering = Get-BoardPidFromPort
-    if ($lingering -gt 0 -and $lingering -ne $ProcessId -and (Test-BoardProcess -ProcessId $lingering)) {
-        Write-BoardLog "埠號 $script:BoardPort 仍被看板子行程 PID=$lingering 持有（launcher stub 的實際 JVM），一併終止。"
+    if ($lingering -gt 0 -and -not $ProcessIds.Contains($lingering) -and (Test-BoardProcess -ProcessId $lingering)) {
+        Write-BoardLog "埠號 $script:BoardPort 仍被看板行程 PID=$lingering 持有，一併終止。"
         Stop-Process -Id $lingering -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
     }
@@ -422,11 +475,15 @@ function Invoke-BoardStop {
         Write-BoardErr "看板就會有自己的 console，stop 便可正常運作。"
         if (-not $Force) { return 1 }
         Write-BoardErr "已指定 -Force，改為強制終止（會失去關閉前備份）。"
-        Stop-BoardProcessTree -ProcessId $boardPid
+        Stop-BoardProcessTree -ProcessIds (Get-BoardRelatedPids -ProcessId $boardPid)
         Remove-Item $script:BoardPidFile -Force -ErrorAction SilentlyContinue
         Write-BoardLog "已強制終止（PID=$boardPid）。"
         return 0
     }
+
+    # 送出訊號「之前」先記下整組行程：Ctrl+C 之後 stub 可能瞬間消失，屆時就查不到
+    # 它底下那個真正跑 JVM 的子行程了。
+    $watchedPids = Get-BoardRelatedPids -ProcessId $boardPid
 
     Write-BoardLog "停止看板（PID=$boardPid）……送出 Ctrl+C 事件，等待關閉前備份完成。"
     $sent = Send-BoardCtrlC -ProcessId $boardPid
@@ -438,17 +495,18 @@ function Invoke-BoardStop {
         if (-not $Force) { return 1 }
     }
 
-    # 「已停止」的判準是行程消失「而且」埠號釋放，不能只看前者。
+    # 等到 $watchedPids 這一組「全部」消失才算停妥。
     #
-    # Oracle JDK 官方安裝檔會建立 C:\Program Files\Common Files\Oracle\Java\javapath\
-    # 這層 launcher stub，它不是 symlink——執行後會再 spawn 一個真正跑 JVM（也就是
-    # 跑 shutdown hook、寫關閉前備份）的子行程，PID 檔記到的是 stub。stub 若先於
-    # 子行程結束，只看 PID 會在備份還沒寫完時就回報成功，而這支腳本存在的理由正是
-    # 那份備份。埠號要等 JVM 真的收工才會釋放，用它當補充條件。
+    # 曾經用過兩個比較寬鬆的判準，都會謊報成功：
+    #  - 只看 PID 檔那一個：Oracle javapath 的 launcher stub 先結束時，真正寫關閉前
+    #    備份的子行程還在跑。
+    #  - 加看埠號是否釋放：埠號釋放只是 Spring 關閉序列的早期步驟。實測瀏覽器開著
+    #    看板頁面時，SSE 連線讓 graceful shutdown 一直等，埠號早已釋放、stub 也已
+    #    結束，JVM 卻還活著並持續持有 H2 的 .mv.db 鎖，下一次 start 直接
+    #    MVStoreException——而使用者剛剛才看到「已停止」。
     $elapsed = 0
     while ($elapsed -lt $StopTimeoutSec) {
-        $processGone = -not (Get-Process -Id $boardPid -ErrorAction SilentlyContinue)
-        if ($processGone -and (Get-BoardPidFromPort) -le 0) {
+        if (-not (Test-AnyBoardProcessAlive -ProcessIds $watchedPids)) {
             Remove-Item $script:BoardPidFile -Force -ErrorAction SilentlyContinue
             Write-BoardLog "已停止（PID=$boardPid，耗時 $elapsed 秒）。關閉前備份見 $script:BoardBackupDir。"
             return 0
@@ -463,9 +521,9 @@ function Invoke-BoardStop {
     if ($Force) {
         Write-BoardErr "等待 $StopTimeoutSec 秒仍未結束，依 -Force 強制終止。"
         Write-BoardErr "注意：強制終止不會執行關閉前備份，本次停止沒有一致性快照。"
-        Stop-BoardProcessTree -ProcessId $boardPid
-        if (Get-Process -Id $boardPid -ErrorAction SilentlyContinue) {
-            Write-BoardErr "強制終止後行程仍存在（PID=$boardPid），請手動確認。"
+        Stop-BoardProcessTree -ProcessIds $watchedPids
+        if (Test-AnyBoardProcessAlive -ProcessIds $watchedPids) {
+            Write-BoardErr "強制終止後仍有看板行程存在，請手動確認。"
             return 1
         }
         Remove-Item $script:BoardPidFile -Force -ErrorAction SilentlyContinue
@@ -473,7 +531,7 @@ function Invoke-BoardStop {
         return 0
     }
 
-    Write-BoardErr "等待 $StopTimeoutSec 秒後行程 PID=$boardPid 仍在執行，已放棄等待（未強制終止）。"
+    Write-BoardErr "等待 $StopTimeoutSec 秒後仍有看板行程在執行，已放棄等待（未強制終止）。"
     Write-BoardErr "刻意不自動強制終止：那會中斷關閉前備份。可先查看 $script:BoardLogFile 確認"
     Write-BoardErr "是否正在進行備份；確定要強制終止再執行：.\bin\board.ps1 stop -Force"
     return 1
@@ -522,7 +580,10 @@ function Invoke-BoardLogs {
         return 1
     }
     Write-BoardLog "追蹤 $script:BoardLogFile（Ctrl+C 結束）"
-    Get-Content -Path $script:BoardLogFile -Tail $Lines -Wait
+    # -Encoding UTF8 不可省：logback 以 UTF-8 寫檔，而 Windows PowerShell 5.1 的
+    # Get-Content 預設用系統 ANSI 代碼頁解碼，中文訊息（本專案的日誌大多是中文）
+    # 會整片變成亂碼。pwsh 7 預設就是 UTF-8，明確指定對兩者都正確。
+    Get-Content -Path $script:BoardLogFile -Tail $Lines -Wait -Encoding UTF8
     return 0
 }
 

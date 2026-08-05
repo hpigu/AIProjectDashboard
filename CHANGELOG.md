@@ -16,6 +16,12 @@
 
 ### 新增
 
+- **BLOCKED 桌面通知。** 標題列多一個開關，開啟後任務轉為 BLOCKED 會發送系統
+  通知，點擊直接跳到該專案。預設關閉，偏好記在瀏覽器；看板視窗在前景時不發
+  （畫面上已經看得到）。BLOCKED 是唯一一定需要人介入的狀態，原本只反映在畫面
+  上，人不在看板前面就等於沒通知到。
+- `task.status_changed` 事件的 payload 新增 `title`（任務標題）。少了它，通知
+  內容只會是「任務 #42 → BLOCKED」，讀了還是得回看板查是哪一個任務。
 - `/api/health` 與 `/api/diagnostics` 回傳 `commit` 欄位（build 來源的 short
   commit hash）。同一個版號在 tag 前後可能對應好幾份不同的 build，只有版號無法
   分辨手上跑的是哪一份。
@@ -23,6 +29,15 @@
   （spring-boot-maven-plugin 的 `build-info` goal 與 git-commit-id-maven-plugin）。
 
 ### 修正
+
+- **關閉時若有瀏覽器開著看板，行程不會結束。** SSE 連線是永不逾時的請求，
+  Spring Boot 的 graceful shutdown 會一直等它；逾時後 JVM 依然不退出，留下一個
+  持續持有 H2 `.mv.db` 鎖的行程，下一次啟動直接 MVStoreException——而
+  `bin/board stop` 早已回報「已停止」。關閉時改為主動結束所有 SSE 連線。
+  實測同樣情境下，graceful shutdown 從「30 秒逾時後仍卡住」變成 3 毫秒完成。
+  這個問題不限 Windows，Linux/macOS 走 SIGTERM 也一樣。
+- MCP `initialize` 回應的 `serverInfo.version` 寫死在 `application.yml`，跳版時
+  必然忘記改（3.1.0 的 build 仍回報 3.0.0）。改由 `pom.xml` 的版本帶入。
 
 - **Windows：`bin\board.ps1 start` 在 Windows PowerShell 5.1 上完全無法啟動。**
   JDK 偵測一律回報「找不到 JDK 21」，即使系統上裝著。`java -version` 寫的是
@@ -37,12 +52,14 @@
 - `/api/health` 的 `version` 在 `mvnw spring-boot:run` 或 IDE 啟動時一律回報
   `unknown`。原本讀的是 jar manifest 的 `Implementation-Version`，只有打包後才
   存在。改由建置期產生的 `build-info.properties` 提供，三種啟動方式一致。
+- **Windows：`bin\board.ps1 logs` 的中文日誌顯示為亂碼。** logback 以 UTF-8 寫檔，
+  但 Windows PowerShell 5.1 的 `Get-Content` 預設用系統 ANSI 代碼頁解碼。
 
 ### 相容性
 
-- `/api/health` 與 `/api/diagnostics` 的回應**新增**欄位，既有欄位的名稱、型別與
-  語意都未更動。只讀取既有欄位的呼叫方（含 `bin/start-board.sh` 對 `"version"`
-  的檢查）不受影響。
+- `/api/health`、`/api/diagnostics` 與 `task.status_changed` 事件的內容都是
+  **新增**欄位，既有欄位的名稱、型別與語意都未更動。只讀取既有欄位的呼叫方
+  （含 `bin/start-board.sh` 對 `"version"` 的檢查）不受影響。
 - 資料庫 schema 無變更，從 3.0.0 升級不需要額外步驟：換掉 jar 重啟即可。
 
 ## [3.0.0] — 2026-08-05

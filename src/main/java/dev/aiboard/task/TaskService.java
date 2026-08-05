@@ -196,7 +196,7 @@ public class TaskService {
             task.changeStatus(target);
             taskLogRepository.save(new TaskLog(taskId, current.name(), target.name(), note));
             eventPublisher.publish(BoardEvent.taskStatusChanged(
-                    task.getProjectId(), taskId, current.name(), target.name(),
+                    task.getProjectId(), taskId, task.getTitle(), current.name(), target.name(),
                     task.getUpdatedAt().toString()));
         }
 
@@ -231,7 +231,7 @@ public class TaskService {
         taskLogRepository.save(new TaskLog(taskId, current.name(), TaskStatus.TODO.name(),
                 "leader 重置遺失的 claim token" + (note == null || note.isBlank() ? "" : "：" + note)));
         eventPublisher.publish(BoardEvent.taskStatusChanged(
-                task.getProjectId(), taskId, current.name(), TaskStatus.TODO.name(),
+                task.getProjectId(), taskId, task.getTitle(), current.name(), TaskStatus.TODO.name(),
                 task.getUpdatedAt().toString()));
 
         long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE.name());
@@ -336,7 +336,7 @@ public class TaskService {
                 taskLogRepository.save(new TaskLog(claimed.getId(), TaskStatus.TODO.name(),
                         TaskStatus.IN_PROGRESS.name(), "認領者：" + assignee));
                 eventPublisher.publish(BoardEvent.taskStatusChanged(
-                        claimed.getProjectId(), claimed.getId(), TaskStatus.TODO.name(),
+                        claimed.getProjectId(), claimed.getId(), claimed.getTitle(), TaskStatus.TODO.name(),
                         TaskStatus.IN_PROGRESS.name(), claimed.getUpdatedAt().toString()));
                 return ClaimNextTaskResult.claimed(project.get(), toDto(claimed), category.name(), claimToken);
             }

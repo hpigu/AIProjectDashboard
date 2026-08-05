@@ -125,6 +125,9 @@ class TaskCompleteServiceTest {
         ArgumentCaptor<BoardEvent> eventCaptor = ArgumentCaptor.forClass(BoardEvent.class);
         verify(eventPublisher).publish(eventCaptor.capture());
         assertThat(eventCaptor.getValue().type()).isEqualTo("task.status_changed");
+        assertThat(eventCaptor.getValue().payload())
+                .containsEntry("title", "實作交易 CRUD API")
+                .containsEntry("to", "DONE");
     }
 
     @Test

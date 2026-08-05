@@ -23,7 +23,12 @@ spring:
       server:
         protocol: STREAMABLE
         name: project-board
-        version: 3.0.0
+        # 從 pom 的 ${project.version} 帶入，不要寫死：這個值會出現在 MCP
+        # initialize 回應的 serverInfo.version，是 agent 端唯一看得到的版本。
+        # 寫死的話跳版時必然忘記改，實際就發生過（3.1.0 的 build 仍回報 3.0.0）。
+        # 引號不可省：YAML 把行首的 @ 視為保留字元，未引號會解析失敗。
+        # 過濾由 spring-boot-starter-parent 對 application*.yml 預設開啟。
+        version: '@project.version@'
 
 server:
   address: ${BOARD_HOST:127.0.0.1}

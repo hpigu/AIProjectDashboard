@@ -8,6 +8,41 @@ const RAIL_FLASH_CLASS = {
   'DONE': 'flash-done',
 };
 
+// ---- BLOCKED 桌面通知 ----
+// 這個看板的賣點是「不用盯著終端機等 agent」，但唯一會需要人介入的狀態轉換
+// （BLOCKED）原本只反映在畫面上，人不在看板前面就等於沒通知到。
+//
+// 幾個刻意的取捨：
+//  - 預設關閉。未經要求就跳系統通知是很打擾的行為，而且 Notification 的權限
+//    請求必須由使用者手勢觸發，本來就不能在載入時自動要。
+//  - 偏好存 localStorage，但權限狀態一律以瀏覽器當下的 Notification.permission
+//    為準：使用者可能在站台設定裡把權限收回，那時 localStorage 還留著 'on'。
+//  - localStorage 在部分隱私模式下存取會直接拋例外，因此一律包 try/catch，
+//    讀不到就當作沒設定過，不能讓它擋住整個 app 初始化。
+const NOTIFY_PREF_KEY = 'board.notifyBlocked';
+
+// Notification 需要 secure context。看板預設只聽 127.0.0.1（loopback 依規範
+// 算 secure context），但若有人改用區網 IP 以 http 存取就不會有這個 API。
+function notificationsAvailable() {
+  return typeof window.Notification === 'function' && window.isSecureContext;
+}
+
+function readNotifyPref() {
+  try {
+    return window.localStorage.getItem(NOTIFY_PREF_KEY) === 'on';
+  } catch (e) {
+    return false;
+  }
+}
+
+function writeNotifyPref(on) {
+  try {
+    window.localStorage.setItem(NOTIFY_PREF_KEY, on ? 'on' : 'off');
+  } catch (e) {
+    // 存不起來只是下次開啟要重設，不值得中斷操作。
+  }
+}
+
 function relativeTime(isoString) {
   if (!isoString) return '';
   const then = new Date(isoString).getTime();
@@ -974,6 +1009,91 @@ createApp({
     let railFlashTimer = null;
     let eventSource = null;
 
+    const notifySupported = notificationsAvailable();
+    const notifyPermission = ref(notifySupported ? Notification.permission : 'unsupported');
+    const notifyPrefOn = ref(notifySupported && readNotifyPref());
+
+    // 「真的會發通知」必須同時滿足偏好開啟與權限已授予。分成兩個 ref 而不是一個
+    // 布林，是為了讓權限被使用者收回時，按鈕能顯示「已封鎖」而不是假裝是關著的。
+    const notifyOn = computed(() => notifyPrefOn.value && notifyPermission.value === 'granted');
+
+    const notifyLabel = computed(() => {
+      if (notifyPermission.value === 'denied') return 'BLOCKED 通知：已封鎖';
+      return notifyOn.value ? 'BLOCKED 通知：開' : 'BLOCKED 通知：關';
+    });
+
+    const notifyHint = computed(() => {
+      if (notifyPermission.value === 'denied') {
+        return '瀏覽器已封鎖這個站台的通知權限。請到網址列旁的站台設定改為「允許」後再試。';
+      }
+      if (notifyOn.value) {
+        return '任務轉為 BLOCKED 時發送桌面通知。這個視窗在前景時不發（畫面上已經看得到）。';
+      }
+      return '開啟後，任務轉為 BLOCKED 會發送桌面通知，不需要一直盯著看板。';
+    });
+
+    async function toggleBlockedNotifications() {
+      if (!notifySupported) return;
+
+      if (notifyPrefOn.value) {
+        notifyPrefOn.value = false;
+        writeNotifyPref(false);
+        return;
+      }
+
+      // 權限請求必須在使用者手勢的呼叫堆疊上，因此只能放在這個 click handler 裡，
+      // 不能在 onMounted 自動要。已經是 denied 時再問也不會跳窗，直接讓
+      // notifyHint 說明怎麼手動改。
+      if (Notification.permission === 'default') {
+        try {
+          notifyPermission.value = await Notification.requestPermission();
+        } catch (e) {
+          notifyPermission.value = Notification.permission;
+        }
+      } else {
+        notifyPermission.value = Notification.permission;
+      }
+
+      if (notifyPermission.value === 'granted') {
+        notifyPrefOn.value = true;
+        writeNotifyPref(true);
+      }
+    }
+
+    function notifyBlocked(payload) {
+      if (!notifyOn.value) return;
+      // 視窗在前景時不發：畫面上的 rail 已經閃紅、看板也已更新，再跳一個系統
+      // 通知只是噪音。用 hasFocus() 而非 visibilityState：看板擺在第二螢幕上
+      // 「看得見但沒在看」時，通知仍然該送出。
+      if (document.hasFocus()) return;
+
+      const project = projects.value.find(p => p.id === payload.projectId);
+      const title = payload.title
+        ? `BLOCKED：${payload.title}`
+        : `BLOCKED：任務 #${payload.taskId}`;
+      const body = project
+        ? `${project.name}　任務 #${payload.taskId}`
+        : `專案 #${payload.projectId}　任務 #${payload.taskId}`;
+
+      try {
+        // tag 用 taskId：同一個任務反覆被 block 時取代前一則，而不是堆成一疊。
+        const notification = new Notification(title, {
+          body,
+          tag: `board-blocked-${payload.taskId}`,
+          icon: '/favicon.png',
+        });
+        notification.onclick = () => {
+          window.focus();
+          selectProject(payload.projectId);
+          notification.close();
+        };
+      } catch (e) {
+        // 某些平台（例如未安裝為 PWA 的行動版 Chrome）不允許用建構子直接建立
+        // 通知。發不出來不該影響看板本身的運作。
+        console.warn('無法發送桌面通知', e);
+      }
+    }
+
     async function loadProjects() {
       try {
         projects.value = await fetchJson('/api/projects?status=ALL&sort=UPDATED_DESC');
@@ -1051,6 +1171,9 @@ createApp({
           const payload = JSON.parse(e.data);
           flashRail(payload.to || 'IN_PROGRESS');
           updateProjectListForEvent(type, payload);
+          if (type === 'task.status_changed' && payload.to === 'BLOCKED') {
+            notifyBlocked(payload);
+          }
           window.__boardBus.emit(type, payload);
         });
       });
@@ -1060,17 +1183,30 @@ createApp({
       });
     }
 
+    // 權限可能在別的分頁或站台設定裡被改動。回到這個分頁時重新讀一次，
+    // 否則按鈕會一直顯示上次載入時的狀態。
+    const syncNotifyPermission = () => {
+      if (notifySupported) notifyPermission.value = Notification.permission;
+    };
+
     onMounted(() => {
       loadProjects();
       connectSse();
       window.addEventListener('popstate', syncProjectFromUrl);
+      document.addEventListener('visibilitychange', syncNotifyPermission);
     });
 
     onBeforeUnmount(() => {
       if (eventSource) eventSource.close();
       window.removeEventListener('popstate', syncProjectFromUrl);
+      document.removeEventListener('visibilitychange', syncNotifyPermission);
     });
 
-    return { currentProjectId, projects, selectedProject, selectProject, showProjectList, sseConnected, railFlashClass };
+    return {
+      currentProjectId, projects, selectedProject, selectProject, showProjectList,
+      sseConnected, railFlashClass,
+      notifySupported, notifyPermission, notifyOn, notifyLabel, notifyHint,
+      toggleBlockedNotifications,
+    };
   },
 }).mount('#app');

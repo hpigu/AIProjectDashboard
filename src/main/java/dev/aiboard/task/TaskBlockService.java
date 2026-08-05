@@ -133,7 +133,7 @@ public class TaskBlockService {
         String logNote = "BLOCKED（%s）：%s".formatted(reasonType, trimmedDetail);
         taskLogRepository.save(new TaskLog(taskId, current.name(), TaskStatus.BLOCKED.name(), logNote));
         eventPublisher.publish(BoardEvent.taskStatusChanged(
-                task.getProjectId(), taskId, current.name(), TaskStatus.BLOCKED.name(),
+                task.getProjectId(), taskId, task.getTitle(), current.name(), TaskStatus.BLOCKED.name(),
                 task.getUpdatedAt().toString()));
 
         return new BlockResult(toDto(task), reasonType, trimmedDetail,

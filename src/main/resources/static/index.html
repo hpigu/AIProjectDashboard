@@ -15,9 +15,23 @@
     <div class="app-shell">
       <header class="app-header">
         <h1 class="app-title">AI PROJECT BOARD</h1>
-        <div class="conn-status">
-          <span class="conn-dot" :class="sseConnected ? 'connected' : 'reconnecting'"></span>
-          <span>{{ sseConnected ? '連線中' : '重新連線中' }}</span>
+        <div class="header-tools">
+          <button
+            v-if="notifySupported"
+            type="button"
+            class="notify-toggle"
+            :class="{ 'is-on': notifyOn, 'is-blocked': notifyPermission === 'denied' }"
+            :aria-pressed="notifyOn ? 'true' : 'false'"
+            :title="notifyHint"
+            @click="toggleBlockedNotifications"
+          >
+            <span class="notify-dot" aria-hidden="true"></span>
+            <span>{{ notifyLabel }}</span>
+          </button>
+          <div class="conn-status">
+            <span class="conn-dot" :class="sseConnected ? 'connected' : 'reconnecting'"></span>
+            <span>{{ sseConnected ? '連線中' : '重新連線中' }}</span>
+          </div>
         </div>
       </header>
 

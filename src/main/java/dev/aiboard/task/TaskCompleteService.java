@@ -139,7 +139,7 @@ public class TaskCompleteService {
         String logNote = "complete_task：%s".formatted(trimmedSummary);
         taskLogRepository.save(new TaskLog(taskId, current.name(), TaskStatus.DONE.name(), logNote));
         eventPublisher.publish(BoardEvent.taskStatusChanged(
-                task.getProjectId(), taskId, current.name(), TaskStatus.DONE.name(),
+                task.getProjectId(), taskId, task.getTitle(), current.name(), TaskStatus.DONE.name(),
                 task.getUpdatedAt().toString()));
 
         long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE.name());
