@@ -43,11 +43,20 @@ board:
     allowed-hosts: ${BOARD_ALLOWED_HOSTS:}
   backup:
     # 與 bin/backup-db.sh 的啟動前備份共用同一個 BOARD_BACKUP_DIR（見
-    # bin/start-board.sh 第 4.5 節），確保 startup／shutdown 兩種備份
-    # 落在同一個目錄，方便管理與保留策略一併檢視。
+    # bin/start-board.sh 第 4.5 節），確保 startup／shutdown／scheduled 三種
+    # 備份落在同一個目錄，方便管理與保留策略一併檢視。
     dir: ${BOARD_BACKUP_DIR:${user.home}/.ai-project-board/backups}
+    # 保留策略是「依 phase 分桶」的：startup／shutdown／scheduled 各自擁有
+    # 獨立的份數額度，因此頻繁的排程備份不會把關閉前那份快照擠掉。
     retention-days: ${BOARD_BACKUP_RETENTION_DAYS:30}
     retention-min-count: ${BOARD_BACKUP_RETENTION_MIN_COUNT:7}
+    schedule:
+      # 定期備份。看板長時間不重啟正是它的預期用法，而在此之前備份只在啟動與
+      # 關閉發生——連續跑兩週等於兩週沒有新快照。
+      enabled: ${BOARD_BACKUP_SCHEDULE_ENABLED:true}
+      # 支援 6h、90m、PT6H 等寫法。間隔從「上一次執行結束」起算，且啟動後會先
+      # 等一個間隔才跑第一次（啟動前備份剛做過，不需要馬上再來一份）。
+      interval: ${BOARD_BACKUP_INTERVAL:6h}
 
 logging:
   # 實際輪替策略（每日/容量雙門檻、gzip 壓縮、保留天數、總容量上限）

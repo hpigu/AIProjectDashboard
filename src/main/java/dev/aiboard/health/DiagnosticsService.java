@@ -44,7 +44,7 @@ public class DiagnosticsService {
     private static final long CACHE_TTL_MS = 5_000L;
     private static final Pattern H2_FILE_PATTERN = Pattern.compile("^jdbc:h2:file:([^;]+)");
     private static final Pattern BACKUP_FILE_PATTERN =
-            Pattern.compile("^board-(startup|shutdown)-(\\d{8}T\\d{6}Z)-.+\\.(mv\\.db|zip)$");
+            Pattern.compile("^board-(startup|shutdown|scheduled)-(\\d{8}T\\d{6}Z)-.+\\.(mv\\.db|zip)$");
 
     private final ProjectRepository projectRepository;
     private final TaskRepository taskRepository;

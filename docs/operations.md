@@ -121,18 +121,31 @@ loginctl enable-linger "$USER"   # 沒登入時也保持執行
 
 ## 備份
 
-兩種備份，共用同一個目錄（`BOARD_BACKUP_DIR`，預設
-`~/.ai-project-board/backups`）與同一套保留策略（30 天內全留；超過 30 天的
-只在刪除後仍剩 ≥ 7 份時才刪）：
+三種備份，共用同一個目錄（`BOARD_BACKUP_DIR`，預設
+`~/.ai-project-board/backups`）：
 
 | 檔名 | 產生時機 | 方式 |
 |---|---|---|
 | `board-startup-<UTC>-<TZ>.mv.db` | 每次啟動、Flyway migration 之前 | 檔案複製 + H2 檔頭驗證；失敗會中止啟動 |
 | `board-shutdown-<UTC>-<TZ>.zip` | 正常關閉時（SIGTERM／Ctrl+C） | H2 `BACKUP TO` 一致性快照；失敗只記 ERROR，不阻塞關閉 |
+| `board-scheduled-<UTC>-<TZ>.zip` | 執行中，預設每 6 小時 | 同上；失敗只記 ERROR，不影響後續排程 |
 
-**涵蓋不到的情境**：`kill -9`、JVM crash、斷電。這些只能靠上一次啟動前備份。
-如果看板連續跑好幾天不重啟，就等於好幾天沒有新快照——長時間運行時建議定期
-手動 `bin/board restart`，或自行加排程。
+保留策略是 30 天內全留；超過 30 天的只在刪除後仍剩 ≥ 7 份時才刪。
+**這個額度是各階段獨立計算的**：`scheduled` 再頻繁也不會把 `shutdown` 那份
+一致性快照擠掉——長時間運行下，那份往往正是最值得留的。
+
+### 排程備份
+
+| 環境變數 | 預設 | 說明 |
+|---|---|---|
+| `BOARD_BACKUP_INTERVAL` | `6h` | 支援 `6h`／`90m`／`PT6H` 等寫法 |
+| `BOARD_BACKUP_SCHEDULE_ENABLED` | `true` | 設 `false` 完全停用 |
+
+間隔從「上一次執行結束」起算（`fixedDelay`），大型資料庫備份較久時任務不會
+堆疊。啟動後會先等一個間隔才跑第一次——啟動前備份剛做過，不需要立刻再一份。
+
+**涵蓋不到的情境**：`kill -9`、JVM crash、斷電。這些情況下能還原到的最近狀態，
+就是上一份排程備份（預設最多損失 6 小時），或上一次啟動前的備份。
 
 ## 還原
 
@@ -144,9 +157,13 @@ bin/restore-db.sh --list
 
 ```
 [restore-db] 備份目錄：/Users/you/.ai-project-board/backups
+  2026-08-06 02:10:51 CST        8626 bytes  定期（一致性快照）    .../board-scheduled-20260805T181051Z-UTC.zip
   2026-08-05 20:53:56 CST        9984 bytes  關閉前（一致性快照）  .../board-shutdown-20260805T125356Z-UTC.zip
   2026-08-05 20:54:06 CST       53248 bytes  啟動前（冷備份）      .../board-startup-20260805T125406Z-UTC.mv.db
 ```
+
+`latest` 取的是這份清單的第一列。看板長時間運行時那通常是一份排程備份，
+而不是關閉前備份。
 
 然後停掉看板再還原（還原中的看板會寫壞資料庫，腳本會直接拒絕）：
 

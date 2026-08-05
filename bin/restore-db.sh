@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # restore-db.sh — 從備份還原看板資料庫
 #
-# 補上備份流程缺的另一半：專案原本有啟動前冷備份（bin/backup-db.sh，
-# board-startup-*.mv.db）與關閉前一致性備份（ShutdownBackupService 以 H2
-# BACKUP TO 產生的 board-shutdown-*.zip），但沒有任何還原路徑——備份若沒有
-# 演練過的還原程序，實務上等於沒有備份。本腳本兩種格式都能還原。
+# 補上備份流程缺的另一半：備份若沒有演練過的還原程序，實務上等於沒有備份。
+# 三種來源都能還原，格式只有兩種：
+#   board-startup-*.mv.db    啟動前冷備份（bin/backup-db.sh，直接複製檔案）
+#   board-shutdown-*.zip     關閉前一致性備份（ShutdownBackupService）
+#   board-scheduled-*.zip    定期一致性備份（ScheduledBackupService）
+# 後兩者都是 H2 BACKUP TO 產生的 zip，內含一份 .mv.db，還原方式完全相同。
 #
 # 用法：
 #   bin/restore-db.sh --list                  列出可用備份（新到舊）
@@ -77,7 +79,10 @@ fi
 DB_MV_FILE="${DB_TARGET}.mv.db"
 
 # ---------------------------------------------------------------------------
-# 列出備份：兩種格式一起列，依 mtime 新到舊
+# 列出備份：三種階段一起列，依 mtime 新到舊
+#
+# scheduled 一定要列進來：看板長時間運行時，最新的一份備份幾乎必然是排程備份，
+# 漏掉它會讓 `latest` 挑到一份舊得多的快照，而使用者不會察覺。
 # ---------------------------------------------------------------------------
 list_backups() {
   [ -d "$BOARD_BACKUP_DIR" ] || return 0
@@ -90,7 +95,9 @@ list_backups() {
     fi
     printf '%s\t%s\n' "$mtime" "$f"
   done < <(find "$BOARD_BACKUP_DIR" -maxdepth 1 -type f \
-             \( -name 'board-startup-*.mv.db' -o -name 'board-shutdown-*.zip' \) -print0 2>/dev/null) \
+             \( -name 'board-startup-*.mv.db' \
+                -o -name 'board-shutdown-*.zip' \
+                -o -name 'board-scheduled-*.zip' \) -print0 2>/dev/null) \
     | sort -k1,1nr
 }
 
@@ -103,9 +110,10 @@ if [ "$LIST_ONLY" -eq 1 ]; then
     size="$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')"
     when="$(date -r "$mtime" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null \
             || date -d "@$mtime" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || echo '?')"
-    case "$path" in
-      *.zip) kind="關閉前（一致性快照）" ;;
-      *)     kind="啟動前（冷備份）" ;;
+    case "$(basename "$path")" in
+      board-shutdown-*.zip)  kind="關閉前（一致性快照）" ;;
+      board-scheduled-*.zip) kind="定期（一致性快照）" ;;
+      *)                     kind="啟動前（冷備份）" ;;
     esac
     printf '  %s  %10s bytes  %s  %s\n' "$when" "${size:-?}" "$kind" "$path"
   done < <(list_backups)
@@ -228,7 +236,7 @@ trap cleanup EXIT
 case "$SOURCE_BACKUP" in
   *.zip)
     WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/board-restore.XXXXXX")" || { err "無法建立暫存目錄"; exit 1; }
-    log "解壓關閉前備份……"
+    log "解壓一致性備份（zip）……"
     extract_zip "$SOURCE_BACKUP" "$WORK_DIR" || exit 1
 
     EXTRACTED="$(find "$WORK_DIR" -type f -name '*.mv.db' | head -n1)"

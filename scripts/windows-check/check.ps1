@@ -170,11 +170,27 @@ try {
     Assert-True ($result.ExitCode -eq 0) '離開碼為 0'
     Assert-True ([System.IO.File]::ReadAllText($dbFile) -eq 'H:2-original') '資料庫回到啟動前備份的內容'
 
-    Write-Host '=== 10. -List 同時列出兩種格式 ==='
+    Write-Host '=== 10. -List 列出全部三種階段，且 latest 挑得到排程備份 ==='
+    # scheduled 是最容易被漏掉、後果又最嚴重的一種：看板長時間運行時最新的備份
+    # 幾乎必然是排程備份，還原工具若看不見它，latest 會安靜地挑到一份舊得多的
+    # 快照，而使用者沒有任何線索。
+    $schedInner = Join-Path $zipWork 'board.mv.db'
+    New-FakeH2File -Path $schedInner -Marker 'from-scheduled-zip'
+    $schedZip = Join-Path $backupDir 'board-scheduled-20260806T140000Z-UTC+0000.zip'
+    Compress-Archive -Path $schedInner -DestinationPath $schedZip -Force
+    (Get-Item $schedZip).LastWriteTimeUtc = (Get-Date).ToUniversalTime()
+
     $result = Invoke-Restore @('-List')
     Assert-True ($result.ExitCode -eq 0) '離開碼為 0'
     Assert-True ($result.Output -match 'board-startup-') '列出啟動前備份'
     Assert-True ($result.Output -match 'board-shutdown-') '列出關閉前備份'
+    Assert-True ($result.Output -match 'board-scheduled-') '列出定期備份'
+    Assert-True ($result.Output -match '定期（一致性快照）') '定期備份標示為自己的類別，不會被誤標成關閉前'
+
+    $result = Invoke-Restore @('latest', '-Yes')
+    Assert-True ($result.ExitCode -eq 0) 'latest 還原離開碼為 0'
+    Assert-True ([System.IO.File]::ReadAllText($dbFile) -eq 'H:2-from-scheduled-zip') 'latest 挑到最新的排程備份'
+    @(Get-ChildItem $dataDir -Filter 'board.mv.db.pre-restore-*') | ForEach-Object { Remove-Item $_.FullName -Force }
 
     Write-Host '=== 11. 保留策略：超過 30 天但只刪到剩 7 份 ==='
     $retentionDir = (New-Item -ItemType Directory -Path (Join-Path $workRoot 'retention') -Force).FullName
