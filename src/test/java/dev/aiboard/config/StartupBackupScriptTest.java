@@ -84,6 +84,54 @@ class StartupBackupScriptTest {
         }
     }
 
+    /**
+     * 保留策略必須留下「最新的」七份，不是任意七份。
+     *
+     * <p>原本的測試只斷言 hasSize(7)，因此驗不出實際踩到的 bug：取 mtime 用的是
+     * {@code stat -f '%m' || stat -c '%Y'}，而 GNU coreutils 的 {@code -f} 是
+     * 「顯示檔案系統狀態」、會以 exit 0 印出多行檔案系統資訊，於是 {@code ||}
+     * 右邊永遠不執行，排序鍵變成垃圾字串。份數碰巧仍是 7，但保留下來的是哪七份
+     * 完全隨機——在 Linux 上可能把最新的備份刪掉。這個測試釘住排序語意。
+     */
+    @Test
+    void retentionKeepsTheNewestBackupsSpecifically() throws Exception {
+        Path database = tempDir.resolve("ordering.mv.db");
+        Path backups = tempDir.resolve("ordering-backups");
+        Files.createDirectories(backups);
+        Files.write(database, "H:2-current".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        // 十份都過期，但 mtime 明確遞增：index 越大越新。
+        for (int i = 0; i < 10; i++) {
+            Path backup = backups.resolve("board-startup-20240101T0000"
+                    + String.format("%02d", i) + "Z-UTC.mv.db");
+            Files.write(backup, ("H:2-old-" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            Files.setLastModifiedTime(backup, FileTime.from(Instant.now().minusSeconds((30L - i) * 86400)));
+        }
+
+        ProcessResult result = run(database, backups, "0", "7");
+
+        assertThat(result.exitCode()).as(result.output()).isZero();
+        try (Stream<Path> files = Files.list(backups)) {
+            List<String> survivors = files
+                    .map(path -> path.getFileName().toString())
+                    .filter(name -> name.endsWith(".mv.db"))
+                    .sorted()
+                    .toList();
+
+            assertThat(survivors).as(result.output()).hasSize(7);
+            // 最舊的三份（index 0、1、2）必須被刪掉，最新的四份必須留著。
+            assertThat(survivors)
+                    .as("最舊的備份才該被刪除：%s", result.output())
+                    .noneMatch(name -> name.contains("T000000Z"))
+                    .noneMatch(name -> name.contains("T000001Z"))
+                    .noneMatch(name -> name.contains("T000002Z"))
+                    .anyMatch(name -> name.contains("T000009Z"))
+                    .anyMatch(name -> name.contains("T000008Z"))
+                    .anyMatch(name -> name.contains("T000007Z"))
+                    .anyMatch(name -> name.contains("T000006Z"));
+        }
+    }
+
     private ProcessResult run(Path database, Path backups, String days, String minimum) throws Exception {
         ProcessBuilder builder = new ProcessBuilder("bash", script.toString(),
                 database.toString(), backups.toString());

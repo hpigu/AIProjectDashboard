@@ -83,8 +83,12 @@ list_backups() {
   [ -d "$BOARD_BACKUP_DIR" ] || return 0
   local f mtime
   while IFS= read -r -d '' f; do
-    mtime="$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null)"
-    printf '%s\t%s\n' "${mtime:-0}" "$f"
+    # 時間戳決定 latest 挑哪一份備份，不能用不可攜的 stat 寫法（見 board-env.sh
+    # 的 board_file_mtime；用錯會讓 latest 在 Linux 上挑到任意一份）。
+    if ! mtime="$(board_file_mtime "$f")"; then
+      mtime=0
+    fi
+    printf '%s\t%s\n' "$mtime" "$f"
   done < <(find "$BOARD_BACKUP_DIR" -maxdepth 1 -type f \
              \( -name 'board-startup-*.mv.db' -o -name 'board-shutdown-*.zip' \) -print0 2>/dev/null) \
     | sort -k1,1nr

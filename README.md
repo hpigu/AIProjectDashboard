@@ -84,6 +84,29 @@ bin/board logs -n 200
 （launchd／systemd）與完整維運流程見 [docs/operations.md](docs/operations.md)。
 `bin/start-board.sh` 仍然存在，`bin/board start` 就是委派給它，只負責「啟動」這件事。
 
+### Windows
+
+Windows 沒有 bash，改用同名的 PowerShell 腳本，預設值、啟動前備份與保留策略
+都與 bash 版一致：
+
+```powershell
+.\bin\board.ps1 start
+.\bin\board.ps1 status
+.\bin\board.ps1 stop            # 送 CTRL_C_EVENT，關閉前備份才會執行
+.\bin\board.ps1 restart
+.\bin\board.ps1 logs -Lines 200
+.\bin\board.ps1 start -Foreground   # 在當前視窗執行，用來看啟動失敗的原因
+```
+
+Windows 沒有 SIGTERM，而 `Stop-Process` 等同 `kill -9`（會跳過 JVM shutdown
+hook，也就沒有關閉前備份），因此 `stop` 改用 console control event
+（`CTRL_C_EVENT`）通知行程，效果等同 mac/Linux 的 SIGTERM 路徑。
+
+一個限制：若看板是你自己在某個終端機視窗手動 `java -jar` 啟動的，它與那個視窗
+共用 console，此時送 Ctrl+C 會連視窗一起打斷，`stop` 會偵測到並要求你直接到該
+視窗按 Ctrl+C（效果相同）。改用 `.\bin\board.ps1 start` 啟動後，看板會有自己的
+console，`stop` 即可正常運作。
+
 看到 `看板已就緒：http://127.0.0.1:8080` 就代表可以打開瀏覽器了。也可以用
 手動方式組裝與啟動；組裝時仍必須隔離測試用埠號與資料庫。手動方式不包含腳本的
 JDK／埠號／鎖檔檢查，也不會套用腳本的絕對資料庫路徑策略：
@@ -458,7 +481,11 @@ bin/
 ├── board-env.sh    # 埠號／資料庫／日誌／PID 檔預設值，三支腳本共用
 ├── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、啟動前備份、自動組裝）
 ├── backup-db.sh    # 啟動前冷備份與保留策略，由 start-board.sh 呼叫
-└── restore-db.sh   # 從備份還原（兩種格式皆支援，保留現有資料庫）
+├── restore-db.sh   # 從備份還原（兩種格式皆支援，保留現有資料庫）
+├── board.ps1       # 以上 board + start-board 的 Windows 版本
+├── board-env.ps1   # board-env.sh 的 Windows 版本
+├── backup-db.ps1   # backup-db.sh 的 Windows 版本
+└── restore-db.ps1  # restore-db.sh 的 Windows 版本
 plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
 .codex-plugin/      # Codex plugin 骨架（同上，格式依 Codex 慣例）
 .claude-plugin/
@@ -506,7 +533,8 @@ Flyway、Vue 3（零建置，執行檔與字型皆 vendor 進 repo，前端完�
   Flyway 的連線／遷移日誌調整為 `WARN`，避免預設 `INFO` 等級外洩含使用者
   名稱與檔案路徑的完整 JDBC URL。
 - **還原**：`bin/restore-db.sh --list` 列出兩種備份（新到舊），
-  `bin/restore-db.sh latest` 還原最新一份，也可指定特定備份檔。還原會先確認
+  `bin/restore-db.sh latest` 還原最新一份，也可指定特定備份檔
+  （Windows：`.\bin\restore-db.ps1 -List`／`.\bin\restore-db.ps1 latest`）。還原會先確認
   看板未在執行、資料庫檔未被持有，把現有資料庫**改名保留**成
   `board.mv.db.pre-restore-<UTC>`（不刪除），再以 `.tmp` → 驗證 H2 檔頭 →
   原子改名的方式寫入。還錯備份時把保留檔改回原檔名即可。完整步驟與發版前的

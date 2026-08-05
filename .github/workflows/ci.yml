@@ -77,3 +77,23 @@ jobs:
           sudo apt-get install -y -qq shellcheck
           shellcheck --severity=warning \
             bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh
+
+  windows-scripts:
+    name: Windows 腳本檢查
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # bin/*.ps1 是 Windows 使用者的唯一入口，而它們碰的是使用者的資料庫檔案。
+      # 這個 job 在真正的 Windows 上做語法檢查，並用假的 H2 檔案跑完整的
+      # 備份／保留策略／兩種格式還原／各種拒絕路徑。跑的是 Windows PowerShell
+      # 5.1（Windows 內建版本），確保不會寫進只有 pwsh 7 才有的語法。
+      - name: Windows PowerShell 5.1 檢查
+        shell: powershell
+        run: .\scripts\windows-check\check.ps1
+
+      - name: PowerShell 7 檢查
+        shell: pwsh
+        run: .\scripts\windows-check\check.ps1

@@ -30,6 +30,16 @@
 
 set -u
 
+# 需要 board_file_mtime()（見 board-env.sh 內對 stat 可攜性的完整說明：
+# GNU 與 BSD 的 stat 時間格式選項不同，寫錯會讓保留策略拿到垃圾時間戳）。
+# start-board.sh 會先 source board-env.sh，此時不必重複載入；獨立執行時自行載入。
+if ! declare -f board_file_mtime >/dev/null 2>&1; then
+  _BACKUP_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  REPO_ROOT="${REPO_ROOT:-$(cd -P "${_BACKUP_SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)}"
+  # shellcheck source=bin/board-env.sh
+  source "${_BACKUP_SCRIPT_DIR}/board-env.sh"
+fi
+
 _backup_log()  { printf '[backup-db] %s\n' "$*"; }
 _backup_err()  { printf '[backup-db][錯誤] %s\n' "$*" >&2; }
 
@@ -109,14 +119,21 @@ _backup_apply_retention() {
   local total="${#files[@]}"
   [ "$total" -eq 0 ] && return 0
 
-  # 依 mtime 新到舊排序（macOS/BSD 與 GNU find 皆可用的可攜寫法：用 stat 取
-  # mtime 後交給 sort，避免依賴 find -newer 之類非可攜選項）。
+  # 依 mtime 新到舊排序（用 stat 取 mtime 後交給 sort，避免依賴 find -newer
+  # 之類非可攜選項）。時間戳一律經 board_file_mtime 取得，它會處理 GNU 與 BSD
+  # 的 stat 差異並保證回傳純數字。
   local sortable=()
   local f mtime
   for f in "${files[@]}"; do
-    mtime="$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null)"
+    if ! mtime="$(board_file_mtime "$f")"; then
+      # 取不到時間戳就無法判斷新舊；保守起見保留該檔案，不納入刪除候選。
+      _backup_err "無法取得備份檔時間戳，保留不刪：$f"
+      continue
+    fi
     sortable+=("${mtime}:${f}")
   done
+
+  [ "${#sortable[@]}" -eq 0 ] && return 0
 
   # 逐行讀進陣列，不用 sorted=($(...))：後者會依 IFS 對命令輸出做 word splitting，
   # 備份目錄路徑一旦含有空白（macOS 的家目錄很常見），單一項目會被拆成兩筆，
@@ -137,6 +154,16 @@ _backup_apply_retention() {
   for entry in "${sorted[@]}"; do
     entry_mtime="${entry%%:*}"
     entry_file="${entry#*:}"
+
+    # 縱深防禦：任何非純數字的時間戳都不可以走到 rm。這裡曾因 stat 的可攜性
+    # 問題而收到檔案系統資訊字串，導致刪除判斷完全失效。
+    case "$entry_mtime" in
+      ''|*[!0-9]*)
+        _backup_err "略過無法判讀時間戳的項目：$entry_file"
+        remaining=$((remaining + 1))
+        continue
+        ;;
+    esac
 
     if [ "$entry_mtime" -ge "$cutoff_epoch" ]; then
       # 30 天內，一律保留。

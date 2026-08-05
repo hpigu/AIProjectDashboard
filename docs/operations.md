@@ -29,6 +29,44 @@ bin/board stop --force   # 會失去這一次的關閉前備份
 `stop` 動手前會確認 PID 檔指向的行程真的是看板（PID 會被作業系統回收），
 不是就直接說「未在執行」並清掉殘留 PID 檔，不會誤殺別的行程。
 
+### Windows
+
+Windows 沒有 bash，改用同名的 `.ps1`（預設值、啟動前備份、保留策略都與 bash 版一致）：
+
+```powershell
+.\bin\board.ps1 start
+.\bin\board.ps1 status
+.\bin\board.ps1 stop
+.\bin\board.ps1 restart
+.\bin\board.ps1 logs -Lines 200
+```
+
+**停止的機制不同，必須知道**：Windows 沒有 SIGTERM，`Stop-Process` 等同
+`kill -9`，會跳過 JVM shutdown hook，關閉前備份就不會產生。因此 `stop` 改用
+console control event（`CTRL_C_EVENT`）通知行程，效果等同 mac/Linux 的 SIGTERM。
+
+兩個 Windows 專屬情況：
+
+- **看板是你手動 `java -jar` 起的**：它與那個終端機視窗共用 console，送 Ctrl+C
+  會連視窗一起打斷。`stop` 會偵測到並要求你直接到那個視窗按 Ctrl+C（效果相同，
+  同樣會產生關閉前備份）。改用 `.\bin\board.ps1 start` 之後就沒有這個問題。
+- **啟動失敗但日誌沒東西**：背景模式下看板有自己的隱藏 console，logback 初始化
+  前的輸出不會落檔。改用 `.\bin\board.ps1 start -Foreground` 在當前視窗執行，
+  直接看到那段輸出。
+
+還原用 `.\bin\restore-db.ps1 -List` 與 `.\bin\restore-db.ps1 latest`，
+語意與 bash 版相同（拒絕在執行中還原、保留現有資料庫、驗證後才原子改名）。
+
+改動這些腳本後可用內建檢查驗證（不需要看板在跑，也不會碰到正式資料）：
+
+```powershell
+pwsh -NoProfile -File scripts\windows-check\check.ps1
+```
+
+它會做語法檢查，並用假的 H2 檔案跑完整的備份／保留策略／兩種格式還原／拒絕路徑。
+CI 也會在 windows-latest 上跑同一支腳本（Windows PowerShell 5.1 與 pwsh 7 各一次）。
+JDK 偵測、埠號反查與 CTRL_C 的實際效果無法自動驗證，需依下方演練清單手動確認。
+
 ### 開機自動啟動
 
 **macOS（launchd）**：建立 `~/Library/LaunchAgents/dev.aiboard.board.plist`，
@@ -163,3 +201,5 @@ curl -s http://127.0.0.1:8080/api/projects
 | 停止後看板還在 | PID 檔遺失時 `stop` 會改用埠號反查；都找不到就是行程不是本腳本啟動的，用 `lsof -i :8080` 確認 |
 | 啟動失敗但日誌沒東西 | 看 `<BOARD_LOG_FILE>.console`：logback 初始化前的錯誤只會出現在那裡 |
 | 看板空的、沒有任何專案 | 正常。寫入只走 MCP，REST 唯讀，沒有種子資料；照首頁的三步操作 |
+| Windows：`stop` 說與視窗共用 console | 看板是手動 `java -jar` 起的，直接到那個視窗按 Ctrl+C；之後改用 `.\bin\board.ps1 start` |
+| Windows：`board.ps1` 無法執行（執行原則） | 以 `powershell -ExecutionPolicy Bypass -File .\bin\board.ps1 start` 執行，或為目前使用者放寬：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |

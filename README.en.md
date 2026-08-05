@@ -62,6 +62,18 @@ bin/board restart
 bin/board logs       # tail -f the log file
 ```
 
+On Windows, use the PowerShell equivalents (same defaults, same backup and
+retention behaviour):
+
+```powershell
+.\bin\board.ps1 start
+.\bin\board.ps1 status
+.\bin\board.ps1 stop            # sends CTRL_C_EVENT so the shutdown backup runs
+.\bin\board.ps1 restart
+.\bin\board.ps1 logs -Lines 200
+.\bin\board.ps1 start -Foreground   # run in this window to debug startup failures
+```
+
 `stop` never escalates to `SIGKILL` on its own — that would skip the consistent
 shutdown backup. Pass `--force` if you really need to kill the process.
 
@@ -150,7 +162,8 @@ Read this before exposing the board to anything beyond your own machine.
 - **Retention**: backups newer than 30 days are always kept; older ones are only
   deleted while at least 7 remain.
 - **Restore**: `bin/restore-db.sh --list`, then
-  `bin/restore-db.sh latest` (or a specific file). It refuses to run while the
+  `bin/restore-db.sh latest` (or a specific file); on Windows,
+  `.\bin\restore-db.ps1 -List` and `.\bin\restore-db.ps1 latest`. It refuses to run while the
   board is up, preserves the current database as `.pre-restore-<UTC>` instead of
   deleting it, and verifies the restored file before committing the rename.
 
