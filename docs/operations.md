@@ -218,5 +218,7 @@ curl -s http://127.0.0.1:8080/api/projects
 | 停止後看板還在 | PID 檔遺失時 `stop` 會改用埠號反查；都找不到就是行程不是本腳本啟動的，用 `lsof -i :8080` 確認 |
 | 啟動失敗但日誌沒東西 | 看 `<BOARD_LOG_FILE>.console`：logback 初始化前的錯誤只會出現在那裡 |
 | 看板空的、沒有任何專案 | 正常。寫入只走 MCP，REST 唯讀，沒有種子資料；照首頁的三步操作 |
+| `/api/events` 回 503 | 已達 SSE 連線上限（`BOARD_SSE_MAX_CONNECTIONS`，預設 32）。關掉沒在用的看板分頁；持續發生代表有東西一直開新連線卻沒關舊的 |
+| 分頁的畫面突然重新整理了一次 | 該連線的事件佇列滿了（跟不上），伺服器主動斷線讓它重連並整批重抓。偶爾發生是正常的自我修復；頻繁發生可調高 `BOARD_SSE_CLIENT_QUEUE_CAPACITY` |
 | Windows：`stop` 說與視窗共用 console | 看板是手動 `java -jar` 起的，直接到那個視窗按 Ctrl+C；之後改用 `.\bin\board.ps1 start` |
 | Windows：`board.ps1` 無法執行（執行原則） | 以 `powershell -ExecutionPolicy Bypass -File .\bin\board.ps1 start` 執行，或為目前使用者放寬：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |

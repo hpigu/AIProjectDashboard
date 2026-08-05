@@ -41,6 +41,13 @@ board:
     # config/LocalOriginGuardFilter。刻意要讓區網其他裝置或反向代理連入時才設定，
     # 例如 BOARD_ALLOWED_HOSTS=192.168.1.20,board.local。設定它不會產生任何認證。
     allowed-hosts: ${BOARD_ALLOWED_HOSTS:}
+  sse:
+    # 每條 /api/events 連線都佔用一個永不結束的 Tomcat async request。單機看板
+    # 正常是個位數分頁，上限是為了讓異常情況以明確的 503 收場而非慢慢拖垮行程。
+    max-connections: ${BOARD_SSE_MAX_CONNECTIONS:32}
+    # 每個客戶端的事件緩衝。滿了代表該客戶端跟不上，連線會被結束，讓前端重連後
+    # 整批重抓——比默默丟事件、讓畫面停在錯誤狀態要好。
+    client-queue-capacity: ${BOARD_SSE_CLIENT_QUEUE_CAPACITY:128}
   backup:
     # 與 bin/backup-db.sh 的啟動前備份共用同一個 BOARD_BACKUP_DIR（見
     # bin/start-board.sh 第 4.5 節），確保 startup／shutdown／scheduled 三種
