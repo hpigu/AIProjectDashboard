@@ -37,6 +37,27 @@ jobs:
           java-version: '21'
           cache: maven
 
+      # 擋掉「tag 打在錯的 commit 上」——實際發生過：v3.1.0 打在還沒合併版號變更的
+      # main 上，release 於是產出一個名為 ai-project-board-backend-3.0.0.jar 的檔案
+      # 掛在 v3.1.0 底下，而且整個流程一路綠燈沒有任何人被告知。
+      #
+      # 放在測試之前：這一項失敗代表整個 release 從一開始就不該進行，沒必要先花
+      # 幾分鐘跑完測試再來發現。
+      - name: 確認 tag 與 pom.xml 版號一致
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          pom_version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          if [ "v${pom_version}" != "${TAG}" ]; then
+            echo "::error::tag ${TAG} 與 pom.xml 的版本 ${pom_version} 不一致。" >&2
+            echo "多半是 tag 打在還沒合併版號變更的 commit 上。若照舊發布，會產出一個" >&2
+            echo "名稱與 tag 對不上的 jar，下載的人無從得知手上的是哪一版。" >&2
+            echo "處理方式：先把含版號變更的分支合併進 main，刪掉這個 tag 後重打。" >&2
+            exit 1
+          fi
+          echo "tag ${TAG} 與 pom.xml 版本 ${pom_version} 一致。"
+
       # 發布前一定要跑測試：release 是唯一會被陌生人直接下載執行的產物，
       # 不能因為「tag 推上去了」就跳過驗證。
       - name: 執行測試
