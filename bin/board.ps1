@@ -57,13 +57,24 @@ if ($startTimeoutEnv -and ($startTimeoutEnv -as [int])) { $StartTimeoutSec = [in
 # 與 bin/start-board.sh 的 version_is_21() 同樣的陷阱要避開：不能只看
 # `java -version` 的第一行，JVM 會把 JAVA_TOOL_OPTIONS／_JAVA_OPTIONS 的
 # "Picked up ..." 提示印在版本字串之前，那會讓已安裝的 JDK 21 被誤判成沒裝。
+#
+# 第二個陷阱是 Windows PowerShell 5.1 專屬的：`java -version` 寫的是 stderr，
+# 而 5.1 在 $ErrorActionPreference='Stop'（本腳本頂端就是這樣設）之下，會把
+# native 指令的每一行 stderr 包成 ErrorRecord 並當成終止性的 NativeCommandError
+# 拋出。結果是這個函式無論如何都會落進 catch，已安裝的 JDK 21 一律被判成沒裝，
+# board.ps1 start 在 5.1 上完全無法啟動（pwsh 7 沒有這個行為，所以只跑 7 測不出來）。
+# 因此把呼叫包進自己的 scope 並降回 'Continue'，再用 ToString() 把 ErrorRecord
+# 還原成純文字行，避免夾帶 PowerShell 的錯誤格式。
 # ---------------------------------------------------------------------------
 function Test-Java21 {
     param([string]$JavaPath)
 
     if ([string]::IsNullOrWhiteSpace($JavaPath) -or -not (Test-Path $JavaPath)) { return $false }
     try {
-        $output = & $JavaPath -version 2>&1 | Out-String
+        $output = & {
+            $ErrorActionPreference = 'Continue'
+            (& $JavaPath -version 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        }
     } catch {
         return $false
     }
@@ -229,6 +240,30 @@ if (`$sent) { exit 0 } else { exit 3 }
 }
 
 # ---------------------------------------------------------------------------
+# 強制終止的收尾：殺掉指定 PID 之後，再確認埠號沒有被遺留的看板行程握著。
+#
+# 理由同 Invoke-BoardStop 的等待迴圈：PID 檔可能記到 Oracle javapath 的 launcher
+# stub，殺掉 stub 不會帶走真正跑 JVM 的子行程，那個子行程會繼續持有埠號與 H2 的
+# .mv.db 鎖，下一次 start 只會撞上 MVStoreException。
+#
+# 一定要經過 Test-BoardProcess 才動手：埠號在看板死掉之後可能被其他服務接手，
+# 對陌生行程送 -Force 是這類腳本最典型的災難。
+# ---------------------------------------------------------------------------
+function Stop-BoardProcessTree {
+    param([int]$ProcessId)
+
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+
+    $lingering = Get-BoardPidFromPort
+    if ($lingering -gt 0 -and $lingering -ne $ProcessId -and (Test-BoardProcess -ProcessId $lingering)) {
+        Write-BoardLog "埠號 $script:BoardPort 仍被看板子行程 PID=$lingering 持有（launcher stub 的實際 JVM），一併終止。"
+        Stop-Process -Id $lingering -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+}
+
+# ---------------------------------------------------------------------------
 # start
 # ---------------------------------------------------------------------------
 function Invoke-BoardStart {
@@ -387,8 +422,7 @@ function Invoke-BoardStop {
         Write-BoardErr "看板就會有自己的 console，stop 便可正常運作。"
         if (-not $Force) { return 1 }
         Write-BoardErr "已指定 -Force，改為強制終止（會失去關閉前備份）。"
-        Stop-Process -Id $boardPid -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+        Stop-BoardProcessTree -ProcessId $boardPid
         Remove-Item $script:BoardPidFile -Force -ErrorAction SilentlyContinue
         Write-BoardLog "已強制終止（PID=$boardPid）。"
         return 0
@@ -404,9 +438,17 @@ function Invoke-BoardStop {
         if (-not $Force) { return 1 }
     }
 
+    # 「已停止」的判準是行程消失「而且」埠號釋放，不能只看前者。
+    #
+    # Oracle JDK 官方安裝檔會建立 C:\Program Files\Common Files\Oracle\Java\javapath\
+    # 這層 launcher stub，它不是 symlink——執行後會再 spawn 一個真正跑 JVM（也就是
+    # 跑 shutdown hook、寫關閉前備份）的子行程，PID 檔記到的是 stub。stub 若先於
+    # 子行程結束，只看 PID 會在備份還沒寫完時就回報成功，而這支腳本存在的理由正是
+    # 那份備份。埠號要等 JVM 真的收工才會釋放，用它當補充條件。
     $elapsed = 0
     while ($elapsed -lt $StopTimeoutSec) {
-        if (-not (Get-Process -Id $boardPid -ErrorAction SilentlyContinue)) {
+        $processGone = -not (Get-Process -Id $boardPid -ErrorAction SilentlyContinue)
+        if ($processGone -and (Get-BoardPidFromPort) -le 0) {
             Remove-Item $script:BoardPidFile -Force -ErrorAction SilentlyContinue
             Write-BoardLog "已停止（PID=$boardPid，耗時 $elapsed 秒）。關閉前備份見 $script:BoardBackupDir。"
             return 0
@@ -421,8 +463,7 @@ function Invoke-BoardStop {
     if ($Force) {
         Write-BoardErr "等待 $StopTimeoutSec 秒仍未結束，依 -Force 強制終止。"
         Write-BoardErr "注意：強制終止不會執行關閉前備份，本次停止沒有一致性快照。"
-        Stop-Process -Id $boardPid -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+        Stop-BoardProcessTree -ProcessId $boardPid
         if (Get-Process -Id $boardPid -ErrorAction SilentlyContinue) {
             Write-BoardErr "強制終止後行程仍存在（PID=$boardPid），請手動確認。"
             return 1
