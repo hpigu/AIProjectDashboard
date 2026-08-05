@@ -1,0 +1,99 @@
+name: CI
+
+# 每個 push 與 PR 都跑一次完整測試。專案原本沒有任何 CI，223 個測試只在
+# 開發者本機跑過，PR 沒有自動門檻——這個 workflow 就是那道門檻。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # 同一分支連續推送時，取消還在跑的舊 run，不佔用 runner 額度。
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 測試（JDK 21）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # AGENTS.md 的隔離要求：正式看板的 :8080 與預設資料庫不得拿來跑測試。
+      # CI 容器雖然是全新環境，仍照同一組規則設定，讓 CI 與本機指令一致。
+      BOARD_PORT: '8081'
+      BOARD_DB_URL: 'jdbc:h2:file:./data/ci;DB_CLOSE_ON_EXIT=FALSE'
+      BOARD_LOG_FILE: './logs/ci.log'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 設定 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: 執行測試
+        run: ./mvnw -B test
+
+      - name: 組裝 jar（確認 package 週期同樣可用）
+        run: ./mvnw -B -DskipTests package
+
+      - name: 上傳測試報告（失敗時才需要）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 7
+
+  scripts:
+    name: 啟動腳本靜態檢查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # bin/ 下的腳本是使用者的第一個接觸點，壞掉等於裝不起來，但它們不在
+      # Maven 測試範圍內（只有部分行為由 JUnit 以 ProcessBuilder 覆蓋）。
+      # 這裡先做語法檢查，再跑 shellcheck 補靜態問題。
+      - name: bash 語法檢查
+        run: |
+          for script in bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh; do
+            echo "檢查 ${script}"
+            bash -n "${script}"
+          done
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning \
+            bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh
+
+  windows-scripts:
+    name: Windows 腳本檢查
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # bin/*.ps1 是 Windows 使用者的唯一入口，而它們碰的是使用者的資料庫檔案。
+      # 這個 job 在真正的 Windows 上做語法檢查，並用假的 H2 檔案跑完整的
+      # 備份／保留策略／兩種格式還原／各種拒絕路徑。跑的是 Windows PowerShell
+      # 5.1（Windows 內建版本），確保不會寫進只有 pwsh 7 才有的語法。
+      - name: Windows PowerShell 5.1 檢查
+        shell: powershell
+        run: .\scripts\windows-check\check.ps1
+
+      - name: PowerShell 7 檢查
+        shell: pwsh
+        run: .\scripts\windows-check\check.ps1

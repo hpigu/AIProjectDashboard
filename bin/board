@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# board — 看板的服務生命週期入口（start / stop / restart / status / logs）
+#
+# 為什麼需要這支腳本：bin/start-board.sh 只負責「啟動」，停止得自己
+# ps | grep | kill。那條路有兩個實際後果：
+#   1. 使用者猜錯 PID 就殺到別的 Java 行程；
+#   2. 圖快用 kill -9，而 SIGKILL 不給 ShutdownBackupService 任何機會執行，
+#      關閉前的一致性備份直接消失（見 README「安全啟動、備份與診斷」）。
+# 因此 stop 一律先送 SIGTERM 並等待，確認行程是看板本身才動手，
+# 且絕不自動升級成 SIGKILL——要強制終止必須由使用者明確加上 --force。
+#
+# 路徑與埠號的預設值全部來自 bin/board-env.sh，與 bin/start-board.sh 共用。
+#
+# 可用環境變數：見 bin/board-env.sh 與 bin/start-board.sh 檔頭。
+#   BOARD_STOP_TIMEOUT_SEC  stop 等待行程結束的秒數（預設 60）
+
+set -u
+
+# ---------------------------------------------------------------------------
+# 0. 定位 repo 根目錄（與 start-board.sh 相同的 symlink-safe 作法，因為本腳本
+#    同樣可能經由 plugin 的 bin/ symlink 執行）
+# ---------------------------------------------------------------------------
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SCRIPT_SOURCE" ]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd)"
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+  [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd)"
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+
+log()  { printf '[board] %s\n' "$*"; }
+err()  { printf '[board][錯誤] %s\n' "$*" >&2; }
+
+# shellcheck source=bin/board-env.sh
+source "${SCRIPT_DIR}/board-env.sh"
+
+STOP_TIMEOUT_SEC="${BOARD_STOP_TIMEOUT_SEC:-60}"
+
+usage() {
+  cat <<EOF
+用法：board <指令> [選項]
+
+指令：
+  start              啟動看板（委派 bin/start-board.sh：JDK 偵測、埠號與鎖檔
+                     檢查、啟動前備份、必要時現場組裝 jar）
+  stop [--force]     送 SIGTERM 停止看板並等待關閉前備份完成。逾時後預設不會
+                     強制終止；--force 才會在等待逾時後送 SIGKILL（會失去
+                     關閉前備份）
+  restart            stop 後再 start
+  status             顯示 PID、埠號與 /api/health 版本資訊
+  logs [-n N]        追蹤日誌（tail -f）；-n 指定先顯示的行數，預設 50
+
+環境變數：
+  BOARD_PORT               預設 8080
+  BOARD_PID_FILE           預設 ${BOARD_HOME_DIR}/board.pid
+  BOARD_LOG_FILE           預設 <repo>/logs/board.log
+  BOARD_STOP_TIMEOUT_SEC   stop 等待秒數，預設 60
+
+離開碼：
+  0  指令成功（status：看板正在執行）
+  1  指令失敗
+  3  status 專用：看板未在執行
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# 解析目前的看板 PID。
+#
+# 兩個來源，順序有意義：
+#   1. PID 檔——由 start-board.sh 寫入，最準確。
+#   2. 埠號反查——PID 檔遺失（手動 java -jar 起、家目錄被清掉）時的後備。
+# 兩者都會經過 board_pid_is_board() 確認行程真的是看板，避免 PID 被回收後
+# 對無關行程動手。找不到時回傳非 0，不輸出任何內容。
+# ---------------------------------------------------------------------------
+resolve_pid() {
+  local pid
+  if pid="$(board_read_pid_file)"; then
+    printf '%s' "$pid"
+    return 0
+  fi
+
+  if pid="$(board_pid_from_port)" && board_pid_is_board "$pid"; then
+    printf '%s' "$pid"
+    return 0
+  fi
+
+  return 1
+}
+
+cmd_start() {
+  # 交給 start-board.sh：JDK 偵測、埠號檢查、H2 鎖檔偵測、啟動前備份、
+  # 自動組裝與 PID 檔寫入都在那裡，這裡不重複實作。
+  exec "${SCRIPT_DIR}/start-board.sh"
+}
+
+cmd_stop() {
+  local force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1 ;;
+      *) err "stop 不認識的選項：$1"; return 1 ;;
+    esac
+    shift
+  done
+
+  local pid
+  if ! pid="$(resolve_pid)"; then
+    # PID 檔可能是上次沒清乾淨的殘留；順手清掉，讓下次 status 不再誤報。
+    if [ -f "$BOARD_PID_FILE" ]; then
+      log "PID 檔存在但行程已不在（殘留），清除：${BOARD_PID_FILE}"
+      rm -f "$BOARD_PID_FILE"
+    fi
+    log "看板未在執行，無需停止。"
+    return 0
+  fi
+
+  log "停止看板（PID=${pid}）……送出 SIGTERM，等待關閉前備份完成。"
+  if ! kill -TERM "$pid" 2>/dev/null; then
+    err "送出 SIGTERM 失敗（PID=${pid}）：可能權限不足或行程剛結束。"
+    return 1
+  fi
+
+  local elapsed=0
+  while [ "$elapsed" -lt "$STOP_TIMEOUT_SEC" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$BOARD_PID_FILE"
+      log "已停止（PID=${pid}，耗時 ${elapsed} 秒）。關閉前備份見 ${BOARD_BACKUP_DIR}。"
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+    # 大型資料庫的 BACKUP TO 可能需要數十秒，過程中給出進度而不是靜默等待。
+    if [ $((elapsed % 10)) -eq 0 ]; then
+      log "仍在關閉中……（已等待 ${elapsed}／${STOP_TIMEOUT_SEC} 秒）"
+    fi
+  done
+
+  if [ "$force" -eq 1 ]; then
+    err "等待 ${STOP_TIMEOUT_SEC} 秒仍未結束，依 --force 送出 SIGKILL。"
+    err "注意：SIGKILL 不會執行關閉前備份，本次停止沒有一致性快照。"
+    kill -KILL "$pid" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+      err "SIGKILL 後行程仍存在（PID=${pid}），請手動確認。"
+      return 1
+    fi
+    rm -f "$BOARD_PID_FILE"
+    log "已強制終止（PID=${pid}）。"
+    return 0
+  fi
+
+  err "等待 ${STOP_TIMEOUT_SEC} 秒後行程 PID=${pid} 仍在執行，已放棄等待（未強制終止）。"
+  err "刻意不自動送 SIGKILL：那會中斷關閉前備份。可先查看 ${BOARD_LOG_FILE} 確認"
+  err "是否正在進行備份；確定要強制終止再執行：bin/board stop --force"
+  return 1
+}
+
+cmd_restart() {
+  cmd_stop || return 1
+  # 停止後 H2 需要一點時間釋放檔案鎖；沒有這段間隔，start 有機會撞上
+  # MVStoreException（正是 start-board.sh 第 4 節在防的那個坑）。
+  sleep 1
+  "${SCRIPT_DIR}/start-board.sh"
+}
+
+cmd_status() {
+  local pid=""
+  local running=1
+  if pid="$(resolve_pid)"; then
+    running=0
+  fi
+
+  if [ "$running" -eq 0 ]; then
+    log "行程：執行中（PID=${pid}）"
+  else
+    log "行程：未執行"
+  fi
+
+  log "PID 檔：${BOARD_PID_FILE}$([ -f "$BOARD_PID_FILE" ] || printf '（不存在）')"
+  log "埠號：${BOARD_PORT}"
+  log "資料庫：${BOARD_DB_URL}"
+  log "日誌：${BOARD_LOG_FILE}"
+
+  if board_http_ready 3; then
+    log "HTTP：/api/health/live 正常回應"
+    if command -v curl >/dev/null 2>&1; then
+      local health
+      health="$(curl -s --max-time 3 "http://127.0.0.1:${BOARD_PORT}/api/health" 2>/dev/null)"
+      [ -n "$health" ] && log "版本資訊：${health}"
+    fi
+  else
+    log "HTTP：沒有回應（服務未啟動，或仍在啟動中）"
+  fi
+
+  # 行程在、但 HTTP 不通也算「未就緒」；status 的離開碼以「服務可用」為準，
+  # 方便寫進其他腳本或監控。
+  if [ "$running" -eq 0 ] && board_http_ready 3; then
+    return 0
+  fi
+  return 3
+}
+
+cmd_logs() {
+  local lines=50
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n) shift; lines="${1:-50}" ;;
+      *) err "logs 不認識的選項：$1"; return 1 ;;
+    esac
+    shift
+  done
+
+  if [ ! -f "$BOARD_LOG_FILE" ]; then
+    err "日誌檔不存在：${BOARD_LOG_FILE}（看板可能尚未啟動過）"
+    return 1
+  fi
+
+  log "追蹤 ${BOARD_LOG_FILE}（Ctrl+C 結束）"
+  tail -n "$lines" -f "$BOARD_LOG_FILE"
+}
+
+COMMAND="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$COMMAND" in
+  start)   cmd_start "$@" ;;
+  stop)    cmd_stop "$@" ;;
+  restart) cmd_restart "$@" ;;
+  status)  cmd_status "$@" ;;
+  logs)    cmd_logs "$@" ;;
+  ''|-h|--help|help) usage ;;
+  *) err "不認識的指令：${COMMAND}"; echo; usage >&2; exit 1 ;;
+esac

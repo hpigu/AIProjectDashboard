@@ -49,6 +49,8 @@ const LevelOne = {
       error: null,
       searchTimer: null,
       requestController: null,
+      copyLabel: '複製',
+      copyTimer: null,
     };
   },
   computed: {
@@ -57,6 +59,17 @@ const LevelOne = {
     },
     hasFilters() {
       return this.filters.query || this.filters.status !== 'ACTIVE' || this.filters.blocked || this.filters.sort !== 'UPDATED_DESC';
+    },
+    // 「一張卡片都還沒有」與「篩選條件沒篩到東西」是兩件事，需要的下一步也完全
+    // 不同：前者要教學（第一次啟動的看板必然是空的，因為寫入只走 MCP），
+    // 後者只要能清掉條件。projects 是未經篩選的清單，用它判斷才不會把
+    // 「篩掉了」誤判成「還沒開始」。
+    isFirstRun() {
+      return !this.hasFilters && (this.projects || []).length === 0;
+    },
+    // 不寫死埠號：使用者可能用 BOARD_PORT 換過埠號，寫死會給出錯誤的接線指令。
+    mcpEndpoint() {
+      return window.location.origin + '/mcp';
     },
   },
   created() {
@@ -67,6 +80,7 @@ const LevelOne = {
   },
   beforeUnmount() {
     if (this.searchTimer) clearTimeout(this.searchTimer);
+    if (this.copyTimer) clearTimeout(this.copyTimer);
     if (this.requestController) this.requestController.abort();
     [this._unsubscribe, this._unsubscribeTasks, this._unsubscribeStatus].forEach(fn => fn && fn());
   },
@@ -95,8 +109,35 @@ const LevelOne = {
         <button type="button" class="filter-clear" @click="clearFilters" :disabled="!hasFilters">清除條件</button>
       </section>
       <div v-if="error" class="empty-state">{{ error }}</div>
+      <section v-else-if="!loading && activeProjects.length === 0 && isFirstRun" class="onboarding" aria-label="開始使用">
+        <h2 class="onboarding-title">看板還是空的</h2>
+        <p class="onboarding-lead">
+          這是正常的：專案與任務只能由 AI agent 透過 MCP 工具寫入，這裡的 REST 端點全部唯讀，
+          不會有種子資料。照下面三步就會看到第一張卡片。
+        </p>
+        <ol class="onboarding-steps">
+          <li>
+            <strong>確認已接上看板</strong>
+            <span class="onboarding-hint">Claude Code 或 Codex 的 MCP 端點指向：</span>
+            <span class="onboarding-endpoint">
+              <code>{{ mcpEndpoint }}</code>
+              <button type="button" class="onboarding-copy" @click="copyEndpoint">{{ copyLabel }}</button>
+            </span>
+          </li>
+          <li>
+            <strong>請 agent 建立專案</strong>
+            <span class="onboarding-hint">在 chat 裡說「建立一個叫 &lt;專案名&gt; 的專案」，agent 會呼叫 create_project。</span>
+          </li>
+          <li>
+            <strong>請 agent 拆任務</strong>
+            <span class="onboarding-hint">接著說「幫這個專案拆幾張任務卡片」，agent 會呼叫 create_tasks。</span>
+          </li>
+        </ol>
+        <p class="onboarding-foot">建立後這一頁會即時更新，不需要重新整理。</p>
+      </section>
       <div v-else-if="!loading && activeProjects.length === 0" class="empty-state">
         還沒有符合條件的專案。
+        <button type="button" class="filter-clear" @click="clearFilters" :disabled="!hasFilters">清除條件</button>
       </div>
       <div v-else>
         <button
@@ -165,6 +206,18 @@ const LevelOne = {
     },
     clearFilters() {
       this.filters = { query: '', status: 'ACTIVE', blocked: false, sort: 'UPDATED_DESC' };
+    },
+    async copyEndpoint() {
+      // navigator.clipboard 需要 secure context；localhost 算 secure，但使用者
+      // 若透過區網 IP 開這一頁就不是，因此失敗時回到「請手動複製」而不是靜默無反應。
+      try {
+        await navigator.clipboard.writeText(this.mcpEndpoint);
+        this.copyLabel = '已複製';
+      } catch (e) {
+        this.copyLabel = '請手動複製';
+      }
+      if (this.copyTimer) clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => { this.copyLabel = '複製'; }, 2000);
     },
     relTime(iso) { return relativeTime(iso); },
     segStyle(p, key) {

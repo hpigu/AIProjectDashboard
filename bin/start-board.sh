@@ -31,6 +31,11 @@
 #   BOARD_START_TIMEOUT_SEC  等待啟動完成的逾時秒數（預設 60）
 #   BOARD_BACKUP_DIR  啟動前冷備份輸出目錄，預設 <BOARD_HOME_DIR>/backups，
 #                  細節見第 4.5 節與 bin/backup-db.sh
+#   BOARD_PID_FILE 預設 <BOARD_HOME_DIR>/board.pid，供 bin/board stop/status 使用
+#   BOARD_CONSOLE_LOG  行程 stdout/stderr，預設 <BOARD_LOG_FILE>.console
+#
+# 一般使用建議直接用 bin/board（start/stop/status/restart/logs），它會呼叫本腳本
+# 啟動，並提供對應的停止與狀態查詢；本腳本本身只負責「啟動」這一件事。
 
 set -u
 
@@ -61,7 +66,11 @@ version_is_21() {
   local candidate="$1"
   [ -x "$candidate" ] || return 1
   local ver
-  ver="$("$candidate" -version 2>&1 | head -n1)"
+  # 不能直接取第一行：JVM 會把 JAVA_TOOL_OPTIONS／_JAVA_OPTIONS 的
+  # "Picked up ..." 提示印在版本字串之前（企業 proxy、IDE、容器映像常設這兩個
+  # 變數），此時第一行根本不含版本號，JDK 21 會被誤判成「沒安裝」。改成挑出
+  # 真正帶 version "..." 的那一行再比對。
+  ver="$("$candidate" -version 2>&1 | grep -F 'version "' | head -n1)"
   [[ "$ver" == *'"21'* ]]
 }
 
@@ -174,27 +183,14 @@ log "使用 JDK 21：$JAVA_BIN（$("$JAVA_BIN" -version 2>&1 | head -n1)）"
 # ---------------------------------------------------------------------------
 # 2. 環境變數與絕對路徑資料庫
 #
-#    資料目錄預設值有兩種情境：
-#    a) 既有使用者：repo 內 ${REPO_ROOT}/data/board.mv.db 已存在，代表這個
-#       repo 位置本來就是資料所在地（例如正式看板）——沿用該路徑，向下相容，
-#       不因為這次改動就讓既有看板「看起來資料不見了」。
-#    b) 全新環境（例如透過 Claude Code plugin 全新安裝、尚未在這個 repo
-#       路徑啟動過）：預設改用家目錄 ~/.ai-project-board/data/board。
-#       原因：plugin 目錄可能因為更新（重新 clone / 覆蓋）而遺失內容，
-#       H2 資料庫檔案不能放在會被覆蓋的路徑下。
+#    埠號、資料庫、日誌、PID 檔的預設值全部定義在 bin/board-env.sh（含「既有
+#    repo 資料目錄 vs 全新環境家目錄」兩種情境的完整說明），由本腳本、bin/board
+#    與 bin/restore-db.sh 共用。抽出去的原因：三者必須對「資料庫／PID／日誌在哪」
+#    有一致認知，否則會出現 start 起在 A 庫、stop 找不到行程這類最難查的錯誤。
 # ---------------------------------------------------------------------------
-BOARD_PORT="${BOARD_PORT:-8080}"
-
-BOARD_HOME_DIR="${BOARD_HOME_DIR:-$HOME/.ai-project-board}"
-if [ -f "${REPO_ROOT}/data/board.mv.db" ]; then
-  DEFAULT_DB_DIR="${REPO_ROOT}/data"
-else
-  DEFAULT_DB_DIR="${BOARD_HOME_DIR}/data"
-fi
-
-BOARD_DB_URL="${BOARD_DB_URL:-jdbc:h2:file:${DEFAULT_DB_DIR}/board;DB_CLOSE_ON_EXIT=FALSE}"
-BOARD_LOG_FILE="${BOARD_LOG_FILE:-${REPO_ROOT}/logs/board.log}"
-export BOARD_PORT BOARD_DB_URL BOARD_LOG_FILE
+# shellcheck source=bin/board-env.sh
+source "${SCRIPT_DIR}/board-env.sh"
+DEFAULT_DB_DIR="$BOARD_DEFAULT_DB_DIR"
 [ -n "${BOARD_DB_USER:-}" ] && export BOARD_DB_USER
 [ -n "${BOARD_DB_PASSWORD:-}" ] && export BOARD_DB_PASSWORD
 
@@ -217,6 +213,10 @@ if [ -n "$PORT_PID" ]; then
   if command -v curl >/dev/null 2>&1 && curl -s -o /dev/null -w '%{http_code}' \
       --max-time 3 "http://127.0.0.1:${BOARD_PORT}/api/projects" 2>/dev/null | grep -q '^2'; then
     log "偵測到看板已在 :${BOARD_PORT} 正常運作（PID ${PORT_PID}），不重複啟動。"
+    # 補寫 PID 檔：看板可能是舊版腳本或手動 java -jar 起的，補上之後
+    # `bin/board stop` 才停得掉，不必叫使用者自己 ps | grep。
+    mkdir -p "$(dirname "$BOARD_PID_FILE")" 2>/dev/null || true
+    printf '%s\n' "$PORT_PID" > "$BOARD_PID_FILE" 2>/dev/null || true
     exit 0
   else
     err "埠號 ${BOARD_PORT} 被其他行程佔用（PID ${PORT_PID}，非本看板服務）。"
@@ -300,10 +300,23 @@ fi
 
 log "啟動 jar：${JAR_PATH}"
 mkdir -p "$(dirname "$BOARD_LOG_FILE")"
+mkdir -p "$(dirname "$BOARD_PID_FILE")"
 
-"$JAVA_BIN" -jar "$JAR_PATH" &
+# nohup + 重導向 + disown：讓行程脫離啟動它的終端機。
+#
+# 舊版直接用 `&` 起子行程後腳本就結束，行程仍掛在終端機的 session 上——關掉終端機
+# 視窗會送出 SIGHUP 直接殺掉看板。那個路徑不只是「服務沒了」：SIGHUP 預設行為
+# 是立即終止，ShutdownBackupService 的關閉前備份也一起沒了。nohup 讓行程忽略
+# SIGHUP，disown 再把它從 shell 的 job table 移除，兩者一起才真的斷乾淨。
+#
+# stdout/stderr 導到 BOARD_CONSOLE_LOG 而非 /dev/null：logback 初始化之前的失敗
+# （JVM 參數錯誤、埠號綁不上的原始堆疊）只會出現在 stdout，丟掉的話啟動失敗時
+# 使用者會完全看不到原因。
+nohup "$JAVA_BIN" -jar "$JAR_PATH" >> "$BOARD_CONSOLE_LOG" 2>&1 &
 APP_PID=$!
-log "已啟動子行程 PID=${APP_PID}，等待服務就緒……"
+disown "$APP_PID" 2>/dev/null || true
+printf '%s\n' "$APP_PID" > "$BOARD_PID_FILE"
+log "已啟動子行程 PID=${APP_PID}（PID 檔：${BOARD_PID_FILE}），等待服務就緒……"
 
 # ---------------------------------------------------------------------------
 # 6. 啟動確認：輪詢 /api/projects 直到回應或逾時
@@ -313,7 +326,9 @@ ELAPSED=0
 READY=0
 while [ "$ELAPSED" -lt "$TIMEOUT_SEC" ]; do
   if ! kill -0 "$APP_PID" 2>/dev/null; then
-    err "行程 PID=${APP_PID} 已提前結束，啟動失敗。請查看 ${BOARD_LOG_FILE}。"
+    err "行程 PID=${APP_PID} 已提前結束，啟動失敗。請查看 ${BOARD_LOG_FILE}"
+    err "以及 logback 初始化前的輸出：${BOARD_CONSOLE_LOG}。"
+    rm -f "$BOARD_PID_FILE"
     exit 1
   fi
   if command -v curl >/dev/null 2>&1 && curl -s -o /dev/null -w '%{http_code}' \
@@ -327,6 +342,7 @@ done
 
 if [ "$READY" -ne 1 ]; then
   err "等待 ${TIMEOUT_SEC} 秒後仍未就緒（PID=${APP_PID}）。請查看 ${BOARD_LOG_FILE}。"
+  err "行程仍在執行中，PID 檔保留於 ${BOARD_PID_FILE}，可用 bin/board stop 停止。"
   exit 1
 fi
 
