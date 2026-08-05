@@ -1,4 +1,4 @@
-# board-env.ps1 — Windows 版的看板路徑與環境變數單一事實來源
+﻿# board-env.ps1 — Windows 版的看板路徑與環境變數單一事實來源
 #
 # 這是 bin/board-env.sh 的對應實作，由 bin/board.ps1、bin/backup-db.ps1、
 # bin/restore-db.ps1 共同 dot-source。兩邊的預設值必須保持一致，否則同一台機器上

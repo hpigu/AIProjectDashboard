@@ -1,4 +1,4 @@
-# board.ps1 — Windows 版看板生命週期入口（start / stop / restart / status / logs）
+﻿# board.ps1 — Windows 版看板生命週期入口（start / stop / restart / status / logs）
 #
 # 這是 bin/board 與 bin/start-board.sh 兩支 bash 腳本合併後的 Windows 對應實作。
 # Windows 上沒有 bash，原本只能自己 `java -jar` 再靠 Stop-Process 收工，缺兩件事：

@@ -1,4 +1,4 @@
-# backup-db.ps1 — Windows 版啟動前資料庫冷備份與保留策略
+﻿# backup-db.ps1 — Windows 版啟動前資料庫冷備份與保留策略
 #
 # bin/backup-db.sh 的對應實作，由 bin/board.ps1 在確認 H2 檔案未被其他行程持有
 # 之後、啟動 jar（進而觸發 Flyway migration）之前呼叫。目的相同：一旦某次啟動的

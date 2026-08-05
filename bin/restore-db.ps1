@@ -1,4 +1,4 @@
-# restore-db.ps1 — Windows 版：從備份還原看板資料庫
+﻿# restore-db.ps1 — Windows 版：從備份還原看板資料庫
 #
 # bin/restore-db.sh 的對應實作，兩種備份格式都支援：
 #   - board-startup-*.mv.db  啟動前冷備份（直接複製）

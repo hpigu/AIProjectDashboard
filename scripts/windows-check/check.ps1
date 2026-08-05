@@ -1,4 +1,4 @@
-# check.ps1 — bin/*.ps1 的語法檢查與備份／還原實測
+﻿# check.ps1 — bin/*.ps1 的語法檢查與備份／還原實測
 #
 # 為什麼需要這支腳本：Windows 版腳本（bin/board.ps1 等）不在 Maven 測試生命週期
 # 內，而它們碰的是「使用者的資料庫檔案」——搬錯一步就是資料消失。這支腳本用假的
@@ -52,13 +52,36 @@ function New-FakeH2File {
     [System.IO.File]::WriteAllText($Path, "H:2-$Marker")
 }
 
-Write-Host '=== 1. 語法檢查 ==='
-foreach ($name in @('board-env.ps1', 'backup-db.ps1', 'board.ps1', 'restore-db.ps1')) {
-    $path = Join-Path $BinDir $name
+# CI 的 Windows 記錄檔可讀性用；失敗不影響檢查本身。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
+Write-Host '=== 1. 編碼與語法檢查 ==='
+$scriptFiles = @(
+    (Join-Path $BinDir 'board-env.ps1'),
+    (Join-Path $BinDir 'backup-db.ps1'),
+    (Join-Path $BinDir 'board.ps1'),
+    (Join-Path $BinDir 'restore-db.ps1'),
+    (Join-Path $PSScriptRoot 'check.ps1')
+)
+
+foreach ($path in $scriptFiles) {
+    $name = Split-Path $path -Leaf
+
+    # 這些檔案含中文註解與訊息，必須存成「UTF-8 with BOM」。
+    #
+    # Windows PowerShell 5.1（Windows 內建、多數使用者的預設）在檔案沒有 BOM 時
+    # 會用系統 ANSI 代碼頁解碼 .ps1，非 ASCII 字元因此變成亂碼，字串字面值收不了尾，
+    # 整份腳本 parse 失敗——不是訊息變亂碼而已，是完全跑不起來。PowerShell 7 預設
+    # UTF-8 無 BOM，所以在 pwsh 上測不出這件事（實際上就是這樣漏掉、由 CI 的
+    # windows-latest job 抓到的）。這個斷言把它釘住。
+    $firstBytes = [System.IO.File]::ReadAllBytes($path)[0..2]
+    $hasBom = ($firstBytes[0] -eq 0xEF -and $firstBytes[1] -eq 0xBB -and $firstBytes[2] -eq 0xBF)
+    Assert-True $hasBom "$name 為 UTF-8 with BOM（Windows PowerShell 5.1 必要）"
+
     $parseErrors = $null
     [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$parseErrors) | Out-Null
     $clean = (-not $parseErrors) -or ($parseErrors.Count -eq 0)
-    Assert-True $clean "bin/$name 可正確解析"
+    Assert-True $clean "$name 可正確解析"
     if (-not $clean) {
         $parseErrors | ForEach-Object {
             Write-Host ("         line " + $_.Extent.StartLineNumber + ": " + $_.Message) -ForegroundColor Red

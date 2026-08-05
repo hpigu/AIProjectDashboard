@@ -1,0 +1,14 @@
+# .ps1 必須是「UTF-8 with BOM」：Windows PowerShell 5.1（Windows 內建、多數使用者
+# 的預設）在檔案沒有 BOM 時會用系統 ANSI 代碼頁解碼 .ps1，含中文的腳本會直接
+# parse 失敗。BOM 本身不受換行轉換影響，這裡只固定換行為 CRLF（Windows 慣例）；
+# scripts/windows-check/check.ps1 會斷言 BOM 仍然存在，避免日後被編輯器改掉。
+*.ps1 text eol=crlf
+
+# shell 腳本必須是 LF：帶 \r 的 shebang 或指令會讓 bash 報 command not found。
+*.sh text eol=lf
+bin/board text eol=lf
+mvnw text eol=lf
+
+*.woff2 binary
+*.png binary
+*.gif binary
