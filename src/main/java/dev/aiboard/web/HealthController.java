@@ -44,7 +44,7 @@ public class HealthController {
     @GetMapping("/api/health")
     public HealthView health() {
         HealthService.HealthInfo info = healthService.getHealth();
-        return new HealthView(info.version(), info.tools(), info.startedAt());
+        return new HealthView(info.version(), info.commit(), info.tools(), info.startedAt());
     }
 
     @GetMapping("/api/health/live")
@@ -66,7 +66,7 @@ public class HealthController {
         return diagnosticsService.getDiagnostics();
     }
 
-    public record HealthView(String version, List<String> tools, Instant startedAt) {
+    public record HealthView(String version, String commit, List<String> tools, Instant startedAt) {
     }
 
     public record LivenessView(String status) {

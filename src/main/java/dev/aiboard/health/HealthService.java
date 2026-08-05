@@ -17,27 +17,24 @@ import java.util.List;
  * 檔案系統結構，已收斂）。需要這些細節的維運／debug 情境改用
  * {@code /api/diagnostics}，該端點的可見範圍由呼叫方自行控管。
  *
- * <p>版本與 tool 清單都從實際狀態取得（jar manifest、實際註冊的
- * ToolCallbackProvider），不寫死清單，避免因為行程啟動時間早於某次
- * commit 而誤判。
+ * <p>版本、commit 與 tool 清單都從實際狀態取得（{@link BuildInfoProvider}、
+ * 實際註冊的 ToolCallbackProvider），不寫死清單，避免因為行程啟動時間早於
+ * 某次 commit 而誤判。
  */
 @Service
 public class HealthService {
 
     private final ToolCallbackProvider toolCallbackProvider;
+    private final BuildInfoProvider buildInfo;
     private final Instant startedAt = Instant.now();
 
-    public HealthService(ToolCallbackProvider toolCallbackProvider) {
+    public HealthService(ToolCallbackProvider toolCallbackProvider, BuildInfoProvider buildInfo) {
         this.toolCallbackProvider = toolCallbackProvider;
+        this.buildInfo = buildInfo;
     }
 
     public HealthInfo getHealth() {
-        return new HealthInfo(resolveVersion(), resolveToolNames(), startedAt);
-    }
-
-    private String resolveVersion() {
-        String version = getClass().getPackage().getImplementationVersion();
-        return version != null ? version : "unknown";
+        return new HealthInfo(buildInfo.version(), buildInfo.commit(), resolveToolNames(), startedAt);
     }
 
     private List<String> resolveToolNames() {
@@ -48,6 +45,6 @@ public class HealthService {
                 .toList();
     }
 
-    public record HealthInfo(String version, List<String> tools, Instant startedAt) {
+    public record HealthInfo(String version, String commit, List<String> tools, Instant startedAt) {
     }
 }

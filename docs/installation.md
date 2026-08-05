@@ -179,14 +179,24 @@ reviewer 薄殼都含完整 fallback，且「不修改、不建 task、不認領
 只回報 leader」是不可被資料庫 role 覆蓋的硬邊界。看板若另有 reviewer 指引，
 只能補充唯讀審查準則；找不到時則直接依薄殼工作。
 
-### 版本號無法區分同版本號跨多次 commit 的新舊 build
+### 版本號無法區分同版本號跨多次 commit 的新舊 build（3.1.0 起已解決）
 
-`/api/health` 回傳的 `version` 讀的是 `pom.xml` 的版本號（例如
-`3.0.0`），**不含 git commit hash**。同一個版本號底下可能已經有多次
-commit（例如新增了 `/api/health` 本身這個端點），單看 `version` 欄位
-無法判斷目前跑的行程是不是最新程式碼——只能透過該行程「有沒有某個新端點
-／新欄位」間接推斷，或直接比對啟動時間（`startedAt`）與程式碼 commit
-時間。
+3.1.0 之前，`/api/health` 只回傳 `pom.xml` 的版本號（例如 `3.0.0`），不含 git
+commit hash；同一個版本號底下可能已經有多次 commit，單看 `version` 無法判斷跑
+的是不是最新程式碼。
+
+3.1.0 起 `/api/health` 與 `/api/diagnostics` 都會回傳 `commit`，內容是 build
+來源的 short commit hash：
+
+```json
+{"version":"3.1.0","commit":"f23cd31","tools":["..."],"startedAt":"..."}
+```
+
+該值由建置期產生的 `git.properties` 提供。從沒有 `.git` 的原始碼壓縮檔建置時
+（例如 release 頁面的 Source code (zip)）取不到，此時會是 `unknown`，這是預期
+行為而非錯誤。同一份 `version` 也不再依賴 jar manifest，因此 `mvnw
+spring-boot:run` 與 IDE 直接跑 main 都能看到正確版號（3.1.0 之前一律是
+`unknown`）。
 
 ## 6. 驗證記錄
 

@@ -1,0 +1,80 @@
+# Changelog
+
+本檔記錄對使用者可見的變更。格式參考
+[Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版號遵循
+[語意化版本](https://semver.org/lang/zh-TW/)。
+
+「使用者可見」的判準是：會不會改變別人安裝、啟動、升級或呼叫這個看板的方式。
+純內部重構不進這份清單，留在 git log 即可。
+
+## [Unreleased]
+
+## [3.1.0] — 2026-08-06
+
+3.0.0 之後的第一個正式發布版。3.0.0 從未推過 tag，因此這也是本專案第一次有可
+下載的 release 產物。
+
+### 新增
+
+- `/api/health` 與 `/api/diagnostics` 回傳 `commit` 欄位（build 來源的 short
+  commit hash）。同一個版號在 tag 前後可能對應好幾份不同的 build，只有版號無法
+  分辨手上跑的是哪一份。
+- 建置期產生 `META-INF/build-info.properties` 與 `git.properties`
+  （spring-boot-maven-plugin 的 `build-info` goal 與 git-commit-id-maven-plugin）。
+
+### 修正
+
+- **Windows：`bin\board.ps1 start` 在 Windows PowerShell 5.1 上完全無法啟動。**
+  JDK 偵測一律回報「找不到 JDK 21」，即使系統上裝著。`java -version` 寫的是
+  stderr，而 5.1 在 `$ErrorActionPreference='Stop'` 之下會把 native 指令的
+  stderr 包成終止性的 `NativeCommandError`，使偵測函式必定落進 catch。
+  pwsh 7 沒有這個行為，所以只在 7 上測不會發現。
+- **Windows：`bin\board.ps1 stop` 可能在關閉前備份寫完之前就回報成功。**
+  Oracle JDK 官方安裝檔建立的 `javapath\java.exe` 是 launcher stub，會再 spawn
+  一個真正跑 JVM 與 shutdown hook 的子行程，PID 檔記到的是 stub。等待條件已改為
+  「行程消失且埠號釋放」；`-Force` 路徑也會一併終止仍持有埠號的看板子行程
+  （動手前以命令列比對確認該行程真的是看板）。
+- `/api/health` 的 `version` 在 `mvnw spring-boot:run` 或 IDE 啟動時一律回報
+  `unknown`。原本讀的是 jar manifest 的 `Implementation-Version`，只有打包後才
+  存在。改由建置期產生的 `build-info.properties` 提供，三種啟動方式一致。
+
+### 相容性
+
+- `/api/health` 與 `/api/diagnostics` 的回應**新增**欄位，既有欄位的名稱、型別與
+  語意都未更動。只讀取既有欄位的呼叫方（含 `bin/start-board.sh` 對 `"version"`
+  的檢查）不受影響。
+- 資料庫 schema 無變更，從 3.0.0 升級不需要額外步驟：換掉 jar 重啟即可。
+
+## [3.0.0] — 2026-08-05
+
+產品化基礎的一批改動（PR #1）。此版本未推 tag，沒有 release 產物。
+
+### 新增
+
+- `bin/board`（start／stop／restart／status／logs）與 Windows 對應的
+  `bin\board.ps1`，取代直接 `java -jar`。`stop` 會等待關閉前備份完成。
+- `bin/restore-db.sh` 與 `bin\restore-db.ps1` 還原路徑，支援啟動前（`.mv.db`）與
+  關閉前（`.zip`）兩種備份格式。
+- 首次啟動引導：空看板顯示三步驟說明與可複製的 MCP 端點。
+- CI：每次 push／PR 跑測試與打包，另以 shellcheck 檢查 `bin/` 腳本，並在
+  windows-latest 上以 PowerShell 5.1 與 pwsh 7 各跑一次腳本檢查。
+- release workflow：推 `v*` tag 會產出可下載的 jar。
+- `SECURITY.md`、`README.en.md`、`docs/operations.md`。
+
+### 安全性
+
+- `LocalOriginGuardFilter`：非 loopback 的 `Host`／`Origin` 一律回 403，阻擋
+  DNS rebinding。`BOARD_ALLOWED_HOSTS` 為刻意放行的逃生門。
+- `/api/health` 不再回傳絕對資料庫路徑等檔案系統資訊。
+
+### 修正
+
+- 備份保留策略在 Linux 上排序鍵取得錯誤，可能刪掉最新的備份而非最舊的。
+- JDK 21 在設有 `JAVA_TOOL_OPTIONS` 的環境下被誤判為未安裝。
+- 備份路徑含空白時保留策略失效。
+- 關掉終端機的 SIGHUP 會殺掉看板，連帶失去關閉前備份。
+
+[Unreleased]: https://github.com/hpigu/AIProjectDashboard/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/hpigu/AIProjectDashboard/releases/tag/v3.1.0
+<!-- 3.0.0 沒有 tag，只能指向當時的 PR。 -->
+[3.0.0]: https://github.com/hpigu/AIProjectDashboard/pull/1

@@ -115,7 +115,7 @@ JDK／埠號／鎖檔檢查，也不會套用腳本的絕對資料庫路徑策�
 BOARD_PORT=8081 \
 BOARD_DB_URL='jdbc:h2:file:./data/dev-local' \
   ./mvnw clean package
-java -jar target/ai-project-board-backend-3.0.0.jar
+java -jar target/ai-project-board-backend-3.1.0.jar
 ```
 
 常駐執行在 `:8080`，瀏覽器開 `http://localhost:8080` 看看板。資料庫是 H2 檔案，
@@ -125,7 +125,7 @@ java -jar target/ai-project-board-backend-3.0.0.jar
 ```bash
 BOARD_PORT=18080 \
 BOARD_DB_URL='jdbc:h2:file:./data/dev;DB_CLOSE_ON_EXIT=FALSE' \
-java -jar target/ai-project-board-backend-3.0.0.jar
+java -jar target/ai-project-board-backend-3.1.0.jar
 ```
 
 `bin/start-board.sh` 支援同一組環境變數（`BOARD_PORT`、`BOARD_DB_URL`、
