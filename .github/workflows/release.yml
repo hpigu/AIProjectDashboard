@@ -26,7 +26,7 @@ jobs:
       BOARD_DB_URL: 'jdbc:h2:file:./data/ci;DB_CLOSE_ON_EXIT=FALSE'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
