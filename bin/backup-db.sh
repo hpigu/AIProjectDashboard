@@ -118,9 +118,16 @@ _backup_apply_retention() {
     sortable+=("${mtime}:${f}")
   done
 
+  # 逐行讀進陣列，不用 sorted=($(...))：後者會依 IFS 對命令輸出做 word splitting，
+  # 備份目錄路徑一旦含有空白（macOS 的家目錄很常見），單一項目會被拆成兩筆，
+  # 保留策略就會對著不存在的路徑做判斷。也刻意不用 mapfile——macOS 內建的
+  # bash 3.2 沒有這個 builtin，而本腳本必須能在原生 bash 上跑。
   local sorted=()
-  IFS=$'\n' sorted=($(printf '%s\n' "${sortable[@]}" | sort -t: -k1,1nr))
-  unset IFS
+  local sorted_entry
+  while IFS= read -r sorted_entry; do
+    [ -n "$sorted_entry" ] || continue
+    sorted+=("$sorted_entry")
+  done < <(printf '%s\n' "${sortable[@]}" | sort -t: -k1,1nr)
 
   # remaining 追蹤「目前為止仍會保留的實際份數」，不是走訪位置。30 天內的
   # 檔案一律保留並計入 remaining；30 天外的檔案，只有在刪除後 remaining
