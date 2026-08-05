@@ -1,8 +1,9 @@
 ﻿# restore-db.ps1 — Windows 版：從備份還原看板資料庫
 #
-# bin/restore-db.sh 的對應實作，兩種備份格式都支援：
-#   - board-startup-*.mv.db  啟動前冷備份（直接複製）
-#   - board-shutdown-*.zip   關閉前一致性備份（H2 BACKUP TO 產生，內含 .mv.db）
+# bin/restore-db.sh 的對應實作，三種來源都支援（格式只有兩種）：
+#   - board-startup-*.mv.db   啟動前冷備份（直接複製）
+#   - board-shutdown-*.zip    關閉前一致性備份（H2 BACKUP TO，內含 .mv.db）
+#   - board-scheduled-*.zip   定期一致性備份（同上，還原方式完全相同）
 #
 # 用法：
 #   .\bin\restore-db.ps1 -List                     列出可用備份（新到舊）
@@ -52,12 +53,19 @@ if ([string]::IsNullOrWhiteSpace($DbPath)) {
 $dbMvFile = "$DbPath.mv.db"
 
 # ---------------------------------------------------------------------------
-# 列出備份：兩種格式一起列，依 mtime 新到舊
+# 列出備份：三種階段一起列，依 mtime 新到舊
+#
+# scheduled 一定要列進來：看板長時間運行時，最新的一份備份幾乎必然是排程備份，
+# 漏掉它會讓 latest 挑到一份舊得多的快照，而使用者不會察覺。
 # ---------------------------------------------------------------------------
 function Get-BoardBackups {
     if (-not (Test-Path $script:BoardBackupDir)) { return @() }
     return @(Get-ChildItem -Path $script:BoardBackupDir -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like 'board-startup-*.mv.db' -or $_.Name -like 'board-shutdown-*.zip' } |
+        Where-Object {
+            $_.Name -like 'board-startup-*.mv.db' -or
+            $_.Name -like 'board-shutdown-*.zip' -or
+            $_.Name -like 'board-scheduled-*.zip'
+        } |
         Sort-Object LastWriteTimeUtc -Descending)
 }
 
@@ -70,7 +78,8 @@ if ($List) {
     }
     foreach ($item in $backups) {
         $kind = '啟動前（冷備份）'
-        if ($item.Extension -eq '.zip') { $kind = '關閉前（一致性快照）' }
+        if ($item.Name -like 'board-shutdown-*')  { $kind = '關閉前（一致性快照）' }
+        if ($item.Name -like 'board-scheduled-*') { $kind = '定期（一致性快照）' }
         Write-Host ('  {0}  {1,10} bytes  {2}  {3}' -f `
             $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'), $item.Length, $kind, $item.FullName)
     }
@@ -171,7 +180,7 @@ try {
     if ([System.IO.Path]::GetExtension($sourceBackup) -eq '.zip') {
         $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("board-restore-" + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $workDir -Force | Out-Null
-        Write-RestoreLog "解壓關閉前備份……"
+        Write-RestoreLog "解壓一致性備份（zip）……"
         Expand-Archive -LiteralPath $sourceBackup -DestinationPath $workDir -Force
 
         $extracted = Get-ChildItem -Path $workDir -Filter '*.mv.db' -File -Recurse -ErrorAction SilentlyContinue |
