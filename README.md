@@ -1,5 +1,7 @@
 # AI Project Board
 
+English: [README.en.md](README.en.md)
+
 本機 MCP server：AI coding agent 工作時把進度寫進看板，瀏覽器即時看到所有專案的狀態，不用盯著多個終端機。
 
 ![Demo](docs/demo.gif)
@@ -58,14 +60,29 @@ Chat 規劃專案
 
 ## 快速開始
 
-推薦用 `bin/start-board.sh`：它會自動找 JDK 21、決定資料庫路徑、檢查埠號、
+推薦用 `bin/board`：它會自動找 JDK 21、決定資料庫路徑、檢查埠號、
 偵測 H2 鎖檔，找不到編譯好的 jar 時還會自動 `./mvnw package -DskipTests`
 現場組裝一次（首次啟動會多花數十秒到數分鐘，之後有 `target/*.jar` 就不會
 重複組裝）：
 
 ```bash
-./bin/start-board.sh
+./bin/board start
 ```
+
+服務的啟停與狀態查詢都走同一個入口：
+
+```bash
+bin/board start      # 啟動（背景執行，關掉終端機也不會被 SIGHUP 殺掉）
+bin/board status     # PID、埠號、/api/health 版本資訊（未執行時離開碼 3）
+bin/board stop       # 送 SIGTERM 並等待關閉前備份完成
+bin/board restart
+bin/board logs -n 200
+```
+
+`stop` 逾時後**不會**自動送 SIGKILL——那會跳過 `ShutdownBackupService`，
+等於丟掉這一次的一致性備份；確定要強制終止才加 `--force`。開機自動啟動
+（launchd／systemd）與完整維運流程見 [docs/operations.md](docs/operations.md)。
+`bin/start-board.sh` 仍然存在，`bin/board start` 就是委派給它，只負責「啟動」這件事。
 
 看到 `看板已就緒：http://127.0.0.1:8080` 就代表可以打開瀏覽器了。也可以用
 手動方式組裝與啟動；組裝時仍必須隔離測試用埠號與資料庫。手動方式不包含腳本的
@@ -94,7 +111,19 @@ java -jar target/ai-project-board-backend-3.0.0.jar
 
 監聽位址預設 `BOARD_HOST=127.0.0.1`（見 `application.yml`），只綁定本機
 loopback，同機的瀏覽器與 MCP client 都可用 `127.0.0.1`／`localhost` 存取；
-可用 `BOARD_HOST` 環境變數覆寫綁定其他位址。**目前沒有 server-side 身分驗證**，
+可用 `BOARD_HOST` 環境變數覆寫綁定其他位址。
+
+綁定 loopback 只保證「封包來自本機」，擋不住本機瀏覽器：惡意網頁把自己的網域
+DNS 指向 `127.0.0.1`（DNS rebinding）之後，瀏覽器就認定它與看板同源，同源政策
+與 CORS 完全不介入。因此服務會額外驗證每個請求的 `Host` 與 `Origin`，不是
+loopback 就回 `403`（見 `config/LocalOriginGuardFilter`）。刻意要讓區網其他
+裝置或反向代理連進來時，用 `BOARD_ALLOWED_HOSTS` 逐一列出（逗號分隔）：
+
+```bash
+BOARD_ALLOWED_HOSTS=192.168.1.20,board.local bin/board start
+```
+
+這只是放行來源，**不會**產生任何認證。**目前沒有 server-side 身分驗證**，
 `/mcp` 一旦綁定到非 loopback 位址（例如 `0.0.0.0`）並對外可達，任何連得到的
 人都能呼叫全部 MCP 工具；因此除非額外自行加上反向代理與認證層，否則不要把
 `BOARD_HOST` 改成公開位址。本 repo 目前**未提供**雲端／伺服器部署方式（例如
@@ -425,8 +454,11 @@ src/main/resources/
                      # Vue 執行檔與字型皆 vendor 進 static/vendor/，完全離線可用，
                      # 不需連外部 CDN，見 static/vendor/SOURCES.md
 bin/
+├── board           # 服務入口（start／stop／restart／status／logs）
+├── board-env.sh    # 埠號／資料庫／日誌／PID 檔預設值，三支腳本共用
 ├── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、啟動前備份、自動組裝）
-└── backup-db.sh    # 啟動前冷備份與保留策略，由 start-board.sh 呼叫
+├── backup-db.sh    # 啟動前冷備份與保留策略，由 start-board.sh 呼叫
+└── restore-db.sh   # 從備份還原（兩種格式皆支援，保留現有資料庫）
 plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
 .codex-plugin/      # Codex plugin 骨架（同上，格式依 Codex 慣例）
 .claude-plugin/
@@ -435,6 +467,7 @@ plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks s
 └── marketplace.json    # Codex 的安裝入口，指向 .codex-plugin/
 docs/
 ├── installation.md            # 完整安裝指南
+├── operations.md              # 維運手冊（啟停、備份還原、開機自動啟動、疑難排解）
 ├── dev-isolation.md           # 開發環境隔離基線（埠號／資料庫／日誌／worktree 對照）
 └── scope-leader-dispatch.md   # Leader 派工架構、Git 邊界與角色責任分工
 ```
@@ -472,6 +505,12 @@ Flyway、Vue 3（零建置，執行檔與字型皆 vendor 進 repo，前端完�
   （`BOARD_LOG_TOTAL_SIZE_CAP`），超過上限自動刪除最舊的檔案；Hikari 與
   Flyway 的連線／遷移日誌調整為 `WARN`，避免預設 `INFO` 等級外洩含使用者
   名稱與檔案路徑的完整 JDBC URL。
+- **還原**：`bin/restore-db.sh --list` 列出兩種備份（新到舊），
+  `bin/restore-db.sh latest` 還原最新一份，也可指定特定備份檔。還原會先確認
+  看板未在執行、資料庫檔未被持有，把現有資料庫**改名保留**成
+  `board.mv.db.pre-restore-<UTC>`（不刪除），再以 `.tmp` → 驗證 H2 檔頭 →
+  原子改名的方式寫入。還錯備份時把保留檔改回原檔名即可。完整步驟與發版前的
+  還原演練清單見 [docs/operations.md](docs/operations.md)。
 - **診斷端點**：`/api/health` 只回傳最小版本資訊（見上方「MCP 工具」的
   REST 端點表）；需要資料庫路徑、備份狀態、磁碟用量等維運細節時改用
   `/api/diagnostics`，該端點內容較敏感，呼叫方需自行控管可見範圍。
@@ -511,6 +550,6 @@ Flyway、Vue 3（零建置，執行檔與字型皆 vendor 進 repo，前端完�
 - `GET /api/health` 回傳的 `version` 讀的是 `pom.xml` 版本號，不含 git
   commit hash；同一版本號底下可能已經有多次 commit，無法只靠這個欄位
   區分新舊 build
-- 沒有獨立的關閉／備份 CLI 子命令；備份行為固定綁在啟動流程
-  （`bin/backup-db.sh`）與行程關閉事件（`ShutdownBackupService`），
-  不支援手動觸發一次性備份以外的排程或常駐備份機制
+- 備份只在啟動流程（`bin/backup-db.sh`）與行程關閉事件
+  （`ShutdownBackupService`）觸發，沒有排程或常駐備份機制；看板連續執行多天
+  不重啟時等於多天沒有新快照。還原已有 `bin/restore-db.sh`
