@@ -3,7 +3,6 @@ package dev.aiboard.project;
 import dev.aiboard.common.BoardException;
 import dev.aiboard.event.BoardEvent;
 import dev.aiboard.event.BoardEventPublisher;
-import dev.aiboard.task.Task;
 import dev.aiboard.task.TaskRepository;
 import dev.aiboard.task.TaskStatus;
 import org.springframework.stereotype.Service;
