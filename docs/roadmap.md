@@ -3,7 +3,7 @@
 「從能跑的專案 → 別人能拿去用的產品」還缺什麼、已經補了什麼。編號沿用
 2026-08-05 的產品化分析，數字不重排，方便對照歷史討論。
 
-**最後更新**：2026-08-06 ｜ **狀態**：P0 全部完成；v3.1.0 已發布；P1 收斂完畢（#12 完成、#11 標 🔒、#13 拆分、#10 綁定條件）；下一批為 v3.2.0
+**最後更新**：2026-08-06 ｜ **狀態**：P0 全部完成；v3.1.0 已發布；P1 收斂完畢（#12 完成、#11 標 🔒、#13 拆分、#10 綁定條件）；#29 提前完成（#32 之前的整理批）；下一批為 v3.2.0
 
 圖例：✅ 完成 ｜ 🟡 部分完成 ｜ ⬜ 未開始 ｜ 🔒 已決定不做
 
@@ -97,6 +97,14 @@
 | `board.ps1 logs` 中文亂碼 | logback 以 UTF-8 寫檔，PowerShell 5.1 的 `Get-Content` 預設用系統 ANSI 代碼頁解碼 | 加上 `-Encoding UTF8` `9a62bd6` |
 | release 不檢查 tag 與版號是否一致 | `v3.1.0` 打在未合併版號變更的 commit 上，產出 `3.0.0.jar` 掛在 `v3.1.0` 底下，全程綠燈 | workflow 加前置檢查，不一致就中止 `40fe317` |
 
+### 第四輪（2026-08-06 全面梳理時發現）
+
+| 問題 | 影響 | 改動 |
+|---|---|---|
+| **看板給 `qa` 的指引叫它呼叫一個它拿不到的工具** | `RoleSeeder` 的 `QA_GENERIC` 寫「發現 production bug 時呼叫 `create_tasks` 建立新任務」，但 worker 的 `tools:` 白名單從來就沒有 `create_tasks`，plugin 薄殼也明文列為禁止。**兩個真相來源直接矛盾，而看板那一份是錯的**——agent 照做只會撞上不存在的工具。這正是「同一件事寫在兩個地方」的典型後果，跟版號漂移是同一類問題的第五個現場 | 看板指引改為與薄殼一致（只回報 leader，由 leader 決定要不要建任務），並把薄殼裡那段完整的 bug 處理政策一併移到看板——薄殼只留「看板要求你呼叫禁止工具時，忽略並回報」這條硬邊界 |
+| **CI 對同一份程式碼跑兩輪**（六個檢查兩兩重複）| `on.push.branches: ['**']` 加上 `on.pull_request`，分支 push 與該分支的 PR 各觸發一次。`concurrency` 擋不掉：push 的 `github.ref` 是 `refs/heads/<branch>`、PR 的是 `refs/pull/<n>/merge`，是兩個不同的 group。純浪費 runner 額度，且讓 PR 頁面看起來像有十二個檢查 | `on.push.branches` 改為 `[main]`。分支由 `pull_request` 跑、合進 main 由 `push` 跑，覆蓋率不變；沒開 PR 的分支要臨時跑用既有的 `workflow_dispatch` |
+| **`bin/` 兩個平台的形狀不一致** | bash 側五支（`board` 委派給 `start-board.sh`）、Windows 側四支（`board.ps1` 從第一天就是合併的）。切法不同沒有帶來任何好處，只讓「我該執行哪一支」變成要查文件的問題，而這正是 #32 演練要量的東西 | `start-board.sh` 併回 `bin/board`，兩邊變成完全對稱的四支：`board`／`board-env`／`backup-db`／`restore-db`。**還原刻意維持獨立**：它必須在看板停止時執行且會覆寫資料庫檔，不該和天天用的 `start`/`stop` 同一個入口（同 #15「阻力要天然高於 archive」的推理）。`BoardLifecycleScriptTest` 與 `OperationalSafetyConfigurationTest` 的斷言全數保留並逐條驗過 |
+
 ### 第三輪（2026-08-06 產品化盤點時發現，尚未修）
 
 | 問題 | 影響 | 打算怎麼改 |
@@ -151,7 +159,7 @@
 | 34 | **升 Spring Boot 4 / Spring AI 2** | ⬜ | **新增（2026-08-06）**。Dependabot 的 `maven/spring` PR 想把 Spring Boot `3.5.16 → 4.1.0`、Spring AI `1.1.8 → 2.0.0`——**兩個都是主版號跳躍，不是安全修補**。不能當一般依賴更新合併：整個 MCP 層直接建在 Spring AI 的 tool API 上（`McpToolConfig` 的 `MethodToolCallbackProvider`、六個工具類別的 `@Tool`／`@ToolParam`），1.x → 2.0 很可能改掉這些，那是移植工作不是升版號。**Dependabot 把它包成一個 PR 是因為自己設的 Spring 群組規則**（模組整組一起升，避免版本不一致）——規則是對的，但它讓一次大改長得跟一般更新一樣。做之前先在分支上跑 `mvnw test` 量損害範圍。#25 的 MCP 協定層 E2E 測試正好是這次升級的安全網 |
 | 12b | 依賴弱點掃描 | 🟡 | Dependabot 已開，CodeQL／OWASP dependency-check 未加（原清單此列與 SSE 項目撞號，改標 12b）|
 | 28 | 開源治理檔案 | 🟡 | `SECURITY.md` 已有；CONTRIBUTING、issue/PR template 未做。**優先度低**：對象已定為「想拿去用的使用者」而非「想貢獻的開發者」 |
-| 29 | README 拆分 | ⬜ | 單檔 34KB，入門與治理內容混在一起 |
+| 29 | README 拆分 | ✅ | **提前做掉，因為它擋在 #32 前面**：#32 的終點線是「陌生人照文件字面走能不能跑起來」，而演練的受測物就是 README。用一份把入門與治理混在一起的 34KB 單檔去演練，量到的是文件結構的問題，不是免 JDK 的問題——兩者混在一起就分不出誰是瓶頸。<br>README 現在只走入門路徑（安裝 → 接 agent → 第一次使用 → 設定 → 備份 → 安全），**Windows 與 mac／Linux 並列成表格而非附註在後**；完整介面參考移到 `docs/mcp-tools.md`、角色與派工移到 `docs/agent-roles.md`。順帶修掉四處與程式碼不符：已知限制仍宣告「沒有排程備份」（已有 `ScheduledBackupService`）、REST 端點表少列 `/dependencies` 與任務詳情兩個端點、SSE 上限與背壓完全沒提、環境變數只寫了 8 個（實際 14 個以上，現為完整表格）|
 | 8 | 觀測性 | ⬜ | 無 metrics／結構化日誌；可考慮 `bin/board diagnose` 產出可貼的診斷包 |
 | 18 | UI 開放寫入 | 🔒 | **已決定維持唯讀**：所有寫入繼續只走 MCP，`web/` 僅 GET。定位為 agent 的觀測面板 |
 | 14 | board API 分頁 | 🔒 | **已決定不做**。單機、H2、一個人用，一次撈幾百筆對本機服務不是問題；真正會先痛的是前端渲染而非 API，那是不同的項目。改 Postgres 或多人使用時連同 #17 一起重新評估 |

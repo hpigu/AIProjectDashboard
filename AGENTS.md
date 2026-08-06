@@ -87,18 +87,37 @@ leader 在使用者於**目前對話**明確要求對應操作時使用；「完
 
 ## 開發用埠號與資料庫（必讀）
 
-正式看板常駐在 `:8080`，資料庫 `./data/board`。**任何 agent 都不得佔用或寫入這兩者**
-——使用者的看板正在上面運作。
+正式看板常駐在 `:8080`，資料庫 `./data/board`、日誌 `./logs/board.log`、執行中的
+jar 在主工作區 `target/`。**任何 agent 都不得佔用或寫入這四者**——使用者的看板
+正在上面運作。
+
+這條規則不是理論上的謹慎，是兩次真實事故換來的：
+
+1. agent 在主工作區跑 `mvnw clean package`，**刪掉了正在運行的 jar**。
+2. agent 誤連到不同路徑的空資料庫，看板上所有專案「消失」。
 
 啟動應用或跑整合測試時一律帶入：
 
 ```bash
-BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-<role>' ./mvnw test
+BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-<role>' \
+BOARD_LOG_FILE='./logs/dev-<role>.log' ./mvnw test
 ```
 
 `<role>` 用自己的角色名（backend/qa/infra…），避免多個 agent 互相覆蓋。
 `./mvnw test` 會啟動 Spring context 與併發測試，即使不重啟正式看板也會寫入資料庫，
 因此這條規則沒有例外。
+
+`target/`、`data/`、`logs/` 都在 `.gitignore` 內，因此各 worktree 天然擁有各自的
+建置產物與資料，不會互相覆蓋。單元／整合測試在原始碼中以 `jdbc:h2:mem:` 硬編碼，
+本來就不會碰到檔案資料庫；`BOARD_DB_URL` 的隔離主要在「實際啟動應用」時生效。
+
+### 硬性禁止
+
+- 不得 kill 正式看板的 PID
+- 不得使用 `:8080`
+- 不得讀寫 `<repo>/data/board*`
+- 不得寫入正式 `logs/board.log`
+- **不得在主工作區執行 `mvnw clean` 或 `mvnw package`**（正在運行的 jar 就在那裡）
 
 ## 前端與測試
 
