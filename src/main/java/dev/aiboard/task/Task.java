@@ -2,6 +2,8 @@ package dev.aiboard.task;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -27,8 +29,16 @@ public class Task {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    /**
+     * EnumType.STRING：資料庫欄位仍是 VARCHAR，存的仍是 'TODO'/'IN_PROGRESS'/... 等
+     * 同一組字面值，因此不需要 migration，既有資料與 REST/SSE 的 JSON 輸出都不變
+     * （Jackson 對 enum 預設就是輸出 name()）。改成 enum 換到的是編譯期型別安全：
+     * 過去這裡是 String，任何一個打錯字的狀態值都要等到執行期 parseStatus() 才會
+     * 被發現。
+     */
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
-    private String status = TaskStatus.TODO.name();
+    private TaskStatus status = TaskStatus.TODO;
 
     @Column(length = 30)
     private String category;
@@ -82,7 +92,7 @@ public class Task {
         this.description = description;
         this.category = category;
         this.sortOrder = sortOrder;
-        this.status = TaskStatus.TODO.name();
+        this.status = TaskStatus.TODO;
         LocalDateTime now = LocalDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
@@ -104,7 +114,7 @@ public class Task {
         return description;
     }
 
-    public String getStatus() {
+    public TaskStatus getStatus() {
         return status;
     }
 
@@ -182,7 +192,7 @@ public class Task {
     }
 
     public void changeStatus(TaskStatus newStatus) {
-        this.status = newStatus.name();
+        this.status = newStatus;
         if (newStatus == TaskStatus.TODO) {
             this.assignee = null;
             this.claimedAt = null;

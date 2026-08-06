@@ -4,6 +4,7 @@ import dev.aiboard.task.Task;
 import dev.aiboard.task.TaskLogRepository;
 import dev.aiboard.task.TaskRepository;
 import dev.aiboard.task.TaskService;
+import dev.aiboard.task.TaskStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,7 +76,8 @@ class ProjectArchiveConcurrencyTest {
                     .isEqualTo("ARCHIVED");
             assertThat(auditRepository.count()).isEqualTo(1L);
             Task persisted = taskRepository.findById(taskId).orElseThrow();
-            assertThat(persisted.getStatus()).isIn(completedBeforeArchive ? "DONE" : "IN_PROGRESS");
+            assertThat(persisted.getStatus())
+                    .isEqualTo(completedBeforeArchive ? TaskStatus.DONE : TaskStatus.IN_PROGRESS);
             assertThat(taskLogRepository.findByTaskIdOrderByIdAsc(taskId)).hasSize(completedBeforeArchive ? 3 : 2);
         }
     }

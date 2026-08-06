@@ -38,10 +38,10 @@ class DependencyGraphServiceTest {
     @Test
     void getDependencyGraph_returnsClaimabilityFromTheSamePrerequisiteRuleAsClaiming() {
         Long projectId = 12L;
-        Task done = task(5L, "完成 schema", "DONE", "BACKEND", "backend-dev");
-        Task ready = task(6L, "實作 API", "TODO", "BACKEND", null);
-        Task waiting = task(7L, "實作頁面", "TODO", "FRONTEND", null);
-        Task inProgress = task(8L, "測試 API", "IN_PROGRESS", "TEST", "qa");
+        Task done = task(5L, "完成 schema", TaskStatus.DONE, "BACKEND", "backend-dev");
+        Task ready = task(6L, "實作 API", TaskStatus.TODO, "BACKEND", null);
+        Task waiting = task(7L, "實作頁面", TaskStatus.TODO, "FRONTEND", null);
+        Task inProgress = task(8L, "測試 API", TaskStatus.IN_PROGRESS, "TEST", "qa");
         when(taskRepository.findByProjectIdOrderBySortOrderAsc(projectId))
                 .thenReturn(List.of(done, ready, waiting, inProgress));
         when(dependencyRepository.findByProjectId(projectId)).thenReturn(List.of(
@@ -68,7 +68,7 @@ class DependencyGraphServiceTest {
     @Test
     void getDependencyGraph_whenThereAreNoDependencies_returnsAllNodesAndNoEdges() {
         Long projectId = 12L;
-        Task task = task(5L, "獨立任務", "TODO", "BACKEND", null);
+        Task task = task(5L, "獨立任務", TaskStatus.TODO, "BACKEND", null);
         when(taskRepository.findByProjectIdOrderBySortOrderAsc(projectId)).thenReturn(List.of(task));
         when(dependencyRepository.findByProjectId(projectId)).thenReturn(List.of());
 
@@ -97,7 +97,7 @@ class DependencyGraphServiceTest {
                 .hasMessageContaining("#6");
     }
 
-    private static Task task(Long id, String title, String status, String category, String assignee) {
+    private static Task task(Long id, String title, TaskStatus status, String category, String assignee) {
         Task task = mock(Task.class);
         when(task.getId()).thenReturn(id);
         when(task.getTitle()).thenReturn(title);

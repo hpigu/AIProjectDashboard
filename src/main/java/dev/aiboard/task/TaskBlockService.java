@@ -63,7 +63,7 @@ public class TaskBlockService {
                     .formatted(project.name(), taskId));
         }
 
-        TaskStatus current = TaskStatus.valueOf(task.getStatus());
+        TaskStatus current = task.getStatus();
         if (!current.canTransitionTo(TaskStatus.BLOCKED)) {
             throw new BoardException(
                     "不合法的狀態轉移：#%d 目前是 %s，無法轉移至 BLOCKED".formatted(taskId, current));
@@ -201,12 +201,12 @@ public class TaskBlockService {
 
     private TaskService.TaskDto toDto(Task task) {
         return new TaskService.TaskDto(task.getId(), task.getProjectId(), task.getTitle(),
-                task.getDescription(), task.getStatus(), task.getCategory(), task.getSortOrder(),
+                task.getDescription(), task.getStatus().name(), task.getCategory(), task.getSortOrder(),
                 task.getAssignee(), task.getClaimedAt());
     }
 
     private TaskSummary toSummary(Task task) {
-        return new TaskSummary(task.getId(), task.getTitle(), task.getStatus());
+        return new TaskSummary(task.getId(), task.getTitle(), task.getStatus().name());
     }
 
     public record TaskSummary(Long id, String title, String status) {

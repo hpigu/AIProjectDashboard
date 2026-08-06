@@ -158,7 +158,7 @@ public class DiagnosticsService {
         Map<String, Long> statusTotals = new HashMap<>();
         long taskCount = 0;
         for (TaskRepository.StatusCountProjection row : taskRepository.countAllGroupedByProjectAndStatus()) {
-            statusTotals.merge(row.getStatus(), row.getCnt(), Long::sum);
+            statusTotals.merge(row.getStatus().name(), row.getCnt(), Long::sum);
             taskCount += row.getCnt();
         }
         return new ProjectTaskAggregate(projectCount, taskCount, statusTotals);

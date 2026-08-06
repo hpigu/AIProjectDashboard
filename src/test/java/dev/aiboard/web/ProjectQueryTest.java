@@ -8,6 +8,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import dev.aiboard.project.Project;
 import dev.aiboard.project.ProjectRepository;
 import dev.aiboard.task.TaskRepository;
+import dev.aiboard.task.TaskStatus;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -42,8 +43,8 @@ class ProjectQueryTest {
         when(projectRepository.findAll()).thenReturn(List.of(p1, p2));
 
         when(taskRepository.countAllGroupedByProjectAndStatus()).thenReturn(List.of(
-                statusCount(1L, "TODO", 4), statusCount(1L, "IN_PROGRESS", 1), statusCount(1L, "DONE", 3),
-                statusCount(2L, "TODO", 8), statusCount(2L, "BLOCKED", 1)
+                statusCount(1L, TaskStatus.TODO, 4), statusCount(1L, TaskStatus.IN_PROGRESS, 1), statusCount(1L, TaskStatus.DONE, 3),
+                statusCount(2L, TaskStatus.TODO, 8), statusCount(2L, TaskStatus.BLOCKED, 1)
         ));
         when(taskRepository.findLastActivityPerProject()).thenReturn(List.of(
                 lastActivity(1L, LocalDateTime.of(2026, 7, 23, 10, 0)),
@@ -159,10 +160,10 @@ class ProjectQueryTest {
         return project;
     }
 
-    private static TaskRepository.StatusCountProjection statusCount(Long projectId, String status, long cnt) {
+    private static TaskRepository.StatusCountProjection statusCount(Long projectId, TaskStatus status, long cnt) {
         return new TaskRepository.StatusCountProjection() {
             public Long getProjectId() { return projectId; }
-            public String getStatus() { return status; }
+            public TaskStatus getStatus() { return status; }
             public long getCnt() { return cnt; }
         };
     }

@@ -54,7 +54,7 @@ public interface TaskDependencyRepository extends JpaRepository<TaskDependency, 
     interface RelatedTaskProjection {
         Long getId();
         String getTitle();
-        String getStatus();
+        TaskStatus getStatus();
         String getCategory();
         String getAssignee();
     }

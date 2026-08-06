@@ -40,7 +40,7 @@ class TaskEditServiceTest {
 
     @Test
     void updateTaskDetails_rejectsInProgressTaskEvenWhenVersionMatches() {
-        Task task = task(20L, 7L, "IN_PROGRESS");
+        Task task = task(20L, 7L, TaskStatus.IN_PROGRESS);
         when(taskRepository.findById(20L)).thenReturn(Optional.of(task));
         when(projectService.getById(7L)).thenReturn(activeProject(7L));
 
@@ -55,9 +55,9 @@ class TaskEditServiceTest {
 
     @Test
     void setTaskDependencies_rejectsIndirectCycleBeforeReplacingExistingEdges() {
-        Task target = task(3L, 7L, "TODO");
-        Task first = task(1L, 7L, "TODO");
-        Task second = task(2L, 7L, "TODO");
+        Task target = task(3L, 7L, TaskStatus.TODO);
+        Task first = task(1L, 7L, TaskStatus.TODO);
+        Task second = task(2L, 7L, TaskStatus.TODO);
         when(taskRepository.findById(3L)).thenReturn(Optional.of(target));
         when(projectService.getById(7L)).thenReturn(activeProject(7L));
         when(taskRepository.findAllById(any())).thenReturn(List.of(first));
@@ -77,7 +77,7 @@ class TaskEditServiceTest {
         verify(taskLogRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
-    private static Task task(Long id, Long projectId, String status) {
+    private static Task task(Long id, Long projectId, TaskStatus status) {
         Task task = new Task(projectId, "task-" + id, null, "BACKEND", id.intValue());
         set(task, "id", id);
         set(task, "status", status);

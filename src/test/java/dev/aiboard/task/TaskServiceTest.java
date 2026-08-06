@@ -151,14 +151,14 @@ class TaskServiceTest {
         Long projectId = 12L;
         doNothing().when(projectService).assertExists(projectId);
         Task task = new Task(projectId, "任務 A", null, "BACKEND", 0);
-        when(taskRepository.findByProjectIdAndOptionalFilters(projectId, "TODO", null))
+        when(taskRepository.findByProjectIdAndOptionalFilters(projectId, TaskStatus.TODO, null))
                 .thenReturn(List.of(task));
 
         List<TaskService.TaskDto> results = taskService.listTasks(projectId, "todo");
 
         assertThat(results).hasSize(1);
         assertThat(results.get(0).title()).isEqualTo("任務 A");
-        verify(taskRepository).findByProjectIdAndOptionalFilters(projectId, "TODO", null);
+        verify(taskRepository).findByProjectIdAndOptionalFilters(projectId, TaskStatus.TODO, null);
     }
 
     @Test
@@ -253,9 +253,9 @@ class TaskServiceTest {
         Long projectId = 12L;
         Task task = claimedTask(projectId, taskId, "實作交易 CRUD API",
                 "BACKEND", 0, "backend-dev");
-        setField(task, "status", "BLOCKED");
+        setField(task, "status", TaskStatus.BLOCKED);
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(3L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(3L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(8L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
@@ -265,7 +265,7 @@ class TaskServiceTest {
         assertThat(result.changed()).isTrue();
         assertThat(result.from()).isEqualTo(TaskStatus.BLOCKED);
         assertThat(result.to()).isEqualTo(TaskStatus.IN_PROGRESS);
-        assertThat(task.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
 
         ArgumentCaptor<TaskLog> logCaptor = ArgumentCaptor.forClass(TaskLog.class);
         verify(taskLogRepository).save(logCaptor.capture());
@@ -290,7 +290,7 @@ class TaskServiceTest {
         Long projectId = 12L;
         Task task = new Task(projectId, "實作交易 CRUD API", null, "BACKEND", 0);
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(8L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE"));
@@ -335,7 +335,7 @@ class TaskServiceTest {
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO")).thenReturn(List.of(candidate));
+                projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(candidate));
         when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
                 .thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
@@ -363,7 +363,7 @@ class TaskServiceTest {
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO"))
+                projectId, "BACKEND", TaskStatus.TODO))
                 .thenReturn(List.of(first, second), List.of(second));
         when(taskDependencyRepository.findUnfinishedPrerequisites(any())).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
@@ -382,7 +382,7 @@ class TaskServiceTest {
         assertThat(result.task().id()).isEqualTo(15L);
         verify(taskRepository, times(2))
                 .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                        projectId, "BACKEND", "TODO");
+                        projectId, "BACKEND", TaskStatus.TODO);
     }
 
     @Test
@@ -395,7 +395,7 @@ class TaskServiceTest {
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO")).thenReturn(List.of(blocked, free));
+                projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(blocked, free));
         when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L, 15L)))
                 .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
@@ -420,7 +420,7 @@ class TaskServiceTest {
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO")).thenReturn(List.of(blocked));
+                projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(blocked));
         when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
                 .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
 
@@ -444,7 +444,7 @@ class TaskServiceTest {
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO")).thenReturn(List.of());
+                projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of());
 
         TaskService.ClaimNextTaskResult result =
                 taskService.claimNextTask("個人記帳 App", "BACKEND", "backend-dev");
@@ -482,7 +482,7 @@ class TaskServiceTest {
                 .isInstanceOf(BoardException.class)
                 .hasMessageContaining("complete_task");
 
-        assertThat(task.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
         verify(taskLogRepository, never()).save(any(TaskLog.class));
         verify(eventPublisher, never()).publish(any(BoardEvent.class));
     }
@@ -496,7 +496,7 @@ class TaskServiceTest {
         // requireEvidence 預設就是 false，這裡明講出來以強調測試意圖。
         task.setRequireEvidence(false);
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
@@ -504,7 +504,7 @@ class TaskServiceTest {
         TaskService.TaskStatusChangeResult result = taskService.updateStatus(4L, "DONE", null);
 
         assertThat(result.changed()).isTrue();
-        assertThat(task.getStatus()).isEqualTo("DONE");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.DONE);
     }
 
     @Test
@@ -565,16 +565,16 @@ class TaskServiceTest {
     void updateStatus_toTodo_clearsClaimMetadata() {
         Long projectId = 12L;
         Task task = claimedTask(projectId, 4L, "任務", "BACKEND", 0, "backend-dev");
-        setField(task, "status", "BLOCKED");
+        setField(task, "status", TaskStatus.BLOCKED);
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
 
         taskService.updateStatus(4L, "TODO", "歸還");
 
-        assertThat(task.getStatus()).isEqualTo("TODO");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.TODO);
         assertThat(task.getAssignee()).isNull();
         assertThat(task.getClaimedAt()).isNull();
     }
@@ -586,7 +586,7 @@ class TaskServiceTest {
         Long projectId = 12L;
         Task task = claimedTask(projectId, 4L, "舊資料任務", "BACKEND", 0, "backend-dev");
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
@@ -594,7 +594,7 @@ class TaskServiceTest {
         TaskService.TaskStatusChangeResult result = taskService.updateStatus(4L, "DONE", null);
 
         assertThat(result.changed()).isTrue();
-        assertThat(task.getStatus()).isEqualTo("DONE");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.DONE);
     }
 
     @Test
@@ -632,7 +632,7 @@ class TaskServiceTest {
         Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
         task.setClaimTokenHash(claimTokenService.hash("正確的token"));
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
@@ -641,7 +641,7 @@ class TaskServiceTest {
                 taskService.updateStatus(4L, "DONE", null, "正確的token");
 
         assertThat(result.changed()).isTrue();
-        assertThat(task.getStatus()).isEqualTo("DONE");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.DONE);
         // DONE 必須清空 token hash。
         assertThat(task.getClaimTokenHash()).isNull();
     }
@@ -652,14 +652,14 @@ class TaskServiceTest {
         Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
         task.setClaimTokenHash(claimTokenService.hash("正確的token"));
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
 
         taskService.updateStatus(4L, "BLOCKED", "卡住了", "正確的token");
 
-        assertThat(task.getStatus()).isEqualTo("BLOCKED");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.BLOCKED);
         assertThat(task.getClaimTokenHash()).isNotNull();
     }
 
@@ -667,17 +667,17 @@ class TaskServiceTest {
     void updateStatus_toTodo_clearsTokenHashEvenWithStoredToken() {
         Long projectId = 12L;
         Task task = claimedTask(projectId, 4L, "受保護任務", "BACKEND", 0, "backend-dev");
-        setField(task, "status", "BLOCKED");
+        setField(task, "status", TaskStatus.BLOCKED);
         task.setClaimTokenHash(claimTokenService.hash("正確的token"));
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
 
         taskService.updateStatus(4L, "TODO", "歸還", "正確的token");
 
-        assertThat(task.getStatus()).isEqualTo("TODO");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.TODO);
         assertThat(task.getClaimTokenHash()).isNull();
         assertThat(task.getAssignee()).isNull();
     }
@@ -690,7 +690,7 @@ class TaskServiceTest {
         var project = new ProjectService.ProjectDto(projectId, "個人記帳 App", null, "ACTIVE");
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                projectId, "BACKEND", "TODO")).thenReturn(List.of(candidate));
+                projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(candidate));
         when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L))).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
@@ -724,7 +724,7 @@ class TaskServiceTest {
         Task task = claimedTask(projectId, 4L, "遺失token的任務", "BACKEND", 0, "backend-dev");
         task.setClaimTokenHash(claimTokenService.hash("再也拿不回來的token"));
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
@@ -733,7 +733,7 @@ class TaskServiceTest {
                 taskService.resetClaimAsLeader(4L, "agent 中斷連線遺失 token");
 
         assertThat(result.changed()).isTrue();
-        assertThat(task.getStatus()).isEqualTo("TODO");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.TODO);
         assertThat(task.getAssignee()).isNull();
         assertThat(task.getClaimedAt()).isNull();
         assertThat(task.getClaimTokenHash()).isNull();
@@ -746,7 +746,7 @@ class TaskServiceTest {
     @Test
     void resetClaimAsLeader_whenTaskIsDone_throws() {
         Task task = claimedTask(12L, 4L, "任務", "BACKEND", 0, "backend-dev");
-        setField(task, "status", "DONE");
+        setField(task, "status", TaskStatus.DONE);
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
 
         assertThatThrownBy(() -> taskService.resetClaimAsLeader(4L, null))
@@ -766,7 +766,7 @@ class TaskServiceTest {
     @Test
     void updateStatus_unclaimedBlockedTaskCannotBypassClaimTool() {
         Task task = taskWithId(12L, 4L, "任務", "BACKEND", 0);
-        setField(task, "status", "BLOCKED");
+        setField(task, "status", TaskStatus.BLOCKED);
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
 
         assertThatThrownBy(() -> taskService.updateStatus(4L, "IN_PROGRESS", null))
@@ -810,7 +810,7 @@ class TaskServiceTest {
     private static Task claimedTask(Long projectId, Long id, String title,
                                     String category, int sortOrder, String assignee) {
         Task task = taskWithId(projectId, id, title, category, sortOrder);
-        setField(task, "status", "IN_PROGRESS");
+        setField(task, "status", TaskStatus.IN_PROGRESS);
         setField(task, "assignee", assignee);
         setField(task, "claimedAt", LocalDateTime.now());
         return task;
