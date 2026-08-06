@@ -151,7 +151,7 @@ public class TaskService {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
         projectService.assertActiveForUpdate(task.getProjectId());
-        TaskStatus current = parseStatus(task.getStatus());
+        TaskStatus current = task.getStatus();
 
         if (!current.canTransitionTo(target)) {
             throw new BoardException(
@@ -200,7 +200,7 @@ public class TaskService {
                     task.getUpdatedAt().toString()));
         }
 
-        long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE.name());
+        long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE);
         long totalCount = taskRepository.countByProjectId(task.getProjectId());
         ProjectService.ProjectDto project = projectService.getById(task.getProjectId());
 
@@ -218,7 +218,7 @@ public class TaskService {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
         projectService.assertActiveForUpdate(task.getProjectId());
-        TaskStatus current = parseStatus(task.getStatus());
+        TaskStatus current = task.getStatus();
 
         if (current == TaskStatus.DONE) {
             throw new BoardException("任務 #" + taskId + " 已完成，無需重置認領");
@@ -234,7 +234,7 @@ public class TaskService {
                 task.getProjectId(), taskId, task.getTitle(), current.name(), TaskStatus.TODO.name(),
                 task.getUpdatedAt().toString()));
 
-        long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE.name());
+        long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE);
         long totalCount = taskRepository.countByProjectId(task.getProjectId());
         ProjectService.ProjectDto project = projectService.getById(task.getProjectId());
 
@@ -258,7 +258,7 @@ public class TaskService {
 
     public List<TaskDto> listTasks(Long projectId, String status, String category) {
         projectService.assertExists(projectId);
-        String normalizedStatus = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
+        TaskStatus normalizedStatus = (status == null || status.isBlank()) ? null : parseStatus(status);
         String normalizedCategory = (category == null || category.isBlank()) ? null : category.trim().toUpperCase();
         List<Task> tasks = taskRepository.findByProjectIdAndOptionalFilters(projectId, normalizedStatus, normalizedCategory);
         return tasks.stream().map(this::toDto).toList();
@@ -301,7 +301,7 @@ public class TaskService {
         for (int attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt++) {
             List<Task> candidates = taskRepository
                     .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                            project.get().id(), category.name(), TaskStatus.TODO.name());
+                            project.get().id(), category.name(), TaskStatus.TODO);
             if (candidates.isEmpty()) {
                 return contentionObserved
                         ? ClaimNextTaskResult.contended(project.get(), category.name())
@@ -349,7 +349,7 @@ public class TaskService {
         // 的 BLOCKED_BY_DEPENDENCY。
         List<Task> remainingCandidates = taskRepository
                 .findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
-                        project.get().id(), category.name(), TaskStatus.TODO.name());
+                        project.get().id(), category.name(), TaskStatus.TODO);
         if (!remainingCandidates.isEmpty()) {
             Map<Long, List<TaskDto>> waiting = getUnfinishedPrerequisites(
                     remainingCandidates.stream().map(Task::getId).toList());
@@ -386,7 +386,7 @@ public class TaskService {
         return taskRepository.countByProjectId(projectId);
     }
 
-    public long countByProjectIdAndStatus(Long projectId, String status) {
+    public long countByProjectIdAndStatus(Long projectId, TaskStatus status) {
         return taskRepository.countByProjectIdAndStatus(projectId, status);
     }
 
@@ -405,7 +405,7 @@ public class TaskService {
 
     private TaskDto toDto(Task task) {
         return new TaskDto(task.getId(), task.getProjectId(), task.getTitle(), task.getDescription(),
-                task.getStatus(), task.getCategory(), task.getSortOrder(),
+                task.getStatus().name(), task.getCategory(), task.getSortOrder(),
                 task.getAssignee(), task.getClaimedAt());
     }
 

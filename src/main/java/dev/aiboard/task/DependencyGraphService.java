@@ -50,7 +50,7 @@ public class DependencyGraphService {
 
         List<DependencyNode> nodes = tasks.stream()
                 .map(task -> new DependencyNode(task.getId(), task.getTitle(), task.getCategory(),
-                        task.getStatus(), task.getAssignee(), isClaimable(task, prerequisitesByTask, tasksById)))
+                        task.getStatus().name(), task.getAssignee(), isClaimable(task, prerequisitesByTask, tasksById)))
                 .toList();
         List<DependencyEdge> edges = dependencies.stream()
                 .map(dependency -> new DependencyEdge(dependency.getDependsOnTaskId(), dependency.getTaskId()))
@@ -60,13 +60,13 @@ public class DependencyGraphService {
 
     private static boolean isClaimable(Task task, Map<Long, List<Long>> prerequisitesByTask,
                                        Map<Long, Task> tasksById) {
-        if (!TaskStatus.TODO.name().equals(task.getStatus())) {
+        if (task.getStatus() != TaskStatus.TODO) {
             return false;
         }
         return prerequisitesByTask.getOrDefault(task.getId(), List.of()).stream()
                 .map(tasksById::get)
                 .allMatch(prerequisite -> prerequisite != null
-                        && TaskStatus.DONE.name().equals(prerequisite.getStatus()));
+                        && prerequisite.getStatus() == TaskStatus.DONE);
     }
 
     private static void assertAcyclic(Map<Long, List<Long>> prerequisitesByTask) {

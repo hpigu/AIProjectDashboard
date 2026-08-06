@@ -73,7 +73,7 @@ class TaskCompleteServiceIntegrationTest {
 
         assertThat(result.task().status()).isEqualTo("DONE");
         Task persisted = taskRepository.findById(taskId).orElseThrow();
-        assertThat(persisted.getStatus()).isEqualTo("DONE");
+        assertThat(persisted.getStatus()).isEqualTo(TaskStatus.DONE);
         assertThat(persisted.getClaimTokenHash()).isNull();
 
         List<TaskCompletionEvidence> evidences = evidenceRepository.findByTaskIdOrderByIdAsc(taskId);
@@ -105,7 +105,7 @@ class TaskCompleteServiceIntegrationTest {
                 .isInstanceOf(dev.aiboard.common.BoardException.class)
                 .hasMessageContaining("claimToken");
 
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
         assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
     }
 
@@ -121,7 +121,7 @@ class TaskCompleteServiceIntegrationTest {
         taskCompleteService.completeTask(taskId, token, "第一次完成",
                 List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
                 null, null, null);
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
 
         // DONE -> IN_PROGRESS 是既有合法轉移；重開後沒有 claimTokenHash（DONE 時已清空），
         // 沿用 #112 相容策略不強制帶 token。
@@ -156,7 +156,7 @@ class TaskCompleteServiceIntegrationTest {
                 .isInstanceOf(dev.aiboard.common.BoardException.class)
                 .hasMessageContaining("FAILED");
 
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
         assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
     }
 
@@ -177,7 +177,7 @@ class TaskCompleteServiceIntegrationTest {
         var result = taskService.updateStatus(taskId, "DONE", null, claimed.claimToken());
 
         assertThat(result.changed()).isTrue();
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
         assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
     }
 
@@ -195,7 +195,7 @@ class TaskCompleteServiceIntegrationTest {
                 .isInstanceOf(dev.aiboard.common.BoardException.class)
                 .hasMessageContaining("complete_task");
 
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
         assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
     }
 
@@ -218,7 +218,7 @@ class TaskCompleteServiceIntegrationTest {
                 List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
                 null, null, null);
         assertThat(resultForNew.task().status()).isEqualTo("DONE");
-        assertThat(taskRepository.findById(newTaskId).orElseThrow().getStatus()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(newTaskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
 
         // 既有資料任務：require_evidence=false（繞過 createTasks）。
         Task legacyTask = new Task(project.id(), "既有資料任務", null, "BACKEND", 1);
@@ -233,6 +233,6 @@ class TaskCompleteServiceIntegrationTest {
                 List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
                 null, null, null);
         assertThat(resultForLegacy.task().status()).isEqualTo("DONE");
-        assertThat(taskRepository.findById(legacyTaskId).orElseThrow().getStatus()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(legacyTaskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
     }
 }

@@ -33,7 +33,7 @@ public class ProjectQuery {
         for (TaskRepository.StatusCountProjection row : taskRepository.countAllGroupedByProjectAndStatus()) {
             countsByProject
                     .computeIfAbsent(row.getProjectId(), id -> new HashMap<>())
-                    .put(row.getStatus(), row.getCnt());
+                    .put(row.getStatus().name(), row.getCnt());
         }
 
         Map<Long, LocalDateTime> lastActivityByProject = new HashMap<>();
@@ -74,7 +74,7 @@ public class ProjectQuery {
                 : taskRepository.countGroupedByProjectIdsAndStatus(projectIds)) {
             countsByProject
                     .computeIfAbsent(row.getProjectId(), id -> new HashMap<>())
-                    .put(row.getStatus(), row.getCnt());
+                    .put(row.getStatus().name(), row.getCnt());
             lastActivityByProject.merge(row.getProjectId(), row.getLastActivity(),
                     (current, candidate) -> current.isAfter(candidate) ? current : candidate);
         }

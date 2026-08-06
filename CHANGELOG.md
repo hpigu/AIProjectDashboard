@@ -26,6 +26,16 @@
 
 ### 修正
 
+- **`qa` 的看板指引叫它呼叫一個自己拿不到的工具。** `RoleSeeder` 的通用 QA 指引
+  寫著「發現 production bug 時呼叫 `create_tasks` 建立新任務」，但 worker 的工具
+  白名單從來就沒有 `create_tasks`，plugin 薄殼也明文禁止。agent 讀到看板指引後
+  照做，只會撞上一個不存在的工具。指引改為與薄殼一致：只回報 leader，由 leader
+  決定要不要建任務。
+- **README 的「已知限制」宣告了一個已經不存在的缺陷。** 上一版說「備份只在啟動與
+  關閉觸發，沒有排程機制」，但排程備份已經隨本次變更加入。同樣沒進 README 的還有
+  SSE 連線上限與背壓行為，以及 `/api/projects/{id}/dependencies`、
+  `/api/projects/{id}/tasks/{taskId}` 兩個端點。已全部補上。
+
 - **一個讀取太慢的瀏覽器分頁會拖慢 agent 的 MCP 呼叫。** 事件廣播跑在
   `AFTER_COMMIT` 的同步監聽器上，也就是 agent 的 tool call 執行緒；廣播時逐一對
   每條 SSE 連線寫入，任何一條 socket 阻塞都會讓 `create_tasks` 這類呼叫跟著卡住。
@@ -46,6 +56,22 @@
 - `bin/restore-db.sh` 與 `bin\restore-db.ps1` 的 `--list`／`latest` 納入排程備份。
   看板長時間運行時最新的一份幾乎必然是排程備份，漏掉它會讓 `latest` 安靜地挑到
   一份舊得多的快照。`/api/diagnostics` 的 `latestBackup` 同步涵蓋。
+- **`bin/start-board.sh` 已移除，內容併入 `bin/board`。** 啟動一律用
+  `bin/board start`（Windows 不變，仍是 `.\bin\board.ps1 start`）。原本只有 bash
+  側把「啟動」切成獨立腳本，Windows 側從第一天就是合併的；兩邊形狀不一致沒有帶來
+  任何好處，只讓「我該執行哪一支」變成需要查文件的問題。現在每個平台各四支、
+  一一對應：`board`／`board-env`／`backup-db`／`restore-db`。
+  還原仍是獨立的 `restore-db.*`：它必須在看板停止時執行且會覆寫資料庫檔，刻意不
+  放進天天使用的入口。
+- **README 重整。** 原本單檔 34KB 把入門與治理混在一起，第一次看的人要捲過工具
+  治理、claim token 與備份保留策略才會看到怎麼裝。現在 README 是入門路徑
+  （安裝 → 接 agent → 第一次使用 → 設定），Windows 與 mac／Linux 並列而非附註；
+  完整的介面與角色參考移到 [docs/mcp-tools.md](docs/mcp-tools.md) 與
+  [docs/agent-roles.md](docs/agent-roles.md)。
+- **CI 不再對同一份程式碼跑兩輪。** `on.push` 從 `['**']` 改為 `[main]`。分支
+  push 與該分支的 PR 會各觸發一次，三個 job 變成六個檢查、兩兩內容完全相同；
+  `concurrency` 擋不掉，因為兩者的 `github.ref` 分屬不同 group。現在分支由
+  `pull_request` 跑、合進 main 由 `push` 跑，覆蓋率不變。
 
 ## [3.1.0] — 2026-08-06
 

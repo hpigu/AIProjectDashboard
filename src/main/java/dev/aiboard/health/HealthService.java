@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * 提供「這個看板是不是最新的、有哪些 tool」所需的唯讀健康資訊，供
- * {@code bin/start-board.sh} 等一般啟動檢查與外部監控使用。
+ * {@code bin/board start} 等一般啟動檢查與外部監控使用。
  *
  * <p><b>刻意不包含敏感資訊</b>：絕對 DB 路徑、完整 JDBC URL 或任何 secret
  * 都不在這裡回傳（過去 {@code /api/health} 會吐出絕對路徑，等同對外洩漏

@@ -220,7 +220,7 @@ public class TaskEditService {
 
     private static TaskStatus parseStatus(Task task) {
         try {
-            return TaskStatus.valueOf(task.getStatus());
+            return task.getStatus();
         } catch (IllegalArgumentException e) {
             throw new BoardException("任務 #%d 的狀態無效：%s".formatted(task.getId(), task.getStatus()));
         }

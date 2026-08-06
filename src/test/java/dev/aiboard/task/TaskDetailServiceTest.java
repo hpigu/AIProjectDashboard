@@ -68,7 +68,7 @@ class TaskDetailServiceTest {
             public Long getProjectId() { return 7L; }
             public String getTitle() { return "large task"; }
             public String getDescription() { return null; }
-            public String getStatus() { return "TODO"; }
+            public TaskStatus getStatus() { return TaskStatus.TODO; }
             public String getCategory() { return "TEST"; }
             public Integer getSortOrder() { return 0; }
             public String getAssignee() { return null; }
@@ -84,7 +84,7 @@ class TaskDetailServiceTest {
         return new TaskDependencyRepository.RelatedTaskProjection() {
             public Long getId() { return id; }
             public String getTitle() { return "task-" + id; }
-            public String getStatus() { return "TODO"; }
+            public TaskStatus getStatus() { return TaskStatus.TODO; }
             public String getCategory() { return "BACKEND"; }
             public String getAssignee() { return null; }
         };

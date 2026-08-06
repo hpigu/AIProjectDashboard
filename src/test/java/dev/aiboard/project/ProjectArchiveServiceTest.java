@@ -3,6 +3,7 @@ package dev.aiboard.project;
 import dev.aiboard.common.BoardException;
 import dev.aiboard.event.BoardEventPublisher;
 import dev.aiboard.task.TaskRepository;
+import dev.aiboard.task.TaskStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -40,10 +41,10 @@ class ProjectArchiveServiceTest {
         Project project = project(7L, "archive race");
         when(projectRepository.findByNormalizedName("archive race")).thenReturn(Optional.of(project));
         when(projectRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(project));
-        when(taskRepository.countByProjectIdAndStatus(7L, "TODO")).thenReturn(0L);
-        when(taskRepository.countByProjectIdAndStatus(7L, "IN_PROGRESS")).thenReturn(1L);
-        when(taskRepository.countByProjectIdAndStatus(7L, "BLOCKED")).thenReturn(0L);
-        when(taskRepository.countByProjectIdAndStatus(7L, "DONE")).thenReturn(2L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.TODO)).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.IN_PROGRESS)).thenReturn(1L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.BLOCKED)).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.DONE)).thenReturn(2L);
 
         assertThatThrownBy(() -> service.archive("archive race", "user approved", false))
                 .isInstanceOf(BoardException.class)
@@ -60,10 +61,10 @@ class ProjectArchiveServiceTest {
         Project project = project(7L, "archive audit");
         when(projectRepository.findByNormalizedName("archive audit")).thenReturn(Optional.of(project));
         when(projectRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(project));
-        when(taskRepository.countByProjectIdAndStatus(7L, "TODO")).thenReturn(1L);
-        when(taskRepository.countByProjectIdAndStatus(7L, "IN_PROGRESS")).thenReturn(0L);
-        when(taskRepository.countByProjectIdAndStatus(7L, "BLOCKED")).thenReturn(2L);
-        when(taskRepository.countByProjectIdAndStatus(7L, "DONE")).thenReturn(3L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.TODO)).thenReturn(1L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.IN_PROGRESS)).thenReturn(0L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.BLOCKED)).thenReturn(2L);
+        when(taskRepository.countByProjectIdAndStatus(7L, TaskStatus.DONE)).thenReturn(3L);
         when(auditRepository.save(any(ProjectAudit.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         ProjectArchiveService.ArchiveResult result = service.archive("archive audit", "batch completed", false);
