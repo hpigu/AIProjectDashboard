@@ -9,11 +9,17 @@
 #   3. 系統預設 Java 版本不是 21（本機 /usr/libexec/java_home 預設是 11）——
 #      掃過所有已安裝 JDK 找 21，找不到才給出對應平台的安裝指令。
 #
-# 本腳本之後可能被放進 Claude Code plugin 的 bin/ 目錄執行（該目錄會被加入
-# PATH），因此不可假設目前工作目錄是 repo 根目錄；一律用腳本自身路徑
-# （BASH_SOURCE）反推 repo 根目錄與 jar 路徑。plugin/bin/start-board.sh 是指回
-# 本檔案的相對 symlink（../../bin/start-board.sh），確保兩邊永遠是同一份腳本、
-# REPO_ROOT 永遠解到同一個真正的 repo 根目錄，不會因為複製而多算一層目錄。
+# 不可假設目前工作目錄是 repo 根目錄；一律用腳本自身路徑（BASH_SOURCE）反推
+# repo 根目錄與 jar 路徑。下方第 0 節仍保留 symlink 解析迴圈，讓使用者自行建立
+# 的 symlink 也能正確解到真正的 repo 根目錄。
+#
+# 這支腳本曾經以 symlink（plugin/bin/start-board.sh → ../../bin/start-board.sh）
+# 出現在 plugin 目錄下，用意是「兩邊永遠是同一份」。實際上那個作法在 Windows 上
+# 是壞的：git 的 core.symlinks 在 Windows 預設為 false，checkout 會把 symlink 變成
+# 一個「內容是路徑字串」的 24 位元組文字檔，而不是可執行腳本。也就是說每一個在
+# Windows 上安裝 plugin 的人拿到的都是壞檔案，而且沒有任何錯誤訊息。
+# 它同時也是死碼——plugin 的 .mcp.json、plugin.json、SKILL.md 都沒有引用它，所以
+# 壞了一段時間都沒人發現。已移除：plugin 不負責啟停，啟停一律走 bin/board。
 #
 # 資料目錄與 jar 皆不放進 plugin/ 目錄本身，理由見下方環境變數說明與第 5 節。
 #
