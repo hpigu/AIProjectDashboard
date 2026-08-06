@@ -213,6 +213,46 @@ try {
 }
 
 Write-Host ''
+Write-Host '=== jar 版號排序（Resolve-BoardJar 的挑選規則）==='
+
+# Resolve-BoardJar 原本用 Sort-Object Name，那是字典序：3.10.0 排在 3.9.0 之前，
+# 跳到 3.10.0 的那一刻就會挑到舊 jar，而且啟動會成功、沒有任何錯誤訊息。
+# 這裡直接測排序鍵，不需要真的產生 jar 檔案。
+# bin/board-env.sh 的 board_sort_jars_by_version 是同一套規則，對應的 bash 斷言
+# 在 scripts/shell-check/check.sh，兩邊必須給出相同的順序。
+. (Join-Path $BinDir 'board-env.ps1')
+
+function Get-LatestJarName {
+    param([string[]]$Names)
+    return ($Names | Sort-Object -Property @{ Expression = { Get-BoardJarVersionKey $_ } } | Select-Object -Last 1)
+}
+
+Assert-True ((Get-LatestJarName @(
+    'ai-project-board-backend-3.9.0.jar',
+    'ai-project-board-backend-3.10.0.jar')) -eq 'ai-project-board-backend-3.10.0.jar') `
+    '3.10.0 比 3.9.0 新（字典序會弄反）'
+
+Assert-True ((Get-LatestJarName @(
+    'ai-project-board-backend-3.2.0.jar',
+    'ai-project-board-backend-3.10.0.jar',
+    'ai-project-board-backend-3.1.0.jar')) -eq 'ai-project-board-backend-3.10.0.jar') `
+    '多筆混雜時仍挑到最新的一份'
+
+Assert-True ((Get-LatestJarName @(
+    'ai-project-board-backend-3.2.0-SNAPSHOT.jar',
+    'ai-project-board-backend-3.2.0.jar')) -eq 'ai-project-board-backend-3.2.0.jar') `
+    '3.2.0 比 3.2.0-SNAPSHOT 新'
+
+Assert-True ((Get-LatestJarName @(
+    'ai-project-board-backend-3.99.0.jar',
+    'ai-project-board-backend-4.0.0.jar')) -eq 'ai-project-board-backend-4.0.0.jar') `
+    '4.0.0 比 3.99.0 新'
+
+Assert-True ((Get-BoardJarVersionKey 'ai-project-board-backend-3.10.0.jar') -eq
+    (Get-BoardJarVersionKey 'C:\repo9\target\ai-project-board-backend-3.10.0.jar')) `
+    '路徑裡的數字不會污染排序鍵'
+
+Write-Host ''
 if ($script:Failures -eq 0) {
     Write-Host '全部通過。' -ForegroundColor Green
     exit 0

@@ -213,3 +213,36 @@ function Test-BoardH2File {
 
     return ($bytes[0] -eq 0x48 -and $bytes[1] -eq 0x3A -and $bytes[2] -eq 0x32)  # H : 2
 }
+
+# 把 jar 檔名轉成「可以直接用字典序比較」的版號排序鍵。
+#
+# 原本 Resolve-BoardJar 用 Sort-Object Name，那是字典序：「3.10.0」排在「3.9.0」
+# 之前，所以跳到 3.10.0 的那一刻就會挑到舊 jar。症狀是啟動成功、版本錯誤、全程
+# 沒有任何訊息——最難發現的那一種。
+#
+# 與 bin/board-env.sh 的 board_sort_jars_by_version 是同一套規則，兩邊必須一致：
+#   - 版號取自檔名中第一個「-數字」之後的部分（Maven 的 <artifactId>-<version>.jar），
+#     因此路徑或 artifactId 裡的數字不會污染排序鍵
+#   - 每段數字補零到 8 位，最多取 6 段，不足補 0
+#   - 結尾 0／1 代表預發布／正式版：3.2.0-SNAPSHOT 比同版號的 3.2.0 舊
+function Get-BoardJarVersionKey {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($Name)
+    if ($base -match '-(\d.*)$') { $version = $Matches[1] } else { $version = $base }
+
+    $key = ''
+    $segments = 0
+    foreach ($match in [regex]::Matches($version, '\d+')) {
+        if ($segments -ge 6) { break }
+        $key += '{0:D8}.' -f [int64]$match.Value
+        $segments++
+    }
+    while ($segments -lt 6) {
+        $key += '{0:D8}.' -f 0
+        $segments++
+    }
+
+    if ($version -like '*-*') { return ($key + '0') }
+    return ($key + '1')
+}

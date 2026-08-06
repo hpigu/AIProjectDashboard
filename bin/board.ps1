@@ -144,9 +144,10 @@ function Resolve-BoardJar {
     $targetDir = Join-Path $RepoRoot 'target'
     if (-not (Test-Path $targetDir)) { return $null }
 
+    # 依版號而非字典序挑最新的一份，見 board-env.ps1 的 Get-BoardJarVersionKey。
     $jar = Get-ChildItem -Path $targetDir -Filter '*.jar' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notlike '*.original' } |
-        Sort-Object Name |
+        Sort-Object -Property @{ Expression = { Get-BoardJarVersionKey $_.Name } } |
         Select-Object -Last 1
     if ($jar) { return $jar.FullName }
     return $null
