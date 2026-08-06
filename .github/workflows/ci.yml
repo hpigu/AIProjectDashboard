@@ -79,6 +79,28 @@ jobs:
       # 之後三份 manifest 仍然停在 3.0.0，而 plugin.json 的版號正是陌生人安裝時
       # 看到的那個數字。放在這個 job 的第一步（它只需要 bash，不必等 JDK 與
       # Maven 快取），讓「忘記跳版」在十秒內紅燈，而不是跑完整輪測試才發現。
+      # 新增的腳本忘了帶執行權限位元，在 CI 上是 exit 126（「找得到但不可執行」）
+      # ——一個完全不提示原因的離開碼。這已經是第三次：`8c13217` 補過兩支，
+      # `check-plugin-parity.sh` 又中一次。根因是作者在 Windows 上開發，git 的
+      # core.fileMode 預設 false，本機 chmod +x 根本不會進版；在 macOS/Linux 上
+      # 開發則完全不會遇到，所以無法靠「記得」解決。這一步放最前面，十秒內紅燈。
+      - name: 確認受檢腳本都有執行權限位元
+        run: |
+          missing=0
+          for script in ${SHELL_SCRIPTS}; do
+            mode="$(git ls-files -s "${script}" | cut -d' ' -f1)"
+            if [ "${mode}" != "100755" ]; then
+              echo "::error file=${script}::${script} 在 git 裡的 mode 是 ${mode}，應為 100755。"
+              echo "  修法：git update-index --chmod=+x ${script}"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "${missing}" -gt 0 ]; then
+            echo "有 ${missing} 支腳本缺少執行權限位元，CI 執行時會是 exit 126。" >&2
+            exit 1
+          fi
+          echo "全部 $(echo ${SHELL_SCRIPTS} | wc -w) 支腳本的權限位元正確。"
+
       - name: 確認各 manifest 版號與 pom.xml 一致
         run: ./scripts/check-versions.sh
 
