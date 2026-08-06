@@ -220,7 +220,8 @@ Write-Host '=== jar 版號排序（Resolve-BoardJar 的挑選規則）==='
 # 這裡直接測排序鍵，不需要真的產生 jar 檔案。
 # bin/board-env.sh 的 board_sort_jars_by_version 是同一套規則，對應的 bash 斷言
 # 在 scripts/shell-check/check.sh，兩邊必須給出相同的順序。
-. (Join-Path $BinDir 'board-env.ps1')
+# board-env.ps1 在上面第 2 節已經 dot-source 過（try/finally 不另開 scope），
+# 這裡直接用 Get-BoardJarVersionKey。
 
 function Get-LatestJarName {
     param([string[]]$Names)

@@ -231,16 +231,13 @@ function Get-BoardJarVersionKey {
     $base = [System.IO.Path]::GetFileNameWithoutExtension($Name)
     if ($base -match '-(\d.*)$') { $version = $Matches[1] } else { $version = $base }
 
+    # 固定產出 6 段，不足的補 0——「3.2」與「3.2.0」必須算出同一把鍵，
+    # 否則兩者在第一個相異字元上就被分開，等長比較才成立。
+    $digits = [regex]::Matches($version, '\d+')
     $key = ''
-    $segments = 0
-    foreach ($match in [regex]::Matches($version, '\d+')) {
-        if ($segments -ge 6) { break }
-        $key += '{0:D8}.' -f [int64]$match.Value
-        $segments++
-    }
-    while ($segments -lt 6) {
-        $key += '{0:D8}.' -f 0
-        $segments++
+    for ($i = 0; $i -lt 6; $i++) {
+        if ($i -lt $digits.Count) { $value = [int64]$digits[$i].Value } else { $value = 0 }
+        $key += '{0:D8}.' -f $value
     }
 
     if ($version -like '*-*') { return ($key + '0') }

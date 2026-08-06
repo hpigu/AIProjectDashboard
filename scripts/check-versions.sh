@@ -17,7 +17,8 @@
 # 用法：
 #   scripts/check-versions.sh
 #
-# 需要 ./mvnw（版號的單一事實來源是 pom.xml，不是這支腳本裡的常數）。
+# 只需要 bash 與 grep／sed／awk：版號的單一事實來源是 pom.xml，不是這支腳本裡
+# 的常數，也不需要為了讀一個字面值去啟動一次 Maven（見下面 pom_version 的註解）。
 
 set -euo pipefail
 
@@ -32,11 +33,28 @@ plugin/.claude-plugin/plugin.json
 .codex-plugin/.codex-plugin/plugin.json
 "
 
-pom_version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
-if [ -z "$pom_version" ]; then
-  echo "::error::讀不到 pom.xml 的 project.version" >&2
-  exit 1
-fi
+# 不呼叫 `./mvnw help:evaluate`：那要開一個 JVM、組出 effective POM，還可能為了
+# maven-help-plugin 連一次 Central，在 CI 上是十幾秒起跳——只為了讀一個字面值。
+# 這裡直接讀 pom.xml，但必須跳過 <parent> 區塊，因為 spring-boot-starter-parent
+# 的版號排在前面，天真地抓第一個 <version> 會拿到 Spring Boot 的版號。
+# 「它是字面值」這個前提在下面立刻驗證：哪天版號改成 ${revision} 之類的屬性，
+# 這裡會大聲失敗，而不是默默比對到一個沒被展開的字串。
+pom_version="$(awk '
+  /<parent>/ { in_parent = 1 }
+  /<\/parent>/ { in_parent = 0; next }
+  !in_parent && match($0, /<version>[^<]+<\/version>/) {
+    print substr($0, RSTART + 9, RLENGTH - 19)
+    exit
+  }
+' pom.xml)"
+case "$pom_version" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *)
+    echo "::error::從 pom.xml 讀到的 project.version 是「${pom_version}」，不像版號。" >&2
+    echo "本腳本假設 <version> 是字面值；若已改成屬性或由 parent 繼承，請改用 mvn help:evaluate。" >&2
+    exit 1
+    ;;
+esac
 echo "pom.xml 版本：${pom_version}"
 
 failures=0
@@ -61,6 +79,26 @@ for file in $FILES; do
     failures=$((failures + 1))
   else
     echo "  [OK] ${file} = ${actual}"
+  fi
+done
+
+# README 的安裝指令裡寫著完整 jar 檔名（`java -jar target/...-3.1.0.jar`）。
+# 那是陌生人照抄的第一行指令：版號沒跟上，他複製貼上後看到的是「檔案不存在」，
+# 而 manifest 全對、CI 全綠。這裡把檔名裡的版號也一起比對。
+readme_refs="$(grep -o 'ai-project-board-backend-[0-9][0-9A-Za-z.-]*\.jar' README.md | sort -u || true)"
+if [ -z "$readme_refs" ]; then
+  echo "::error::README.md 裡找不到任何 ai-project-board-backend-<版號>.jar 的引用。" >&2
+  echo "安裝指令若改寫成別的形式，請一併更新本腳本，否則這道檢查等於沒作用。" >&2
+  failures=$((failures + 1))
+fi
+for ref in $readme_refs; do
+  actual="${ref#ai-project-board-backend-}"
+  actual="${actual%.jar}"
+  if [ "$actual" != "$pom_version" ]; then
+    echo "::error::README.md 的安裝指令寫的是 ${ref}，pom.xml 是 ${pom_version}。" >&2
+    failures=$((failures + 1))
+  else
+    echo "  [OK] README.md 安裝指令 = ${actual}"
   fi
 done
 

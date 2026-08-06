@@ -30,6 +30,14 @@ assert_eq() {
   fi
 }
 
+# 把一組 jar 路徑餵進排序函式，斷言最後一筆（最新的那份）是預期的檔案。
+# 每個案例只差在輸入與預期，管線本身抽出來，才不會有人複製貼上時忘了改。
+assert_latest() {
+  local expected="$1" description="$2"
+  shift 2
+  assert_eq "$expected" "$(printf '%s\n' "$@" | board_sort_jars_by_version | tail -n1)" "$description"
+}
+
 # board-env.sh 只定義函式與預設值，source 進來不會有副作用。
 # shellcheck source=bin/board-env.sh
 source "${REPO_ROOT}/bin/board-env.sh"
@@ -38,44 +46,34 @@ echo '=== board_sort_jars_by_version ==='
 
 # 這一項就是 #30 的回歸測試。字典序會把 3.10.0 排在 3.9.0 之前，於是跳到
 # 3.10.0 的那一刻 find_jar 就會挑到舊 jar——而且啟動會成功，沒有任何徵兆。
-latest="$(printf '%s\n' \
+assert_latest 'target/ai-project-board-backend-3.10.0.jar' \
+  '3.10.0 比 3.9.0 新（字典序會弄反）' \
   'target/ai-project-board-backend-3.9.0.jar' \
-  'target/ai-project-board-backend-3.10.0.jar' \
-  | board_sort_jars_by_version | tail -n1)"
-assert_eq 'target/ai-project-board-backend-3.10.0.jar' "$latest" \
-  '3.10.0 比 3.9.0 新（字典序會弄反）'
+  'target/ai-project-board-backend-3.10.0.jar'
 
-latest="$(printf '%s\n' \
+assert_latest 'target/ai-project-board-backend-3.10.0.jar' \
+  '多筆混雜時仍挑到最新的一份' \
   'target/ai-project-board-backend-3.2.0.jar' \
   'target/ai-project-board-backend-3.10.0.jar' \
-  'target/ai-project-board-backend-3.1.0.jar' \
-  | board_sort_jars_by_version | tail -n1)"
-assert_eq 'target/ai-project-board-backend-3.10.0.jar' "$latest" \
-  '多筆混雜時仍挑到最新的一份'
+  'target/ai-project-board-backend-3.1.0.jar'
 
 # 路徑中的數字不得參與比較：版號只從檔名裡第一個「-數字」之後開始算。
-latest="$(printf '%s\n' \
+assert_latest '/home/user2/target/ai-project-board-backend-3.2.0.jar' \
+  '路徑裡的數字不會污染排序鍵' \
   '/home/user9/target/ai-project-board-backend-3.1.0.jar' \
-  '/home/user2/target/ai-project-board-backend-3.2.0.jar' \
-  | board_sort_jars_by_version | tail -n1)"
-assert_eq '/home/user2/target/ai-project-board-backend-3.2.0.jar' "$latest" \
-  '路徑裡的數字不會污染排序鍵'
+  '/home/user2/target/ai-project-board-backend-3.2.0.jar'
 
 # 預發布版比同版號的正式版舊，否則本機留著一份 SNAPSHOT 就會蓋過正式版。
-latest="$(printf '%s\n' \
+assert_latest 'target/ai-project-board-backend-3.2.0.jar' \
+  '3.2.0 比 3.2.0-SNAPSHOT 新' \
   'target/ai-project-board-backend-3.2.0-SNAPSHOT.jar' \
-  'target/ai-project-board-backend-3.2.0.jar' \
-  | board_sort_jars_by_version | tail -n1)"
-assert_eq 'target/ai-project-board-backend-3.2.0.jar' "$latest" \
-  '3.2.0 比 3.2.0-SNAPSHOT 新'
+  'target/ai-project-board-backend-3.2.0.jar'
 
 # 主版號跳躍也要正確：4.0.0 比 3.99.0 新。
-latest="$(printf '%s\n' \
+assert_latest 'target/ai-project-board-backend-4.0.0.jar' \
+  '4.0.0 比 3.99.0 新' \
   'target/ai-project-board-backend-3.99.0.jar' \
-  'target/ai-project-board-backend-4.0.0.jar' \
-  | board_sort_jars_by_version | tail -n1)"
-assert_eq 'target/ai-project-board-backend-4.0.0.jar' "$latest" \
-  '4.0.0 比 3.99.0 新'
+  'target/ai-project-board-backend-4.0.0.jar'
 
 # 單筆輸入必須原樣輸出，不能因為排序邏輯而消失或被改寫。
 latest="$(printf '%s\n' 'target/ai-project-board-backend-3.1.0.jar' \

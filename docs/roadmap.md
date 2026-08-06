@@ -70,7 +70,7 @@
 
 | # | 項目 | 狀態 | 說明 |
 |---|---|---|---|
-| 30 | `Resolve-BoardJar` 的版號排序 | ⬜ | `bin/board.ps1` 用 `Sort-Object Name \| Select-Object -Last 1` 挑 jar，那是字典序：`3.9.0` 會排在 `3.10.0` 之後。跳到 3.10.0 時必踩，症狀是「Windows 使用者拿到舊 jar 且全程無錯誤訊息」。修正需帶測試斷言 `3.9.0 < 3.10.0`。**注意**：#32 的 zip 裡只有一個 jar，這段挑選邏輯在包裝完成後幾乎自然消失——但開發時 `target/` 仍有多個 jar，所以還是要修，只是別把它當 #32 的前置 |
+| 30 | jar 挑選的版號排序 | ✅ | **原描述只記到 `bin/board.ps1`，實測後確認 `bin/start-board.sh` 的 `sort \| tail -n1` 是完全相同的 bug——不限 Windows，兩個平台都會踩**。字典序讓 `3.10.0` 排在 `3.9.0` 之前，跳版當下會挑到舊 jar 且啟動成功、無任何訊息。兩邊改用同一套自組排序鍵（每段數字補零到 8 位、最多 6 段；版號只取檔名中第一個「-數字」之後的部分，避免路徑數字污染；SNAPSHOT 排在同版號正式版之前）。不用 `sort -V` 是因為它不是每個平台都有。新增 `scripts/shell-check/check.sh`（對稱於 `windows-check`）補上 bash 側原本完全沒有的行為測試，兩邊各五、六項斷言且順序必須一致。`3b58b51` |
 
 ---
 
@@ -101,7 +101,7 @@
 
 | 問題 | 影響 | 打算怎麼改 |
 |---|---|---|
-| **`plugin/.claude-plugin/plugin.json` 的 version 停在 3.0.0** | 這是陌生人安裝 plugin 時看到的版本號。跟已修掉的「MCP `serverInfo.version` 寫死」是**同一類問題的第二個現場**——修了一個，漏了另一個 | 問題不是「改成 3.1.0」，而是「怎麼保證沒有第三個」。照 `release.yml` 已有的 tag↔pom 檢查手法，加一個掃描所有寫有版號之處（`pom.xml`、`plugin.json`、`CHANGELOG.md`、README 安裝指令）並比對的 CI job。讓下一個現場自己冒出來，而不是靠記得 |
+| **三份 plugin manifest 的 version 停在 3.0.0**（已修 `e5fdcab`）| **原描述只記到 `plugin/.claude-plugin/plugin.json`，實際盤點後是三個現場**：另有 `.claude-plugin/marketplace.json` 與 `.codex-plugin/.codex-plugin/plugin.json`（本專案還出了一份 Codex 版 plugin）。第一份的版號正是陌生人安裝時看到的數字。跟已修掉的「MCP `serverInfo.version` 寫死」是同一類問題的第二、三、四個現場 | 新增 `scripts/check-versions.sh`，以 `pom.xml` 為唯一事實來源比對三份 manifest **與 README 安裝指令裡的 jar 檔名**（後者是陌生人照抄的第一行指令，版號沒跟上他會看到「檔案不存在」而 manifest 全對）。取值前先確認每個檔案剛好只有一個 `version` 鍵、且 pom 的 `<version>` 確實是字面值（前提不成立就不能相信比對結果）。讀 pom 用 awk 跳過 `<parent>` 區塊而非 `mvn help:evaluate`——為了一個字面值開 JVM 要十幾秒，改成純 bash 後這道檢查得以移到 CI 的 scripts job 第一步，不必等 JDK 與 Maven 快取。已用反例驗證：任一處改回 3.0.0 時離開碼為 1，一致時為 0 |
 | **`plugin/bin/` 只有 `start-board.sh`，沒有 Windows 版** | 目標使用者是 Windows 人（#32 只出 Windows zip），plugin 遞給他的卻是 bash 腳本 | 併入 #31 一起修 |
 | `ProjectArchiveTools`、`TaskEditTools`、`TaskBlockTools` 三個 MCP 工具類別無覆蓋測試 | `archive_project` 的狀態機（ARCHIVED 判定、重複封存拒絕、IN_PROGRESS 閘門）沒人看著，而 #15 的 `delete_project` 設計是「先封存才能刪」——整條安全鎖鏈建立在未被測試的邏輯上 | archive 的部分納入 #15 的前置；另兩個見 #33 |
 
@@ -128,7 +128,8 @@
 | # | 項目 | 狀態 | 要做什麼 |
 |---|---|---|---|
 | 32 | **免 JDK 的 Windows zip** | ⬜ | **新增（2026-08-06）**，(b) 目標下的真正瓶頸。走 **jlink 自帶 runtime 的 zip**：解壓即用，`bin/` 九支腳本完全保留，只改 java 的定位邏輯（優先找包裡的 runtime）。內容為 runtime + jar + Windows 腳本 + `plugin/`，**不放 `.sh`**（Windows zip 裡的 bash 腳本只會讓人猜錯）。**只出 Windows**，mac／Linux 維持現有 jar——發一個驗不了的 zip 給陌生人，比不發更傷信任。`release.yml` 需從單一 ubuntu job 改成 matrix。**兩個已知坑**：(1) java 定位邏輯是已經爆過兩次的同一塊程式碼（`JAVA_TOOL_OPTIONS` 前置行、PowerShell 5.1 的 `NativeCommandError`），第三次動它必須帶測試；(2) Spring 大量用反射與動態載入，`jdeps` 自動推導的模組集會漏掉執行期才要的東西（典型是 `jdk.crypto.ec`、`java.naming`、`java.sql`），要明確列模組或 `--add-modules ALL-MODULE-PATH`。**待決**：解壓後的 `BOARD_DATA_DIR` 預設值——`Program Files` 沒寫入權限，Downloads 又容易被清掉 |
-| 31 | **plugin 完整性** | ⬜ | **新增（2026-08-06）**，從 #13 拆出。三件事：(1) `plugin/bin/` 補 Windows 啟動腳本（或改為 plugin 不負責啟停、一律回到 zip 裡的 `bin/board`）；(2) 「角色指引不跟著 plugin 走」的具體斷點——`plugin/agents/` 六個角色檔與 `skills/claim-tasks` 明明都在，斷點記不得了，**交給演練 v1 撞出來**；(3) plugin 版號與 zip 同步（見第三輪 bug 表）|
+| 31 | **plugin 完整性** | ✅ | **新增（2026-08-06）**，從 #13 拆出。演練 (b) 跑完後三件事全部收斂，且**原本的假設有兩項是錯的**：<br>(1) ~~`plugin/bin/` 缺 Windows 腳本~~ → 實際更糟：`plugin/bin/start-board.sh` 是 git symlink，而 Windows 的 `core.symlinks` 預設 false，checkout 出來是 24 位元組的文字檔，**每個 Windows 使用者拿到的都是壞檔案**。它同時是死碼（plugin 內無任何引用），因此直接移除，啟停一律走 `bin/board`。`d8ee0d5`<br>(2) ~~角色指引不跟著 plugin 走~~ → **不成立**。`plugin/agents/` 六個角色檔完整在 plugin 裡；實質指引走 MCP 的 `get_role`，而 `RoleSeeder`（`ApplicationRunner`）啟動時以 `createRoleIfAbsent` 補齊通用角色，全新環境會自動就位。`agents/*.md` 提到的 `CLAUDE.md`／`AGENTS.md` 是叫 agent 讀**目標 repo** 的慣例，刻意如此，不是斷裂<br>(3) plugin 版號同步 → 已隨 `e5fdcab` 解決 |
+| 35 | **`RoleSeeder` 把本 repo 的開發設定編進產品** | ⬜ | **新增（2026-08-06，查 #31 時發現）**。`seedGenericRoles()` 是必要的——沒有它全新安裝的 `role` 表是空的，`get_role` 回「找不到角色」，那才是真正的「角色指引不跟著產品走」。但 `seedAgentDashboardOverrides()` 會偵測看板上有沒有叫 `AgentDashboard` 的專案，有就注入 `AGENT_DASHBOARD_SEEDS`，內容按其註解是「本 repo 寫死的路徑所有權、埠號與 commit 規則」。**等於把這個 repo 的開發夾層編譯進要發給陌生人的 jar**：任何人只要把專案取名 AgentDashboard 就會拿到這套慣例。也讓 `RoleSeeder.java` 膨脹到 356 行、絕大部分是寫死的文字。做法：移到測試 fixture，或改為從外部檔案載入 |
 | 15 | **清掉整個專案** | ⬜ | **形狀已改**。原規格是逐筆 `delete_tasks`，但真實場景是「我剛剛亂試了一堆，想把痕跡清掉」——要的是一次清整區，不是逐筆刪；而且任務之間有前置相依，逐筆硬刪會留下孤兒相依。**設計**：`delete_project`，**要求專案先是 ARCHIVED 才能刪**，授權比 `archive_project` 更重。理由：archive 已經有 preview／必填 reason／不可覆寫稽核／IN_PROGRESS 二次確認／leader 專用這一整套；如果 delete 比 archive 好呼叫，agent 會走阻力最小的那條，等於用不可逆的工具取代了可逆的那個。「先封存再刪」讓阻力天然高於 archive。**前置**：先補 `ProjectArchiveTools` 的測試，否則這條鎖鏈建立在未被測試的邏輯上。逐筆刪除留待真的有人要求再說——從來沒出現過「我想刪掉某一筆」這個痛點 |
 
 ---
@@ -147,6 +148,7 @@
 | 24 | 前端回歸進 CI | ⬜ | `scripts/frontend-regression/check.mjs` 需要 CDP 的 Chrome（`:9222`）與看板跑在 `:8091`，仍需手動 |
 | 26 | 覆蓋率門檻與靜態分析 | ⬜ | jacoco／spotbugs／checkstyle 皆無 |
 | 27 | 升級 migration 測試 | ⬜ | 缺「舊版 data 檔升到新版」的回歸 |
+| 34 | **升 Spring Boot 4 / Spring AI 2** | ⬜ | **新增（2026-08-06）**。Dependabot 的 `maven/spring` PR 想把 Spring Boot `3.5.16 → 4.1.0`、Spring AI `1.1.8 → 2.0.0`——**兩個都是主版號跳躍，不是安全修補**。不能當一般依賴更新合併：整個 MCP 層直接建在 Spring AI 的 tool API 上（`McpToolConfig` 的 `MethodToolCallbackProvider`、六個工具類別的 `@Tool`／`@ToolParam`），1.x → 2.0 很可能改掉這些，那是移植工作不是升版號。**Dependabot 把它包成一個 PR 是因為自己設的 Spring 群組規則**（模組整組一起升，避免版本不一致）——規則是對的，但它讓一次大改長得跟一般更新一樣。做之前先在分支上跑 `mvnw test` 量損害範圍。#25 的 MCP 協定層 E2E 測試正好是這次升級的安全網 |
 | 12b | 依賴弱點掃描 | 🟡 | Dependabot 已開，CodeQL／OWASP dependency-check 未加（原清單此列與 SSE 項目撞號，改標 12b）|
 | 28 | 開源治理檔案 | 🟡 | `SECURITY.md` 已有；CONTRIBUTING、issue/PR template 未做。**優先度低**：對象已定為「想拿去用的使用者」而非「想貢獻的開發者」 |
 | 29 | README 拆分 | ⬜ | 單檔 34KB，入門與治理內容混在一起 |
@@ -186,7 +188,7 @@
 
 ## 如何維護這份文件
 
-- **項目編號不重排**：沿用原始分析的編號，新項目往後加（34、35…），這樣舊討論永遠對得上。
+- **項目編號不重排**：沿用原始分析的編號，新項目往後加（35、36…），這樣舊討論永遠對得上。
 - **完成時就地改狀態**，不要刪掉整列：把 ⬜ 改成 ✅，在「改動」欄補上一句簡述與 commit short hash。這份文件同時是清單也是變更紀錄。
 - **每次改動請一併更新頂端的「最後更新」與「狀態」**。
 - 發現新缺口就加進對應的區塊；如果它會擋住「別人能不能用」，放 P0。確定會爆但今天不痛的，放「已知未爆彈」。

@@ -110,17 +110,17 @@ board_sort_jars_by_version() {
       sub(/\.jar$/, "", base)
       version = match(base, /-[0-9]/) ? substr(base, RSTART + 1) : base
 
+      # 固定產出 6 段，不足的補 0——「3.2」與「3.2.0」必須算出同一把鍵，
+      # 否則兩者在第一個相異位元組上就被分開，等長比較才成立。
       key = ""
       rest = version
-      segments = 0
-      while (segments < 6 && match(rest, /[0-9]+/)) {
-        key = key sprintf("%08d.", substr(rest, RSTART, RLENGTH) + 0)
-        rest = substr(rest, RSTART + RLENGTH)
-        segments++
-      }
-      while (segments < 6) {
-        key = key sprintf("%08d.", 0)
-        segments++
+      for (i = 0; i < 6; i++) {
+        if (match(rest, /[0-9]+/)) {
+          key = key sprintf("%08d.", substr(rest, RSTART, RLENGTH) + 0)
+          rest = substr(rest, RSTART + RLENGTH)
+        } else {
+          key = key sprintf("%08d.", 0)
+        }
       }
       key = key (version ~ /-/ ? "0" : "1")
 

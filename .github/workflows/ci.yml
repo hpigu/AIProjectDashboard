@@ -39,13 +39,6 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # 版號散落在三份 plugin manifest 裡，彼此沒有任何機制互相對照。這件事已經
-      # 出過兩次包：先是 MCP 的 serverInfo.version 寫死，修完之後三份 manifest
-      # 仍然停在 3.0.0，而 plugin.json 的版號正是陌生人安裝時看到的那個數字。
-      # 放在測試之前，讓「忘記跳版」在幾秒內就紅燈，而不是跑完整輪測試才發現。
-      - name: 確認各 manifest 版號與 pom.xml 一致
-        run: ./scripts/check-versions.sh
-
       - name: 執行測試
         run: ./mvnw -B test
 
@@ -65,16 +58,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    env:
+      # 受檢腳本只列一次。原本語法檢查與 shellcheck 各自維護一份清單，新增腳本
+      # 要改兩處，改漏一處就靜靜少一半覆蓋——正是這個 workflow 想擋的那種漏。
+      SHELL_SCRIPTS: >-
+        bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh
+        scripts/check-versions.sh scripts/shell-check/check.sh
+
     steps:
       - uses: actions/checkout@v7
+
+      # 版號散落在三份 plugin manifest 與 README 的安裝指令裡，彼此沒有任何機制
+      # 互相對照。這件事已經出過兩次包：先是 MCP 的 serverInfo.version 寫死，修完
+      # 之後三份 manifest 仍然停在 3.0.0，而 plugin.json 的版號正是陌生人安裝時
+      # 看到的那個數字。放在這個 job 的第一步（它只需要 bash，不必等 JDK 與
+      # Maven 快取），讓「忘記跳版」在十秒內紅燈，而不是跑完整輪測試才發現。
+      - name: 確認各 manifest 版號與 pom.xml 一致
+        run: ./scripts/check-versions.sh
+
+      # 語法檢查與 shellcheck 都看不出「排序鍵算錯」這類邏輯錯誤，而 bin/ 算錯的
+      # 後果是啟動成功卻跑到錯的 jar，完全沒有徵兆。這一步補上行為層的斷言，
+      # 放在 shellcheck 之前，才不用等 apt 裝完才知道邏輯壞了。
+      - name: bash 函式行為檢查
+        run: ./scripts/shell-check/check.sh
 
       # bin/ 下的腳本是使用者的第一個接觸點，壞掉等於裝不起來，但它們不在
       # Maven 測試範圍內（只有部分行為由 JUnit 以 ProcessBuilder 覆蓋）。
       # 這裡先做語法檢查，再跑 shellcheck 補靜態問題。
       - name: bash 語法檢查
         run: |
-          for script in bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh \
-                        scripts/check-versions.sh scripts/shell-check/check.sh; do
+          for script in ${SHELL_SCRIPTS}; do
             echo "檢查 ${script}"
             bash -n "${script}"
           done
@@ -83,14 +96,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=warning \
-            bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh \
-            scripts/check-versions.sh scripts/shell-check/check.sh
-
-      # 語法檢查與 shellcheck 都看不出「排序鍵算錯」這類邏輯錯誤，而 bin/ 算錯的
-      # 後果是啟動成功卻跑到錯的 jar，完全沒有徵兆。這一步補上行為層的斷言。
-      - name: bash 函式行為檢查
-        run: ./scripts/shell-check/check.sh
+          # shellcheck 吃多個檔名，這裡刻意不加引號讓 SHELL_SCRIPTS 展開成多個參數。
+          shellcheck --severity=warning ${SHELL_SCRIPTS}
 
   windows-scripts:
     name: Windows 腳本檢查
