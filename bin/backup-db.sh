@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # backup-db.sh — 啟動前資料庫冷備份與保留策略
 #
-# 由 bin/start-board.sh 在確認 H2 檔案未被其他行程持有之後、啟動 jar
+# 由 bin/board start 在確認 H2 檔案未被其他行程持有之後、啟動 jar
 # （進而觸發 Flyway migration）之前呼叫。目的：一旦某次啟動的 migration
 # 或後續操作把資料庫弄壞，還有啟動當下的快照可以還原。
 #
-# 用法（被 start-board.sh source 後呼叫函式，也可獨立執行）：
+# 用法（被 bin/board source 後呼叫函式，也可獨立執行）：
 #   source bin/backup-db.sh
 #   backup_database "$DB_MV_FILE" "$BACKUP_DIR"
 #
@@ -22,7 +22,7 @@
 #      對 H2 Driver／JDBC 的依賴（開機腳本不應該還要拉 classpath），只做
 #      檔案層級的完整性檢查。
 #   4. 備份失敗（複製失敗、驗證失敗、目錄建立失敗等）一律回傳非 0，呼叫端
-#      （start-board.sh）必須因此中止啟動，不得繼續 migrate。
+#      （bin/board start）必須因此中止啟動，不得繼續 migrate。
 #   5. 保留策略：刪除 30 天前的備份，但刪除後至少要留最新 7 份——即使
 #      所有備份都超過 30 天，也只刪到剩 7 份為止；不足 7 份時完全不刪。
 #   6. 不引入常駐、排程（cron/launchd）或跨 OS 互動 CLI；純粹是啟動流程中
@@ -32,7 +32,7 @@ set -u
 
 # 需要 board_file_mtime()（見 board-env.sh 內對 stat 可攜性的完整說明：
 # GNU 與 BSD 的 stat 時間格式選項不同，寫錯會讓保留策略拿到垃圾時間戳）。
-# start-board.sh 會先 source board-env.sh，此時不必重複載入；獨立執行時自行載入。
+# bin/board 會先 source board-env.sh，此時不必重複載入；獨立執行時自行載入。
 if ! declare -f board_file_mtime >/dev/null 2>&1; then
   _BACKUP_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
   REPO_ROOT="${REPO_ROOT:-$(cd -P "${_BACKUP_SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)}"

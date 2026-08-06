@@ -1,6 +1,6 @@
 ﻿# board.ps1 — Windows 版看板生命週期入口（start / stop / restart / status / logs）
 #
-# 這是 bin/board 與 bin/start-board.sh 兩支 bash 腳本合併後的 Windows 對應實作。
+# 這是 bin/board（bash）的 Windows 對應實作，兩邊指令與預設值一一對應。
 # Windows 上沒有 bash，原本只能自己 `java -jar` 再靠 Stop-Process 收工，缺兩件事：
 #   1. 啟動前的 JDK／埠號／H2 鎖檔檢查與冷備份；
 #   2. 一條會觸發關閉前備份的停止路徑。
@@ -54,7 +54,7 @@ if ($startTimeoutEnv -and ($startTimeoutEnv -as [int])) { $StartTimeoutSec = [in
 # ---------------------------------------------------------------------------
 # JDK 21 偵測
 #
-# 與 bin/start-board.sh 的 version_is_21() 同樣的陷阱要避開：不能只看
+# 與 bin/board 的 version_is_21() 同樣的陷阱要避開：不能只看
 # `java -version` 的第一行，JVM 會把 JAVA_TOOL_OPTIONS／_JAVA_OPTIONS 的
 # "Picked up ..." 提示印在版本字串之前，那會讓已安裝的 JDK 21 被誤判成沒裝。
 #
