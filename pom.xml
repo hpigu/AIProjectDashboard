@@ -48,6 +48,16 @@
                     <groupId>com.knuddels</groupId>
                     <artifactId>jtokkit</artifactId>
                 </exclusion>
+                <!-- javax.validation:validation-api 1.1.0.Final 是 2014 年的產物，
+                     javax 命名空間早已被 jakarta.validation 取代且不再維護。它經由
+                     spring-ai-commons -> jackson-module-jsonSchema 傳遞進來，本專案
+                     的 main 與 test 程式碼完全沒有 javax.validation / jakarta.validation
+                     的任何引用（grep 零命中）。留著只是讓弱點掃描多一個永遠不會被修的
+                     報告項目。 -->
+                <exclusion>
+                    <groupId>javax.validation</groupId>
+                    <artifactId>validation-api</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
@@ -74,8 +84,15 @@
         </dependency>
 
         <dependency>
+            <!-- runtime 而非 compile：H2 只以 JDBC driver 身分被反射載入
+                 （application.yml 的 driver-class-name），main 程式碼沒有任何
+                 org.h2 引用。降 scope 之後，若哪天有人直接 import org.h2.*
+                 把服務綁死在 H2 上，編譯期就會擋下來而不是等到換 DB 才發現。
+                 spring-boot-maven-plugin 的 repackage 仍會把 runtime scope 打進
+                 fat jar，執行不受影響。 -->
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <dependency>
