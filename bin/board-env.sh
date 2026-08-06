@@ -88,6 +88,48 @@ board_file_mtime() {
 }
 
 # ---------------------------------------------------------------------------
+# 從 stdin 讀入 jar 路徑，依版號由舊到新排序後輸出。
+#
+# 原本 start-board.sh 用 `sort | tail -n1`、board.ps1 用 `Sort-Object Name`，
+# 兩者都是字典序：「3.10.0」排在「3.9.0」之前，所以跳到 3.10.0 的那一刻就會挑
+# 到舊 jar。症狀是啟動成功、版本錯誤、全程沒有任何訊息——最難發現的那一種。
+#
+# 不用 `sort -V`：它在 GNU coreutils 上沒問題，但不是每個平台都有（本專案已為
+# macOS 的 bash 3.2 讓過一次步）。改成自己組排序鍵，把版號每段數字補零到固定
+# 寬度，字典序就等同版號序，任何 POSIX awk 都跑得動。
+#
+# 版號取自檔名中第一個「-數字」之後的部分（Maven 的 <artifactId>-<version>.jar），
+# 因此路徑裡的數字（例如 /home/user2/）不會污染排序鍵。
+# 3.2.0-SNAPSHOT 排在 3.2.0 之前：預發布版比同版號的正式版舊。
+# ---------------------------------------------------------------------------
+board_sort_jars_by_version() {
+  awk '
+    {
+      base = $0
+      sub(/.*\//, "", base)
+      sub(/\.jar$/, "", base)
+      version = match(base, /-[0-9]/) ? substr(base, RSTART + 1) : base
+
+      key = ""
+      rest = version
+      segments = 0
+      while (segments < 6 && match(rest, /[0-9]+/)) {
+        key = key sprintf("%08d.", substr(rest, RSTART, RLENGTH) + 0)
+        rest = substr(rest, RSTART + RLENGTH)
+        segments++
+      }
+      while (segments < 6) {
+        key = key sprintf("%08d.", 0)
+        segments++
+      }
+      key = key (version ~ /-/ ? "0" : "1")
+
+      printf "%s\t%s\n", key, $0
+    }
+  ' | sort | cut -f2-
+}
+
+# ---------------------------------------------------------------------------
 # 確認某個 PID 真的是本看板的 Java 行程，而不是 PID 被回收後的無關行程。
 # stop/restart 前一定要問過這一題：對著陌生行程送 SIGTERM 是這類腳本最典型、
 # 也最不可原諒的災難。

@@ -39,6 +39,13 @@ jobs:
           java-version: '21'
           cache: maven
 
+      # 版號散落在三份 plugin manifest 裡，彼此沒有任何機制互相對照。這件事已經
+      # 出過兩次包：先是 MCP 的 serverInfo.version 寫死，修完之後三份 manifest
+      # 仍然停在 3.0.0，而 plugin.json 的版號正是陌生人安裝時看到的那個數字。
+      # 放在測試之前，讓「忘記跳版」在幾秒內就紅燈，而不是跑完整輪測試才發現。
+      - name: 確認各 manifest 版號與 pom.xml 一致
+        run: ./scripts/check-versions.sh
+
       - name: 執行測試
         run: ./mvnw -B test
 
@@ -66,7 +73,8 @@ jobs:
       # 這裡先做語法檢查，再跑 shellcheck 補靜態問題。
       - name: bash 語法檢查
         run: |
-          for script in bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh; do
+          for script in bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh \
+                        scripts/check-versions.sh scripts/shell-check/check.sh; do
             echo "檢查 ${script}"
             bash -n "${script}"
           done
@@ -76,7 +84,13 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
           shellcheck --severity=warning \
-            bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh
+            bin/board bin/board-env.sh bin/start-board.sh bin/backup-db.sh bin/restore-db.sh \
+            scripts/check-versions.sh scripts/shell-check/check.sh
+
+      # 語法檢查與 shellcheck 都看不出「排序鍵算錯」這類邏輯錯誤，而 bin/ 算錯的
+      # 後果是啟動成功卻跑到錯的 jar，完全沒有徵兆。這一步補上行為層的斷言。
+      - name: bash 函式行為檢查
+        run: ./scripts/shell-check/check.sh
 
   windows-scripts:
     name: Windows 腳本檢查

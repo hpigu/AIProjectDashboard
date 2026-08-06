@@ -1,6 +1,6 @@
 {
   "name": "ai-project-board",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "AI 專案看板的 Codex 整合：認領/更新任務、取得角色指引、啟動看板服務。",
   "author": {
     "name": "Daniel Huang"

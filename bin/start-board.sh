@@ -277,7 +277,10 @@ fi
 #    release 組裝流程或把二進位檔提交進 git。
 # ---------------------------------------------------------------------------
 find_jar() {
-  find "${REPO_ROOT}/target" -maxdepth 1 -name '*.jar' ! -name '*.original' 2>/dev/null | sort | tail -n1
+  # 依版號而非字典序挑最新的一份，見 board-env.sh 的 board_sort_jars_by_version。
+  find "${REPO_ROOT}/target" -maxdepth 1 -name '*.jar' ! -name '*.original' 2>/dev/null \
+    | board_sort_jars_by_version \
+    | tail -n1
 }
 
 if [ -n "${BOARD_JAR:-}" ]; then
