@@ -201,22 +201,35 @@ board_set_secure_umask() {
 # umask 只影響之後新建的檔案，舊版留下的 0644 檔案仍需顯式收斂。
 #
 # 失敗語意沿用 board_secure_file：既有資料只警告、絕不阻擋啟動或刪改內容。
-# Logback 的 rolling pattern 是 <active-log>.<date>.<index>.gz，因此只掃描 active
-# log 的精確名稱與同 basename 前綴，不會遞迴碰觸日誌目錄中的其他檔案。
+# Logback 的 rolling pattern 是 <active-log>.YYYY-MM-DD.<index>.gz，因此只處理
+# active log 的精確名稱與符合該格式的輪替檔，不碰觸同 basename 的其他檔案。
 board_secure_runtime_files() {
   local db_file="${1:-}"
   local log_file="${2:-}"
   local console_file="${3:-}"
   local file
+  local rolling_index
+  local rolling_name
 
   if [ -n "$db_file" ] && [ -f "$db_file" ] && [ ! -L "$db_file" ]; then
     board_secure_file "$db_file" 0
   fi
 
   if [ -n "$log_file" ]; then
-    for file in "$log_file" "$log_file".*; do
+    for file in "$log_file" \
+        "$log_file".[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].*.gz; do
       [ -f "$file" ] || continue
       [ -L "$file" ] && continue
+
+      if [ "$file" != "$log_file" ]; then
+        rolling_name=${file#"$log_file".}
+        rolling_index=${rolling_name#????-??-??.}
+        rolling_index=${rolling_index%.gz}
+        case "$rolling_index" in
+          ''|*[!0-9]*) continue ;;
+        esac
+      fi
+
       board_secure_file "$file" 0
     done
   fi

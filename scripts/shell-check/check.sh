@@ -124,17 +124,20 @@ permission_work="$(mktemp -d "${TMPDIR:-/tmp}/board-permission-check.XXXXXX")"
 db_file="$permission_work/board.mv.db"
 log_file="$permission_work/board.log"
 rolled_log="$permission_work/board.log.2026-08-11.0.gz"
+unrelated_log="$permission_work/board.log.backup"
 console_file="$permission_work/custom-console.log"
 printf 'H:2 fixture\n' > "$db_file"
 printf 'active log\n' > "$log_file"
 printf 'rolled log\n' > "$rolled_log"
+printf 'unrelated log-prefix file\n' > "$unrelated_log"
 printf 'console log\n' > "$console_file"
-chmod 644 "$db_file" "$log_file" "$rolled_log" "$console_file"
+chmod 644 "$db_file" "$log_file" "$rolled_log" "$unrelated_log" "$console_file"
 
 board_secure_runtime_files "$db_file" "$log_file" "$console_file"
 assert_eq 600 "$(mode "$db_file")" '既有 .mv.db 從過寬權限收斂為 0600'
 assert_eq 600 "$(mode "$log_file")" '既有 active log 從過寬權限收斂為 0600'
 assert_eq 600 "$(mode "$rolled_log")" '既有 rolling log 從過寬權限收斂為 0600'
+assert_eq 644 "$(mode "$unrelated_log")" '同 basename 的非 rolling log 檔案維持原權限'
 assert_eq 600 "$(mode "$console_file")" '自訂 console log 從過寬權限收斂為 0600'
 
 ( board_set_secure_umask; printf 'new H2 file\n' > "$permission_work/rebuilt.mv.db" )
