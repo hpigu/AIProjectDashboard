@@ -67,9 +67,13 @@ jobs:
       # 受檢腳本只列一次。原本語法檢查與 shellcheck 各自維護一份清單，新增腳本
       # 要改兩處，改漏一處就靜靜少一半覆蓋——正是這個 workflow 想擋的那種漏。
       SHELL_SCRIPTS: >-
-        bin/board bin/board-env.sh bin/backup-db.sh bin/restore-db.sh
+        bin/board bin/board-env.sh bin/backup-db.sh bin/restore-db.sh bin/board-update.sh
+        install/install.sh
         scripts/check-versions.sh scripts/shell-check/check.sh
         scripts/check-plugin-parity.sh
+        scripts/install-check/check.sh scripts/install-check/update-fixture.sh
+        scripts/release/posix-release-smoke.sh scripts/release/release-assets-fixture.sh
+        scripts/release/release-assets.sh
 
     steps:
       - uses: actions/checkout@v7

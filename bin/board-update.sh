@@ -87,7 +87,7 @@ if [ "$current_version" = "$requested_version" ]; then
   log 'target is already active; no files, downloads, or service state changed'
   exit 0
 fi
-[ "$release_url" != *latest* ] || die 'mutable latest URLs are forbidden; use the exact vV release asset URL'
+case "$release_url" in *[Ll][Aa][Tt][Ee][Ss][Tt]*) die 'mutable latest URLs are forbidden; use the exact vV release asset URL' ;; esac
 if [ -n "$release_url" ]; then
   [ -z "$jar" ] && [ -z "$checksums" ] || die 'do not combine --release-url with local artifacts'
   case "$release_url" in */v"$requested_version"|*/v"$requested_version"/) ;; *) die '--release-url must name the exact immutable vV release' ;; esac
