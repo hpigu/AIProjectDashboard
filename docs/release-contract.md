@@ -4,9 +4,13 @@
 server 產物與 thin plugin 關係。它是 #146–#149 實作時的驗收契約，不是那些
 功能已經存在的宣告。
 
-目前的 [release workflow](../.github/workflows/release.yml) 只發佈一個 Maven
-fat JAR 與同名 `.sha256` sidecar；它尚未產生本文件的四個平台產物或集中 checksum
-清單。未完成下列契約前，不得把現行產物宣稱為三平台 stable 發佈。
+[`release workflow`](../.github/workflows/release.yml) 會在四個原生平台 runner 各自
+測試、封裝及自我驗證，再由唯一的 publish job 匯集四個產物，建立集中 checksum
+清單並發布。publish job 只在四個 build jobs 都成功後執行，且拒絕覆寫既有（含
+draft）release。macOS arm64 使用 GitHub `macos-15` runner，x64 使用
+`macos-15-intel`；兩者均以 `uname -m` fail-closed 確認架構。preflight 會把已
+驗證 tag 的 peeled commit、tag 與版本輸出給所有下游 job；所有 checkout 與 release
+notes 都使用這組值，而不是 workflow dispatch 的預設 SHA。
 
 ## 1. 版本、tag 與來源追溯
 
