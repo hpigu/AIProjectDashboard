@@ -6,11 +6,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.net.URI;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -106,6 +110,71 @@ class LocalFilePermissionHardenerTest {
 
         LocalFilePermissionHardener.securePath(missing, false);
         // 沒有拋出例外即為通過。
+    }
+
+    @Test
+    void periodicEntryTightensExistingRegularFileWithoutChangingItsData() throws IOException {
+        Path file = tempDir.resolve("existing.mv.db");
+        Files.writeString(file, "existing database bytes");
+        setPosixPermissions(file, "rw-r--r--");
+
+        LocalFilePermissionHardener.PosixFileHardeningResult result =
+                LocalFilePermissionHardener.secureExistingPosixFile(file);
+
+        assertThat(result).isEqualTo(LocalFilePermissionHardener.PosixFileHardeningResult.SECURED);
+        assertThat(posixPermissions(file)).isEqualTo(LocalFilePermissionHardener.FILE_PERMISSIONS);
+        assertThat(Files.readString(file)).isEqualTo("existing database bytes");
+    }
+
+    @Test
+    void periodicEntryReportsAlreadySecureAndMissingFilesWithoutMutation() throws IOException {
+        Path file = tempDir.resolve("already-secure.log");
+        Files.writeString(file, "keep");
+        setPosixPermissions(file, "rw-------");
+
+        assertThat(LocalFilePermissionHardener.secureExistingPosixFile(file))
+                .isEqualTo(LocalFilePermissionHardener.PosixFileHardeningResult.ALREADY_SECURE);
+        assertThat(LocalFilePermissionHardener.secureExistingPosixFile(tempDir.resolve("missing.log")))
+                .isEqualTo(LocalFilePermissionHardener.PosixFileHardeningResult.NOT_PRESENT);
+        assertThat(Files.readString(file)).isEqualTo("keep");
+    }
+
+    @Test
+    void periodicEntryDoesNotFollowSymlinksOrTreatDirectoriesAsFiles() throws IOException {
+        Path target = tempDir.resolve("outside-target.log");
+        Files.writeString(target, "must not be chmod through a link");
+        setPosixPermissions(target, "rw-r--r--");
+        Path link = tempDir.resolve("board.log");
+        try {
+            Files.createSymbolicLink(link, target);
+        } catch (UnsupportedOperationException | IOException ex) {
+            Assumptions.abort("此測試檔案系統不支援建立 symbolic link：" + ex.getClass().getSimpleName());
+        }
+        Path directory = Files.createDirectory(tempDir.resolve("board.mv.db"));
+        setPosixPermissions(directory, "rwxr-xr-x");
+
+        assertThat(LocalFilePermissionHardener.secureExistingPosixFile(link))
+                .isEqualTo(LocalFilePermissionHardener.PosixFileHardeningResult.NOT_PRESENT);
+        assertThat(LocalFilePermissionHardener.secureExistingPosixFile(directory))
+                .isEqualTo(LocalFilePermissionHardener.PosixFileHardeningResult.NOT_PRESENT);
+        assertThat(posixPermissions(target)).contains(PosixFilePermission.GROUP_READ,
+                PosixFilePermission.OTHERS_READ);
+        assertThat(Files.readString(target)).isEqualTo("must not be chmod through a link");
+        assertThat(directory).isDirectory();
+    }
+
+    @Test
+    void periodicEntryReportsUnsupportedPosixFileSystemWithoutChangingData() throws IOException {
+        Path archive = tempDir.resolve("non-posix.zip");
+        URI uri = URI.create("jar:" + archive.toUri());
+        try (FileSystem zip = FileSystems.newFileSystem(uri, Map.of("create", "true"))) {
+            Path file = zip.getPath("/board.log");
+            Files.writeString(file, "zip data stays intact");
+
+            assertThat(LocalFilePermissionHardener.secureExistingPosixFile(file))
+                    .isEqualTo(LocalFilePermissionHardener.PosixFileHardeningResult.UNSUPPORTED);
+            assertThat(Files.readString(file)).isEqualTo("zip data stays intact");
+        }
     }
 
     private static Set<PosixFilePermission> posixPermissions(Path path) throws IOException {
