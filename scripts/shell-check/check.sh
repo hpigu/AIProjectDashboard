@@ -30,6 +30,13 @@ assert_eq() {
   fi
 }
 
+mode() {
+  local value
+  value="$(stat -c '%a' "$1" 2>/dev/null)"
+  case "$value" in ''|*[!0-9]*) ;; *) printf '%s' "$value"; return 0 ;; esac
+  stat -f '%Lp' "$1"
+}
+
 # 把一組 jar 路徑餵進排序函式，斷言最後一筆（最新的那份）是預期的檔案。
 # 每個案例只差在輸入與預期，管線本身抽出來，才不會有人複製貼上時忘了改。
 assert_latest() {
@@ -99,6 +106,47 @@ assert_eq 'jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE' \
 assert_eq 'jdbc:h2:file:./data/board;PASSWORD=***;DB_CLOSE_ON_EXIT=FALSE' \
   "$(board_mask_db_url 'jdbc:h2:file:./data/board;PASSWORD=secret;DB_CLOSE_ON_EXIT=FALSE')" \
   '只遮罩帳密參數本身，同一 URL 中其他參數維持可見'
+
+echo ""
+echo '=== runtime sensitive file permissions ==='
+
+permission_work="$(mktemp -d "${TMPDIR:-/tmp}/board-permission-check.XXXXXX")"
+trap 'rm -rf "$permission_work"' EXIT HUP INT TERM
+db_file="$permission_work/board.mv.db"
+log_file="$permission_work/board.log"
+rolled_log="$permission_work/board.log.2026-08-11.0.gz"
+console_file="$permission_work/custom-console.log"
+printf 'H:2 fixture\n' > "$db_file"
+printf 'active log\n' > "$log_file"
+printf 'rolled log\n' > "$rolled_log"
+printf 'console log\n' > "$console_file"
+chmod 644 "$db_file" "$log_file" "$rolled_log" "$console_file"
+
+board_secure_runtime_files "$db_file" "$log_file" "$console_file"
+assert_eq 600 "$(mode "$db_file")" '既有 .mv.db 從過寬權限收斂為 0600'
+assert_eq 600 "$(mode "$log_file")" '既有 active log 從過寬權限收斂為 0600'
+assert_eq 600 "$(mode "$rolled_log")" '既有 rolling log 從過寬權限收斂為 0600'
+assert_eq 600 "$(mode "$console_file")" '自訂 console log 從過寬權限收斂為 0600'
+
+( board_set_secure_umask; printf 'new H2 file\n' > "$permission_work/rebuilt.mv.db" )
+( board_set_secure_umask; printf 'new rolling log\n' > "$permission_work/board.log.2026-08-11.1.gz" )
+assert_eq 600 "$(mode "$permission_work/rebuilt.mv.db")" 'H2 重建檔繼承 077 umask，建立即為 0600'
+assert_eq 600 "$(mode "$permission_work/board.log.2026-08-11.1.gz")" '新 rolling log 繼承 077 umask，建立即為 0600'
+
+chmod 644 "$db_file"
+before_content="$(cat "$db_file")"
+unsupported_output="$({
+  chmod() { return 1; }
+  board_secure_runtime_files "$db_file" "$log_file" "$console_file"
+} 2>&1)"
+assert_eq "$before_content" "$(cat "$db_file")" '不支援／拒絕 chmod 時不損毀既有資料'
+case "$unsupported_output" in
+  *'警告：無法修正既有檔案的權限'*)
+    echo '  [PASS] 不支援／拒絕 chmod 時只警告並繼續' ;;
+  *)
+    echo '  [FAIL] 不支援／拒絕 chmod 時應輸出警告'
+    failures=$((failures + 1)) ;;
+esac
 
 echo ""
 if [ "$failures" -gt 0 ]; then

@@ -250,6 +250,10 @@ find_jar() {
 cmd_start() {
   log "repo 根目錄：$REPO_ROOT"
 
+  # JVM 與其所有子系統都繼承 077。這使 H2／Logback 之後建立或重建的資料庫、
+  # active log 與 rolling log 從誕生時就是 0600，而不是只在啟動當下 chmod 一次。
+  board_set_secure_umask
+
   # -------------------------------------------------------------------------
   # 1. JDK 偵測
   # -------------------------------------------------------------------------
@@ -330,6 +334,8 @@ cmd_start() {
   # -------------------------------------------------------------------------
   local DB_FILE_PATH DB_MV_FILE LOCK_PIDS
   DB_FILE_PATH="$(board_db_file_path)"
+  board_secure_runtime_files \
+    "${DB_FILE_PATH:+${DB_FILE_PATH}.mv.db}" "$BOARD_LOG_FILE" "$BOARD_CONSOLE_LOG"
   if [ -n "$DB_FILE_PATH" ]; then
     DB_MV_FILE="${DB_FILE_PATH}.mv.db"
     if [ -e "$DB_MV_FILE" ] && command -v lsof >/dev/null 2>&1; then
