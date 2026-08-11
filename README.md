@@ -44,8 +44,9 @@ docs）把前置已完成的工作接走。瀏覽器開著看板即可即時看�
 
 下列是**手動 clone + 現場組裝**這條路徑（今天唯一有真實驗證的安裝方式）；
 另外還規劃了免 JDK 的 macOS／Linux／Windows 安裝器與 `board update` 明確更新
-（見下方「發布狀態」），但**尚未推送過任何 GitHub Release**，本節之外的安裝
-方式目前無法實際下載使用。完整流程見
+（見下方「發布狀態」），但 repo 雖已推送到遠端，**尚未觸發過三平台 release
+CI、也還沒有真實的三平台 asset**（遠端唯一的 `v3.1.0` tag 是推送前的舊版本，
+只有單一 JAR），本節之外的安裝方式目前無法實際下載使用。完整流程見
 [docs/release-install-update-sop.md](docs/release-install-update-sop.md)。
 
 ### 需要什麼
@@ -395,9 +396,13 @@ bin/restore-db.sh latest      # 還原最新一份
   為主，尚未逐一國際化。
 - **免 JDK 安裝器與三平台 GitHub Release 尚未真正發布過**：`install/install.sh`、
   Windows jlink ZIP、`bin/board update` 與 `.github/workflows/release.yml` 都已
-  完成程式碼與 CI 層級驗證，但目前 repo 尚未推送到遠端，**從未實際觸發過一次
-  release**，因此沒有可下載的真實 asset；今天唯一能用的安裝路徑是本文件第 1
-  節的手動 clone。
+  完成程式碼與 CI 層級驗證，repo 本身已推送到遠端（`origin/main`），但**這批
+  變更尚未觸發過一次真實的三平台 release**，因此沒有可下載的真實 asset。遠端
+  目前唯一的 tag 是 `v3.1.0`（2026-08-05 發布，早於本批推送），只有
+  `ai-project-board-backend-3.1.0.jar` 與 `.jar.sha256` 兩個 asset，是舊的單
+  JAR 格式，不是三平台契約要求的四個平台產物（Linux x64／macOS arm64／macOS
+  x64 JAR＋Windows ZIP）加集中式 `SHA256SUMS.txt`；今天唯一能用的安裝路徑是
+  本文件第 1 節的手動 clone。
 - **Windows Sandbox 乾淨環境的人工驗收尚未執行**：清單已就緒
   （[docs/windows-sandbox-clean-install-checklist.md](docs/windows-sandbox-clean-install-checklist.md)），
   Windows 免 JDK 安裝流程目前只在 CI 的 `windows-2022` runner（非乾淨環境）上
