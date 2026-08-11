@@ -46,6 +46,10 @@
 
 ### 變更
 
+- **後端升級至 Spring Boot 4.1.0 與 Spring AI 2.0.0。** 同步改用 Boot 4
+  模組化的 Web MVC、Flyway 與測試 starter，並完成 Jackson 3、MockMvc 與
+  TestRestTemplate 測試 API 遷移。Spring AI 2.0 會依工具 JSON Schema 驗證 MCP
+  輸入；現有 16 個工具的 schema 與端到端呼叫均已通過驗證。
 - **跟不上的 SSE 客戶端會被斷線，而不是無限緩衝。** 每條連線有自己的事件佇列
   （`BOARD_SSE_CLIENT_QUEUE_CAPACITY`，預設 128）；滿了就結束該連線。前端本來
   就會在斷線重連後整批重抓，因此斷線反而讓它自我修復到正確狀態——默默丟事件則
