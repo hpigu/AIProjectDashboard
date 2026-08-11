@@ -1,7 +1,11 @@
 # AI Project Board
 
-> 這是一個**中文專案**：看板介面、錯誤訊息與 MCP 工具說明都是繁體中文。
-> English readers: [README.en.md](README.en.md) explains what this is; the UI itself is Chinese.
+> 這份文件、MCP 工具說明與角色指引都是**繁體中文**；Web UI 已支援
+> **繁體中文／English 雙語即時切換**（右上角語言按鈕），但錯誤訊息與 CLI 輸出
+> 目前仍是繁體中文。
+> English readers: [README.en.md](README.en.md) explains what this is; this
+> document, MCP tool descriptions and role instructions are Chinese-only, but
+> the web UI itself has a zh-TW/English switcher.
 
 讓 AI coding agent 一邊工作、一邊把進度寫進看板，你在瀏覽器就能看到所有專案的
 狀態，不用盯著好幾個終端機視窗。
@@ -385,7 +389,10 @@ bin/restore-db.sh latest      # 還原最新一份
 - **角色指引不跟著 plugin 走**：指引存在 H2 資料庫，plugin 只散布程式碼與薄殼。
   新裝的看板會由 `RoleSeeder` 建立初始指引，但你自己用 `upsert_role` 調整過的
   內容不會跟著 plugin 帶走，換機器或重建資料庫要重新灌一次。
-- 介面與訊息都是繁體中文，**沒有 i18n**。
+- **Web UI 已支援 zh-TW／en 雙語即時切換**（右上角語言按鈕，會記住選擇並偵測
+  瀏覽器語言，見 `src/main/resources/static/i18n.js`）；但**本文件、MCP 工具
+  說明與看板角色指引（`RoleSeeder`）仍只有繁體中文**，錯誤訊息也以繁體中文
+  為主，尚未逐一國際化。
 - **免 JDK 安裝器與三平台 GitHub Release 尚未真正發布過**：`install/install.sh`、
   Windows jlink ZIP、`bin/board update` 與 `.github/workflows/release.yml` 都已
   完成程式碼與 CI 層級驗證，但目前 repo 尚未推送到遠端，**從未實際觸發過一次
