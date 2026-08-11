@@ -186,6 +186,123 @@ async function checkNoCrossOriginRequests(session) {
   }
 }
 
+// ---- i18n（#145） ----
+// 以下檢查需要真的執行 window.__i18n / localStorage / navigator，JUnit 端的
+// I18nDictionaryTest 只能靜態掃描原始碼字串，無法驗證這些「執行期行為」。
+// 涵蓋範圍見 README.md 對照表。
+
+async function checkManualSwitchUpdatesHtmlLangAndPersists(session) {
+  await session.setViewport(1440, 900);
+  await session.eval(`window.localStorage.removeItem('board.locale')`);
+  await session.navigate(`${baseUrl}/index.html`);
+
+  const initialLocale = await session.eval('window.__i18n.state.locale');
+  const other = initialLocale === 'en' ? 'zh-TW' : 'en';
+
+  await session.eval(`window.__i18n.setLocale(${JSON.stringify(other)})`);
+  const htmlLangAfterSwitch = await session.eval('document.documentElement.getAttribute("lang")');
+  const expectedLang = other === 'en' ? 'en' : 'zh-Hant-TW';
+  if (htmlLangAfterSwitch !== expectedLang) {
+    throw new Error(`切換到 ${other} 後 html lang 應為 ${expectedLang}，實際為 ${htmlLangAfterSwitch}`);
+  }
+
+  const stored = await session.eval(`window.localStorage.getItem('board.locale')`);
+  if (stored !== other) {
+    throw new Error(`切換語言後 localStorage['board.locale'] 應為 ${other}，實際為 ${stored}`);
+  }
+
+  // reload 後應保留剛才手動切換的語言（不是重新偵測瀏覽器語言）。
+  await session.navigate(`${baseUrl}/index.html`);
+  const localeAfterReload = await session.eval('window.__i18n.state.locale');
+  if (localeAfterReload !== other) {
+    throw new Error(`reload 後語言應保留為 ${other}，實際為 ${localeAfterReload}`);
+  }
+  const htmlLangAfterReload = await session.eval('document.documentElement.getAttribute("lang")');
+  if (htmlLangAfterReload !== expectedLang) {
+    throw new Error(`reload 後 html lang 應維持 ${expectedLang}，實際為 ${htmlLangAfterReload}`);
+  }
+}
+
+async function checkUnsupportedStoredLocaleFallsBackToDefault(session) {
+  await session.setViewport(1440, 900);
+  await session.navigate(`${baseUrl}/index.html`);
+  // 塞入一個不支援的 locale（例如舊版本存過的值、或人為竄改），reload 後
+  // detectLocale() 必須忽略它並 fallback 到 DEFAULT_LOCALE（'zh-TW'）。
+  await session.eval(`window.localStorage.setItem('board.locale', 'fr-FR')`);
+  await session.navigate(`${baseUrl}/index.html`);
+  const locale = await session.eval('window.__i18n.state.locale');
+  if (locale !== 'zh-TW') {
+    throw new Error(`不支援的 stored locale 'fr-FR' 應 fallback 到 zh-TW，實際為 ${locale}`);
+  }
+  const htmlLang = await session.eval('document.documentElement.getAttribute("lang")');
+  if (htmlLang !== 'zh-Hant-TW') {
+    throw new Error(`fallback 後 html lang 應為 zh-Hant-TW，實際為 ${htmlLang}`);
+  }
+  await session.eval(`window.localStorage.removeItem('board.locale')`);
+}
+
+async function checkBrowserLanguageDetectionWithoutStoredPreference(session) {
+  await session.setViewport(1440, 900);
+  await session.eval(`window.localStorage.removeItem('board.locale')`);
+  // Emulation.setUserAgentOverride 可覆寫 navigator.language(s)，不需要真的
+  // 改系統/瀏覽器語言設定即可驗證偵測邏輯。
+  await session.send('Emulation.setUserAgentOverride', {
+    userAgent: await session.eval('navigator.userAgent'),
+    acceptLanguage: 'en-US,en;q=0.9',
+  });
+  await session.navigate(`${baseUrl}/index.html`);
+  const locale = await session.eval('window.__i18n.state.locale');
+  if (locale !== 'en') {
+    throw new Error(`Accept-Language 為 en-US 且未存過偏好時應偵測為 en，實際為 ${locale}`);
+  }
+
+  await session.send('Emulation.setUserAgentOverride', {
+    userAgent: await session.eval('navigator.userAgent'),
+    acceptLanguage: 'zh-CN,zh;q=0.9',
+  });
+  await session.eval(`window.localStorage.removeItem('board.locale')`);
+  await session.navigate(`${baseUrl}/index.html`);
+  const zhCnLocale = await session.eval('window.__i18n.state.locale');
+  if (zhCnLocale !== 'zh-TW') {
+    throw new Error(`zh-CN（非 zh-TW/zh-Hant 變體）應 fallback 到 zh-TW，實際為 ${zhCnLocale}`);
+  }
+  await session.eval(`window.localStorage.removeItem('board.locale')`);
+}
+
+async function checkNoRawKeyFallbackVisibleInRenderedDom(session) {
+  // ⚠ 開頭的 raw key 標記若出現在實際渲染的畫面文字中，代表有 key 對不上
+  // （字典缺 key，或呼叫端打錯 key）。JUnit 的靜態掃描已比對過所有「字面值」
+  // 呼叫，這裡额外用真實渲染結果雙重確認執行期沒有被遺漏的動態組出 key
+  // （例如 blockerReason 的 key 是後端傳來的自由值組出來的，見 app.js
+  // formatBlockerReason()）。
+  await session.setViewport(1440, 900);
+  for (const locale of ['zh-TW', 'en']) {
+    await session.eval(`window.localStorage.setItem('board.locale', ${JSON.stringify(locale)})`);
+    await session.navigate(`${baseUrl}/index.html`);
+    await sleep(500);
+    const bodyText = await session.eval('document.body.innerText');
+    if (/⚠[\w.-]/.test(bodyText)) {
+      throw new Error(`locale=${locale} 的畫面渲染結果中偵測到 raw key fallback 標記（⚠key），代表有 key 缺漏: ${bodyText.match(/⚠[\w.-]+/g)}`);
+    }
+  }
+  await session.eval(`window.localStorage.removeItem('board.locale')`);
+}
+
+async function checkInterpolationRendersActualValues(session) {
+  // conn.connected / conn.reconnecting 不含插值，改驗證有插值語法的
+  // relTime 系列在渲染後不殘留 {n} 字面樣板（透過 t() 直接呼叫驗證，
+  // 不依賴特定資料狀態）。
+  await session.setViewport(1440, 900);
+  await session.navigate(`${baseUrl}/index.html`);
+  const rendered = await session.eval(`window.__i18n.t('relTime.secondsAgo', { n: 42 })`);
+  if (rendered !== '42 秒前' && rendered !== '42s ago') {
+    throw new Error(`插值結果不符預期，實際為: ${rendered}`);
+  }
+  if (rendered.includes('{n}')) {
+    throw new Error(`插值後不應殘留 {n} 樣板字面值，實際為: ${rendered}`);
+  }
+}
+
 async function main() {
   console.log(`目標: ${baseUrl}（CDP port ${cdpPort}）\n`);
   const session = await newCdpSession(cdpPort);
@@ -194,6 +311,11 @@ async function main() {
     await check('console 無錯誤/未捕捉例外', () => checkNoConsoleErrors(session));
     await check('無 CSP violation', () => checkNoCspViolations(session));
     await check('零跨 origin 請求', () => checkNoCrossOriginRequests(session));
+    await check('i18n: 手動切換更新 html lang 並於 reload 後保留', () => checkManualSwitchUpdatesHtmlLangAndPersists(session));
+    await check('i18n: 不支援的 stored locale fallback 到 zh-TW', () => checkUnsupportedStoredLocaleFallsBackToDefault(session));
+    await check('i18n: 無 stored 偏好時依瀏覽器語言偵測（含 zh-CN fallback）', () => checkBrowserLanguageDetectionWithoutStoredPreference(session));
+    await check('i18n: 兩語系渲染結果皆無 raw key fallback（⚠key）', () => checkNoRawKeyFallbackVisibleInRenderedDom(session));
+    await check('i18n: 插值正確渲染、不殘留樣板字面值', () => checkInterpolationRendersActualValues(session));
   } finally {
     session.close();
   }
