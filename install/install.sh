@@ -197,11 +197,11 @@ copy_runtime() {
   mkdir -p "$stage/bin" "$stage/config" "$stage/releases/${version}/app" "$stage/data" "$stage/backups" "$stage/logs" || return 1
   chmod 700 "$stage/bin" "$stage/config" "$stage/releases" "$stage/releases/${version}" "$stage/releases/${version}/app" "$stage/data" "$stage/backups" "$stage/logs" || return 1
   script_root="$(cd -P "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)"
-  for file in board board-env.sh backup-db.sh restore-db.sh; do
+  for file in board board-env.sh backup-db.sh restore-db.sh board-update.sh; do
     [ -f "$script_root/bin/$file" ] || return 1
     cp "$script_root/bin/$file" "$stage/bin/$file" || return 1
   done
-  chmod 700 "$stage/bin/board" "$stage/bin/board-env.sh" "$stage/bin/backup-db.sh" "$stage/bin/restore-db.sh" || return 1
+  chmod 700 "$stage/bin/board" "$stage/bin/board-env.sh" "$stage/bin/backup-db.sh" "$stage/bin/restore-db.sh" "$stage/bin/board-update.sh" || return 1
   cp "$jar" "$stage/releases/${version}/app/${jar_base}" || return 1
   chmod 600 "$stage/releases/${version}/app/${jar_base}" || return 1
   ln -s "$jar_base" "$stage/releases/${version}/app/server.jar" || return 1
