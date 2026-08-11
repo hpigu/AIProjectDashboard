@@ -123,6 +123,43 @@ else
 fi
 assert_missing "$missing_root" 'failed migration creates no installation root'
 
+echo '=== --release-url rejects mutable latest before any network call ==='
+# Each bad_url deliberately satisfies the downstream */vV shape check too (ends in
+# /vVERSION with the exact requested --version) so that, if the latest guard were removed
+# or weakened, the shape check alone would NOT stop it: the installer would proceed to
+# curl and die there instead (offline 404), which also exits non-zero and also creates no
+# install root. A pass/exit-code-only assertion cannot tell those two failures apart, so
+# this asserts on the exact guard message instead. This mirrors the #166 lesson (which
+# repeats the #164 lesson): a bad_url, or an assertion, that a downstream check would also
+# reject on its own proves nothing about the guard under test.
+latest_root="$work/latest rejected root"
+for bad_url in \
+  "https://github.com/x/releases/latest/download/v${version}" \
+  "https://github.com/x/releases/LATEST/download/v${version}" \
+  "https://github.com/x/releases/download/vLatest/v${version}"; do
+  out="$("$INSTALLER" --release-url "$bad_url" --version "$version" --java "$work/bin/java" --home "$latest_root" 2>&1)" && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    fail "mutable latest release-url was not rejected: $bad_url"
+  elif printf '%s' "$out" | grep -Fq 'mutable latest URLs are forbidden'; then
+    pass "mutable latest release-url is rejected by the latest guard: $bad_url"
+  else
+    fail "mutable latest release-url failed for the wrong reason (not the latest guard): $bad_url -- $out"
+  fi
+  assert_missing "$latest_root" "latest-url rejection creates no installation root ($bad_url)"
+done
+
+echo '=== --release-url rejects a URL shape that does not name the requested version ==='
+shape_root="$work/wrong shape root"
+out="$("$INSTALLER" --release-url "https://github.com/x/releases/download/v9.9.9" --version "$version" --java "$work/bin/java" --home "$shape_root" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  fail 'release-url naming a different immutable version was not rejected'
+elif printf '%s' "$out" | grep -Fq 'must name the exact immutable vV release'; then
+  pass 'release-url naming a different immutable version is rejected by the shape guard'
+else
+  fail "release-url naming a different immutable version failed for the wrong reason -- $out"
+fi
+assert_missing "$shape_root" 'wrong-version-shape rejection creates no installation root'
+
 echo '=== update rollback retains snapshot ==='
 "${REPO_ROOT}/scripts/install-check/update-fixture.sh"
 
