@@ -54,6 +54,13 @@ Windows 沒有 bash，改用同名的 `.ps1`（預設值、啟動前備份、保
 .\bin\board.ps1 logs -Lines 200
 ```
 
+Windows x64 stable ZIP 則只從解壓根目錄執行 `bin\board.ps1`；它固定使用 ZIP 的
+`runtime\bin\java.exe` 和 `app\ai-project-board-backend-V.jar`，因此不需要 JDK、
+Git Bash、symlink 或 `lsof`。資料、備份、日誌、PID、設定仍在
+`%USERPROFILE%\.ai-project-board`（或 `BOARD_HOME_DIR`），不在可覆寫的 ZIP 目錄。
+若 bundled runtime/JAR 遺失或不是 Java 21，啟動會明確失敗，絕不改用 PATH／
+`JAVA_HOME`／網路下載；重新驗證 release checksum 後完整解壓即可。
+
 **停止的機制不同，必須知道**：Windows 沒有 SIGTERM，`Stop-Process` 等同
 `kill -9`，會跳過 JVM shutdown hook，關閉前備份就不會產生。因此 `stop` 改用
 console control event（`CTRL_C_EVENT`）通知行程，效果等同 mac/Linux 的 SIGTERM。

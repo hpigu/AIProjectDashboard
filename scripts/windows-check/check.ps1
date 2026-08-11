@@ -61,7 +61,10 @@ $scriptFiles = @(
     (Join-Path $BinDir 'backup-db.ps1'),
     (Join-Path $BinDir 'board.ps1'),
     (Join-Path $BinDir 'restore-db.ps1'),
-    (Join-Path $PSScriptRoot 'check.ps1')
+    (Join-Path $PSScriptRoot 'check.ps1'),
+    (Join-Path $PSScriptRoot 'release-check.ps1'),
+    (Join-Path $PSScriptRoot 'package-fixture.ps1'),
+    (Join-Path $RepoRoot 'scripts\release\package-windows-x64.ps1')
 )
 
 foreach ($path in $scriptFiles) {

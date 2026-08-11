@@ -140,6 +140,25 @@ GitHub 的「最新 release」排序結果作為版本選擇依據。安裝與�
 
 ## 5. 現況與後續實作邊界
 
+- #147 已提供 Windows x64 打包與驗證入口，但這不等同 GitHub Release 已經發佈：在
+  Windows x64 runner 先建置 `target/ai-project-board-backend-V.jar`，再執行：
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\package-windows-x64.ps1 `
+    -ServerJar target\ai-project-board-backend-V.jar -JdkHome $env:JAVA_HOME `
+    -Version V -OutputDirectory target\release
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\package-fixture.ps1 `
+    -ServerJar target\ai-project-board-backend-V.jar -Version V
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\release-check.ps1 `
+    -ReleaseZip target\release\ai-project-board-backend-windows-x64-V.zip -Smoke
+  ```
+
+  打包器只接受 Windows x64 的完整 JDK 21，使用明示且版本控制的 module allowlist
+  （不以 `jdeps` 猜測 Spring/Hibernate 的反射與 service loading），先在暫存樹驗證
+  Java 21、layout、version 與 loopback health metadata，再以同目錄 atomic rename
+  發佈 ZIP。任何輸入／JDK／驗證失敗都不會覆寫或留下看似可用的最終 artifact。
+  `release-check.ps1 -Smoke` 是 Windows 真機的 start/status/stop gate；非 Windows
+  開發機不得把 parser 或 ZIP 結構檢查宣稱為此 smoke 的替代。
 - 本 repo 已有 `v3.1.0` 與現行 Maven release JAR/checksum 流程；那些歷史 asset 不會
   因本文被追溯改名，也不因此被重新定義為四平台 release。
 - 不修改或移除既有 Claude/Codex marketplace。後續工作只能讓兩個既有 marketplace

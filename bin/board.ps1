@@ -40,6 +40,19 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'board-env.ps1')
 . (Join-Path $PSScriptRoot 'backup-db.ps1')
 
+# Stable Windows ZIP 的 app/ 與 runtime/ 和 bin/ 同層。這不是「偏好」或可覆寫
+# 的 Java 候選：release 一旦偵測到該佈局，就只能用其中的 java.exe 與唯一 JAR。
+# 這樣被截斷、手動修改或放錯平台的 ZIP 會清楚失敗，而不會安靜地改用 PATH、
+# JAVA_HOME、網路下載或 repo target 的另一個版本。
+$script:BundledJavaPath = Join-Path $RepoRoot 'runtime\bin\java.exe'
+$script:BundledAppDir = Join-Path $RepoRoot 'app'
+$script:BundledJarPath = $null
+if (Test-Path $script:BundledAppDir) {
+    $bundledJars = @(Get-ChildItem -Path $script:BundledAppDir -Filter 'ai-project-board-backend-*.jar' `
+        -File -ErrorAction SilentlyContinue)
+    if ($bundledJars.Count -eq 1) { $script:BundledJarPath = $bundledJars[0].FullName }
+}
+
 function Write-BoardLog { param([string]$Message) Write-Host "[board] $Message" }
 function Write-BoardErr { param([string]$Message) Write-Host "[board][錯誤] $Message" -ForegroundColor Red }
 
@@ -138,6 +151,8 @@ BOARD_JAVA 環境變數直接指定 java.exe 的完整路徑。
 }
 
 function Resolve-BoardJar {
+    if ($script:BoardIsBundledRelease) { return $script:BundledJarPath }
+
     $explicit = [Environment]::GetEnvironmentVariable('BOARD_JAR')
     if ($explicit) { return $explicit }
 
@@ -323,14 +338,42 @@ function Stop-BoardProcessTree {
 function Invoke-BoardStart {
     Write-BoardLog "repo 根目錄：$RepoRoot"
 
-    $javaBin = [Environment]::GetEnvironmentVariable('BOARD_JAVA')
-    if ($javaBin) {
+    $javaBin = $null
+    if ($script:BoardIsBundledRelease) {
+        $requestedHost = [Environment]::GetEnvironmentVariable('BOARD_HOST')
+        if ($requestedHost -and $requestedHost -ne '127.0.0.1') {
+            Write-BoardErr "Windows release ZIP 僅允許 127.0.0.1；拒絕 BOARD_HOST=$requestedHost"
+            Write-BoardErr 'MCP 尚無 server-side authentication，不能公開綁定。'
+            return 1
+        }
+        # Do not merely rely on application.yml's default: a parent process can carry an
+        # inherited BOARD_HOST. The bundled distribution never launches on a public host.
+        $env:BOARD_HOST = '127.0.0.1'
+        if (-not (Test-Path $script:BundledJavaPath)) {
+            Write-BoardErr "Windows release ZIP 缺少 bundled runtime：$script:BundledJavaPath"
+            Write-BoardErr '此 release 不會改用 BOARD_JAVA、JAVA_HOME 或 PATH。請重新下載並驗證 ZIP。'
+            return 1
+        }
+        if (-not $script:BundledJarPath -or -not (Test-Path $script:BundledJarPath)) {
+            Write-BoardErr "Windows release ZIP 缺少唯一 server JAR：$script:BundledAppDir"
+            Write-BoardErr '此 release 不會改用 BOARD_JAR、target 或現場組裝。請重新下載並驗證 ZIP。'
+            return 1
+        }
+        $javaBin = $script:BundledJavaPath
         if (-not (Test-Java21 -JavaPath $javaBin)) {
-            Write-BoardErr "BOARD_JAVA 指定的執行檔不是 JDK 21：$javaBin"
+            Write-BoardErr "bundled runtime 不是可用的 Java 21：$javaBin"
             return 1
         }
     } else {
-        $javaBin = Find-Java21
+        $javaBin = [Environment]::GetEnvironmentVariable('BOARD_JAVA')
+        if ($javaBin) {
+            if (-not (Test-Java21 -JavaPath $javaBin)) {
+                Write-BoardErr "BOARD_JAVA 指定的執行檔不是 JDK 21：$javaBin"
+                return 1
+            }
+        } else {
+            $javaBin = Find-Java21
+        }
     }
     if (-not $javaBin) {
         Show-JdkInstallHint
@@ -356,6 +399,17 @@ function Invoke-BoardStart {
         }
         Write-BoardErr "埠號 $script:BoardPort 被其他行程佔用（PID $portPid，非本看板服務）。"
         Write-BoardErr "請先確認該行程用途，或改用 BOARD_PORT 指定其他埠號再重試。"
+        return 1
+    }
+
+    # ZIP release 的所有可寫狀態（資料、備份、日誌、PID、設定）都在 user scope。
+    # 新建目錄無法收斂 ACL 時必須 fail closed；既有路徑仍保留 #142 的警告降級語意。
+    if (-not (New-BoardSecureDirectory -Path $script:BoardHomeDir)) {
+        Write-BoardErr "使用者資料根目錄權限收斂失敗，已中止啟動：$script:BoardHomeDir"
+        return 1
+    }
+    if (-not (New-BoardSecureDirectory -Path $script:BoardConfigDir)) {
+        Write-BoardErr "設定目錄權限收斂失敗，已中止啟動：$script:BoardConfigDir"
         return 1
     }
 
@@ -387,6 +441,10 @@ function Invoke-BoardStart {
 
     $jarPath = Resolve-BoardJar
     if (-not $jarPath -or -not (Test-Path $jarPath)) {
+        if ($script:BoardIsBundledRelease) {
+            Write-BoardErr 'Windows release ZIP 的 bundled server JAR 不可用，已中止啟動。'
+            return 1
+        }
         $mvnw = Join-Path $RepoRoot 'mvnw.cmd'
         if ((Test-Path (Join-Path $RepoRoot 'pom.xml')) -and (Test-Path $mvnw)) {
             Write-BoardLog "找不到可執行 jar，偵測到完整 repo，現場組裝一次……"
