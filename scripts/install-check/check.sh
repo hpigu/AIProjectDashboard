@@ -7,7 +7,7 @@ set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 INSTALLER="${REPO_ROOT}/install/install.sh"
-work="$(mktemp -d /private/tmp/ai-project-board-install-check.XXXXXX)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/ai-project-board-install-check.XXXXXX")"
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 failures=0

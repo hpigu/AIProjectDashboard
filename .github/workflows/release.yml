@@ -82,6 +82,12 @@ jobs:
           mkdir release-assets
           cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-linux-x64-${version}.jar"
           ./scripts/release/release-assets.sh validate-platform --version "$version" --platform linux-x64 --directory release-assets
+      - name: Gate portable install and update with the real release JAR
+        run: |
+          set -euo pipefail
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          ./scripts/release/posix-release-smoke.sh --version "$version" --platform linux-x64 \
+            --jar "release-assets/ai-project-board-backend-linux-x64-${version}.jar"
       - uses: actions/upload-artifact@v4
         with:
           name: release-linux-x64
@@ -117,6 +123,12 @@ jobs:
           mkdir release-assets
           cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-macos-arm64-${version}.jar"
           ./scripts/release/release-assets.sh validate-platform --version "$version" --platform macos-arm64 --directory release-assets
+      - name: Gate portable install and update with the real release JAR
+        run: |
+          set -euo pipefail
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          ./scripts/release/posix-release-smoke.sh --version "$version" --platform macos-arm64 \
+            --jar "release-assets/ai-project-board-backend-macos-arm64-${version}.jar"
       - uses: actions/upload-artifact@v4
         with:
           name: release-macos-arm64
@@ -152,6 +164,12 @@ jobs:
           mkdir release-assets
           cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-macos-x64-${version}.jar"
           ./scripts/release/release-assets.sh validate-platform --version "$version" --platform macos-x64 --directory release-assets
+      - name: Gate portable install and update with the real release JAR
+        run: |
+          set -euo pipefail
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          ./scripts/release/posix-release-smoke.sh --version "$version" --platform macos-x64 \
+            --jar "release-assets/ai-project-board-backend-macos-x64-${version}.jar"
       - uses: actions/upload-artifact@v4
         with:
           name: release-macos-x64
