@@ -29,7 +29,12 @@ function Get-ZipTopLevel {
     # Keep this untyped: Windows PowerShell 5.1 parses function signatures before the
     # System.IO.Compression assembly is loaded below.
     param([object]$Archive)
-    $topLevels = @($Archive.Entries | ForEach-Object { $_.FullName.Split('/')[0] } | Where-Object { $_ } | Select-Object -Unique)
+    # 先把分隔符正規化再切：ZIP 規格要求 '/'，但 .NET 在 Windows 上建立的
+    # entry 可能帶 '\'。少了這步，'a\b\c' 會被當成單一段落，同一份 ZIP 的每個
+    # 檔案都成為獨立的「top-level」，於是這裡誤報「必須只有一個 top-level」。
+    # 下一行的 $names 與 package-windows-x64.ps1 的 Assert-ZipLayout 都已這樣做，
+    # 這裡漏掉會讓打包端通過、驗收端卻失敗。
+    $topLevels = @($Archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/').Split('/')[0] } | Where-Object { $_ } | Select-Object -Unique)
     if ($topLevels.Count -ne 1) { Fail 'ZIP 必須只有一個 top-level 目錄。' }
     return $topLevels[0]
 }
