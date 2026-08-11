@@ -113,6 +113,8 @@ fi
 if [ -n "$release_url" ]; then
   [ -z "$jar" ] && [ -z "$checksums" ] || die 'do not combine --release-url with --jar/--checksums'
   version_ok "$requested_version" || die '--version must be a stable X.Y.Z value'
+  case "$release_url" in *[Ll][Aa][Tt][Ee][Ss][Tt]*) die 'mutable latest URLs are forbidden; use the exact vV release asset URL' ;; esac
+  case "$release_url" in */v"$requested_version"|*/v"$requested_version"/) ;; *) die '--release-url must name the exact immutable vV release' ;; esac
   command -v curl >/dev/null 2>&1 || die '--release-url requires curl'
   download_dir="$(mktemp -d "${TMPDIR:-/tmp}/ai-project-board-download.XXXXXX")" || die 'cannot create download directory'
   trap 'rm -rf "$download_dir"' EXIT HUP INT TERM
