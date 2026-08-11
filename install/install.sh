@@ -250,7 +250,7 @@ else
     rm -rf "$root/releases/$version"
     die 'cannot stage current release link'
   fi
-  if ! mv -f "$root/.current.new.$$" "$root/current"; then
+  if ! { mv -h "$root/.current.new.$$" "$root/current" 2>/dev/null || mv -T "$root/.current.new.$$" "$root/current"; }; then
     rm -f "$root/.current.new.$$"
     rm -rf "$root/releases/$version"
     die 'cannot atomically activate staged release'

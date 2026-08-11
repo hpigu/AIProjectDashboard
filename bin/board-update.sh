@@ -49,6 +49,13 @@ platform() {
   esac
 }
 fail_at() { [ "${BOARD_UPDATE_FAIL_AT:-}" = "$1" ]; }
+# BSD mv follows a destination symlink-to-directory unless -h is supplied; GNU mv instead
+# provides -T.  Either variant is an atomic same-filesystem rename of the symlink itself.
+replace_activation_link() {
+  source_link="$1"; destination_link="$2"
+  mv -h "$source_link" "$destination_link" 2>/dev/null && return 0
+  mv -T "$source_link" "$destination_link"
+}
 
 requested_version=""; jar=""; checksums=""; release_url=""; check_only=0
 while [ "$#" -gt 0 ]; do
@@ -111,7 +118,7 @@ expected_rows="ai-project-board-backend-linux-x64-${requested_version}.jar
 ai-project-board-backend-macos-arm64-${requested_version}.jar
 ai-project-board-backend-macos-x64-${requested_version}.jar
 ai-project-board-backend-windows-x64-${requested_version}.zip"
-actual_rows="$(awk -F '  ' 'NF != 2 || $1 !~ /^[0-9a-f]{64}$/ || $2 ~ /[[:space:]\\/]/ || $2 == "" { exit 1 } { print $2 }' "$checksums")" || die 'checksum list has invalid rows'
+actual_rows="$(awk -F '  ' 'NF != 2 || $1 !~ /^[0-9a-f]{64}$/ || index($2, "/") || index($2, "\\") || $2 ~ /[[:space:]]/ || $2 == "" { exit 1 } { print $2 }' "$checksums")" || die 'checksum list has invalid rows'
 [ "$(printf '%s\n' "$actual_rows" | sed '/^$/d' | wc -l | tr -d '[:space:]')" = 4 ] || die 'checksum list must contain exactly four rows'
 [ "$actual_rows" = "$expected_rows" ] || die 'checksum list entries/order/version violate release contract'
 expected_hash="$(awk -v name="$jar_base" -F '  ' '$2 == name { print $1 }' "$checksums")"
@@ -150,14 +157,28 @@ restore_old() {
   # No new service may be using an H2 schema while its snapshot is restored.
   "$root/bin/board" stop >/dev/null 2>&1 || true
   if [ "$activated" -eq 1 ]; then
-    ln -s "$old_link" "$root/.current.rollback.$$" && mv -f "$root/.current.rollback.$$" "$root/current" || err 'rollback could not restore current pointer'
+    ln -s "$old_link" "$root/.current.rollback.$$" && replace_activation_link "$root/.current.rollback.$$" "$root/current" || err 'rollback could not restore current pointer'
   fi
   if [ "$snapshot_ready" -eq 1 ] && [ -f "$snapshot/manifest.sha256" ]; then
     db_base="$(printf '%s' "${BOARD_DB_URL:-}" | sed -n 's#^jdbc:h2:file:##p' | cut -d';' -f1)"
-    snapshot_hash="$(awk '$2==\"board.mv.db\" {print $1}' "$snapshot/manifest.sha256")"
-    if [ -n "$db_base" ] && [ -n "$snapshot_hash" ] && [ -f "$snapshot/board.mv.db" ] && [ "$(sha256_file "$snapshot/board.mv.db")" = "$snapshot_hash" ]; then
-      mv -f "$snapshot/board.mv.db" "${db_base}.mv.db" || err 'rollback could not restore database snapshot'
-      if [ -f "$snapshot/board.trace.db" ]; then mv -f "$snapshot/board.trace.db" "${db_base}.trace.db" || err 'rollback could not restore database trace snapshot'; fi
+    restore_snapshot_file() {
+      snapshot_name="$1"; live_file="$2"
+      expected="$(awk -v name="$snapshot_name" '$2==name {print $1}' "$snapshot/manifest.sha256")"
+      [ -n "$expected" ] && [ -f "$snapshot/$snapshot_name" ] || return 0
+      [ "$(sha256_file "$snapshot/$snapshot_name")" = "$expected" ] || return 1
+      restore_tmp="${live_file}.update-restore.$$"
+      rm -f -- "$restore_tmp"
+      cp -p -- "$snapshot/$snapshot_name" "$restore_tmp" || return 1
+      chmod 600 "$restore_tmp" || { rm -f -- "$restore_tmp"; return 1; }
+      [ "$(sha256_file "$restore_tmp")" = "$expected" ] || { rm -f -- "$restore_tmp"; return 1; }
+      mv -f -- "$restore_tmp" "$live_file" || { rm -f -- "$restore_tmp"; return 1; }
+      [ "$(sha256_file "$live_file")" = "$expected" ] || return 1
+      return 0
+    }
+    if [ -z "$db_base" ] || ! restore_snapshot_file board.mv.db "${db_base}.mv.db" \
+      || ! restore_snapshot_file board.trace.db "${db_base}.trace.db"; then
+      err "rollback could not restore verified database snapshot; source is retained at $snapshot (manual recovery: copy its board.mv.db to ${db_base:-<BOARD_DB_URL file path>}.mv.db while stopped)"
+      return 1
     fi
   fi
   if [ "$was_running" -eq 1 ]; then
@@ -190,18 +211,24 @@ snapshot_ready=1
 
 if fail_at publish || ! mv "$stage" "$root/releases/$requested_version"; then restore_old publish || true; die 'runtime publish failed'; fi
 published=1
-if fail_at activate || ! ln -s "releases/$requested_version" "$root/.current.new.$$" || ! mv -f "$root/.current.new.$$" "$root/current"; then restore_old activate || true; die 'activation pointer switch failed'; fi
+if fail_at activate || ! ln -s "releases/$requested_version" "$root/.current.new.$$" || ! replace_activation_link "$root/.current.new.$$" "$root/current"; then restore_old activate || true; die 'activation pointer switch failed'; fi
 activated=1
 
-if [ "$was_running" -eq 1 ]; then
-  if fail_at start || ! "$root/bin/board" start; then restore_old start || true; die 'new runtime could not start'; fi
-  if fail_at readiness || ! "$root/bin/board" status >/dev/null 2>&1; then restore_old readiness || true; die 'new runtime did not become ready'; fi
-  health="$(curl -fsS --max-time 3 "http://127.0.0.1:${BOARD_PORT:-8080}/api/health" 2>/dev/null || true)"
-  printf '%s' "$health" | grep -Eq '"version"[[:space:]]*:[[:space:]]*"'"$requested_version"'"' \
-    || { restore_old readiness || true; die 'ready runtime did not report the requested version'; }
-  printf '%s' "$health" | grep -Eq '"commit"[[:space:]]*:[[:space:]]*"[0-9a-f]{7,40}"' \
-    || { restore_old readiness || true; die 'ready runtime did not report a release commit'; }
+if fail_at start || ! "$root/bin/board" start; then restore_old start || true; die 'new runtime could not start'; fi
+if fail_at readiness || ! "$root/bin/board" status >/dev/null 2>&1; then restore_old readiness || true; die 'new runtime did not become ready'; fi
+health="$(curl -fsS --max-time 3 "http://127.0.0.1:${BOARD_PORT:-8080}/api/health" 2>/dev/null || true)"
+printf '%s' "$health" | grep -Eq '"version"[[:space:]]*:[[:space:]]*"'"$requested_version"'"' \
+  || { restore_old readiness || true; die 'ready runtime did not report the requested version'; }
+printf '%s' "$health" | grep -Eq '"commit"[[:space:]]*:[[:space:]]*"[0-9a-f]{7,40}"' \
+  || { restore_old readiness || true; die 'ready runtime did not report a release commit'; }
+if [ "$was_running" -eq 0 ]; then
+  if fail_at stop_after_validation || ! "$root/bin/board" stop || "$root/bin/board" status >/dev/null 2>&1; then
+    restore_old stop_after_validation || true
+    die 'target validation completed but could not return service to its original stopped state'
+  fi
+  state_note=' (target verified, then returned to stopped)'
+else
+  state_note=' (service restored to ready)'
 fi
-if [ "$was_running" -eq 1 ]; then state_note=' (service restored to ready)'; else state_note=' (service remained stopped)'; fi
 log "updated atomically: v${current_version} -> v${requested_version}${state_note}"
 exit 0

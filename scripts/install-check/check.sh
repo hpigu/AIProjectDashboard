@@ -123,6 +123,9 @@ else
 fi
 assert_missing "$missing_root" 'failed migration creates no installation root'
 
+echo '=== update rollback retains snapshot ==='
+"${REPO_ROOT}/scripts/install-check/update-fixture.sh"
+
 if [ "$failures" -gt 0 ]; then
   printf '%s installer checks failed.\n' "$failures" >&2
   exit 1

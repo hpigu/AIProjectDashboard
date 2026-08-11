@@ -96,6 +96,8 @@ try {
     # activation primitive used here. Data is deliberately never inside either directory.
     $parent = Split-Path $root -Parent
     $leaf = Split-Path $root -Leaf
+    $targetRoot = Join-Path $parent ('ai-project-board-backend-windows-x64-' + $Version)
+    if (Test-Path -LiteralPath $targetRoot) { Fail "target versioned root already exists; refusing to overwrite or guess: $targetRoot" }
     $stage = Join-Path $parent ('.' + $leaf + '.update-stage-' + [Guid]::NewGuid().ToString('N'))
     $rollback = Join-Path $parent ('.' + $leaf + '.rollback-' + $currentVersion + '-' + (Get-Date -Format 'yyyyMMddTHHmmssZ'))
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
@@ -119,12 +121,12 @@ try {
     function Restore-Old {
         param([string]$Reason)
         Write-Host "[board update][錯誤] update failed at $Reason; beginning rollback"
-        $newBoard = Join-Path $root 'bin\board.ps1'
+        $newBoard = Join-Path $targetRoot 'bin\board.ps1'
         if (Test-Path $newBoard) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard stop *> $null }
         if ($oldMoved) {
-            $failed = $root + '.failed-' + [Guid]::NewGuid().ToString('N')
+            $failed = $targetRoot + '.failed-' + [Guid]::NewGuid().ToString('N')
             try {
-                if (Test-Path $root) { Move-Item -LiteralPath $root -Destination $failed -ErrorAction Stop }
+                if (Test-Path $targetRoot) { Move-Item -LiteralPath $targetRoot -Destination $failed -ErrorAction Stop }
                 Move-Item -LiteralPath $rollback -Destination $root -ErrorAction Stop
             } catch { Write-Host "[board update][錯誤] rollback activation failed; recover manually: rename '$rollback' to '$root'"; return $false }
         }
@@ -167,25 +169,32 @@ try {
         Move-Item -LiteralPath $root -Destination $rollback -ErrorAction Stop
         $oldMoved = $true
         if (Test-FailAt 'activate') { Fail 'failure injection: activate' }
-        Move-Item -LiteralPath $stagedRoot -Destination $root -ErrorAction Stop
+        Move-Item -LiteralPath $stagedRoot -Destination $targetRoot -ErrorAction Stop
         $switched = $true
-        if ($wasRunning) {
-            $newBoard = Join-Path $root 'bin\board.ps1'
-            if (Test-FailAt 'start') { Fail 'failure injection: start' }
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard start
-            if ($LASTEXITCODE -ne 0) { Fail 'new runtime could not start' }
-            if (Test-FailAt 'readiness') { Fail 'failure injection: readiness' }
+        $newBoard = Join-Path $targetRoot 'bin\board.ps1'
+        if (Test-FailAt 'start') { Fail 'failure injection: start' }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard start
+        if ($LASTEXITCODE -ne 0) { Fail 'new runtime could not start' }
+        if (Test-FailAt 'readiness') { Fail 'failure injection: readiness' }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard status *> $null
+        if ($LASTEXITCODE -ne 0) { Fail 'new runtime did not become ready' }
+        $health = (Invoke-WebRequest -Uri ('http://127.0.0.1:' + $script:BoardPort + '/api/health') -UseBasicParsing -TimeoutSec 3).Content
+        if ($health -notmatch ('"version"\s*:\s*"' + [regex]::Escape($Version) + '"') -or $health -notmatch '"commit"\s*:\s*"[0-9a-f]{7,40}"') { Fail 'ready runtime did not report target version and commit' }
+        if (-not $wasRunning) {
+            if (Test-FailAt 'stop_after_validation') { Fail 'failure injection: stop_after_validation' }
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard stop *> $null
+            if ($LASTEXITCODE -ne 0) { Fail 'target validation completed but could not stop target runtime' }
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard status *> $null
-            if ($LASTEXITCODE -ne 0) { Fail 'new runtime did not become ready' }
-            $health = (Invoke-WebRequest -Uri ('http://127.0.0.1:' + $script:BoardPort + '/api/health') -UseBasicParsing -TimeoutSec 3).Content
-            if ($health -notmatch ('"version"\s*:\s*"' + [regex]::Escape($Version) + '"') -or $health -notmatch '"commit"\s*:\s*"[0-9a-f]{7,40}"') { Fail 'ready runtime did not report target version and commit' }
+            if ($LASTEXITCODE -ne 3) { Fail 'target validation completed but service did not return to original stopped state' }
         }
     } catch {
         $message = $_.Exception.Message
         Restore-Old -Reason $message | Out-Null
         throw
     }
-    Log "updated transactionally: v$currentVersion -> v$Version; old runtime retained at $rollback"
+    $newEntry = Join-Path $targetRoot 'bin\board.ps1'
+    if ($wasRunning) { $state = 'service restored to ready' } else { $state = 'target verified, then returned to stopped' }
+    Log "updated transactionally: v$currentVersion -> v$Version; $state; new entry: $newEntry; old runtime retained at $rollback"
 } finally {
     if ($download -and (Test-Path $download)) { Remove-Item -LiteralPath $download -Recurse -Force -ErrorAction SilentlyContinue }
 }

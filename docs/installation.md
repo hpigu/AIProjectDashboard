@@ -115,11 +115,19 @@ Windows 的同一語意以 ZIP 作為 offline artifact：
 更新器會在停止服務前完整下載、嚴格驗證四行 `SHA256SUMS`、platform、JAR/ZIP layout
 與 runtime；再保存原 PID/activation identity 和可驗證的 H2 snapshot manifest。POSIX
 以同檔案系統的 `current` symlink rename 切換 immutable runtime；Windows 以同磁碟區的
-directory rename transaction 替換解壓程式 root。新服務必須通過 readiness 並回報目標
+**versioned-root rename transaction**：舊解壓 root 改名保留為 rollback 目錄，目標 ZIP
+的 `ai-project-board-backend-windows-x64-V` root 改名發佈到同 parent。它不是 single-root
+atomic replace；成功後請從更新器印出的新絕對路徑（
+`...\ai-project-board-backend-windows-x64-V\bin\board.ps1`）操作後續 status/stop/update。
+新服務無論原先是否執行都必須通過 readiness 並回報目標
 version/commit，任何 download、checksum、stop、backup、publish、activate、start 或
-readiness 失敗都會復原舊 activation、DB snapshot 與原本的 running/stopped 狀態。舊
-runtime、snapshot 和失敗 staging 保留供診斷；若 rollback 本身失敗，更新器 fail closed
+readiness 失敗都會復原舊 activation、DB snapshot 與原本的 running/stopped 狀態；原本停止
+時，target 也會先 start→驗證→正常 stop，最後維持停止。舊 runtime、snapshot 和失敗
+staging 保留供診斷；若 rollback 本身失敗，更新器 fail closed
 並印出保留路徑，絕不刪除唯一資料副本或宣稱成功。
+POSIX rollback 以同資料庫檔案系統中的 temporary copy→hash verification→atomic rename
+還原 live DB；snapshot、`manifest.sha256` 與原始 hash 都不會被移走，能在事後重驗或手動
+恢復。
 
 GitHub 不可達時 `--release-url` 在停止服務前失敗；改用已下載的 `--jar/--checksums`
 或 `-ReleaseZip/-Checksums` 即為完全離線的等價操作。更新只處理 server runtime，絕不
