@@ -13,7 +13,7 @@
 
     <groupId>dev.aiboard</groupId>
     <artifactId>ai-project-board-backend</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1</version>
     <name>ai-project-board-backend</name>
     <description>AI Project Board MCP Server (Streamable HTTP) + REST/SSE</description>
 

@@ -290,7 +290,7 @@ $env:BOARD_PORT='18080'; .\bin\board.ps1 start
 
 ```bash
 BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-local' ./mvnw clean package
-java -jar target/ai-project-board-backend-3.1.0.jar
+java -jar target/ai-project-board-backend-3.1.1.jar
 ```
 
 跑測試：
