@@ -6,7 +6,7 @@
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-work="$(mktemp -d /private/tmp/ai-project-board-update-fixture.XXXXXX)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/ai-project-board-update-fixture.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 root="$work/安裝 root"
 mkdir -p "$root/bin" "$root/releases/3.1.1/app" "$root/data" "$root/backups" "$work/bin" "$work/assets"

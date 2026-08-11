@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VALIDATOR="${ROOT}/scripts/release/release-assets.sh"
 version=9.9.9
-work="$(mktemp -d /private/tmp/ai-project-board-release-assets.XXXXXX)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/ai-project-board-release-assets.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 
 pass() { printf '  [PASS] %s\n' "$1"; }
@@ -82,5 +82,30 @@ assert_workflow_contains 'COMMIT: ${{ needs.preflight.outputs.commit }}' 'releas
 assert_workflow_contains 'built from ${COMMIT}' 'release notes trace the preflight commit'
 assert_workflow_absent '${GITHUB_SHA}' 'release notes do not use dispatch-dependent GITHUB_SHA'
 assert_workflow_contains 'gh release create "$TAG" --verify-tag --draft' 'draft creation verifies the tag still exists'
+assert_workflow_count './scripts/release/posix-release-smoke.sh --version "$version" --platform' 3 'all three POSIX builders run the shared real-artifact smoke'
+assert_workflow_count 'Gate portable install and update with the real release JAR' 3 'all three POSIX smoke gates run before artifact upload'
+assert_workflow_count 'actions/upload-artifact@v4' 4 'platform artifacts upload only through the four required build jobs'
+
+awk '
+  function finish_job() {
+    if (job == "") return
+    if (!smoke || !upload || smoke >= upload) bad=1
+    checked++; job=""
+  }
+  /^  (linux-x64|macos-arm64|macos-x64):$/ {
+    finish_job()
+    job=$1; sub(/:$/, "", job); smoke=0; upload=0; next
+  }
+  /^  [a-z0-9-]+:$/ && job != "" {
+    finish_job()
+  }
+  job != "" && /posix-release-smoke\.sh/ { smoke=NR }
+  job != "" && /actions\/upload-artifact@v4/ { upload=NR }
+  END {
+    finish_job()
+    if (bad || checked != 3) exit 1
+  }
+' "$workflow" || fail 'each POSIX smoke gate precedes its upload step'
+pass 'each POSIX smoke gate precedes its upload step'
 
 echo 'All release asset fixtures passed.'
