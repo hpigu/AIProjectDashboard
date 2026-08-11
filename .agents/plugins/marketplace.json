@@ -8,7 +8,7 @@
       "name": "ai-project-board",
       "source": {
         "source": "local",
-        "path": "./.codex-plugin"
+        "path": "./plugins/ai-project-board"
       },
       "policy": {
         "installation": "AVAILABLE",

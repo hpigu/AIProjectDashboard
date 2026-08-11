@@ -3,7 +3,7 @@
 # check-plugin-parity.sh — 確認 Claude Code 與 Codex 兩套 plugin 沒有漂移
 #
 # 為什麼需要這支腳本：同一組治理規則被迫存在兩份，因為兩個 plugin 有各自的安裝
-# 根目錄（plugin/ 與 .codex-plugin/），檔案沒辦法真的合併。而「同一件事寫在兩個
+# 根目錄（plugin/ 與 plugins/ai-project-board/），檔案沒辦法真的合併。而「同一件事寫在兩個
 # 地方」在這個 repo 已經出過五次包（MCP serverInfo.version 寫死、三份 plugin
 # manifest 停在 3.0.0、README 的過期已知限制、看板 QA 指引叫 worker 呼叫它拿不到
 # 的 create_tasks）。這支腳本是那道門檻。
@@ -27,12 +27,12 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 
 CLAUDE_AGENTS="plugin/agents"
-CODEX_AGENTS=".codex-plugin/agents"
+CODEX_AGENTS="plugins/ai-project-board/agents"
 CLAUDE_SKILL="plugin/skills/claim-tasks/SKILL.md"
-CODEX_SKILL=".codex-plugin/skills/claim-tasks/SKILL.md"
+CODEX_SKILL="plugins/ai-project-board/skills/claim-tasks/SKILL.md"
 
 # 不認領任務的角色：不必有 claim_next_task 與 category。
 READONLY_ROLES="reviewer"
@@ -81,7 +81,7 @@ codex_roles="$(find "$CODEX_AGENTS" -maxdepth 1 -name '*.md' -exec basename {} .
 if [ "$claude_roles" != "$codex_roles" ]; then
   fail "兩套 plugin 的角色檔案集合不一致。"
   echo "  plugin/agents:        $(echo "$claude_roles" | tr '\n' ' ')" >&2
-  echo "  .codex-plugin/agents: $(echo "$codex_roles" | tr '\n' ' ')" >&2
+  echo "  plugins/ai-project-board/agents: $(echo "$codex_roles" | tr '\n' ' ')" >&2
 else
   ok "兩邊都是：$(echo "$claude_roles" | tr '\n' ' ')"
 fi
@@ -103,11 +103,11 @@ for role in $claude_roles; do
   tools_a="$(extract_tools "$a")"
   tools_b="$(extract_tools "$b")"
   if [ "$tools_a" != "$tools_b" ]; then
-    fail "$role：兩套薄殼提到的看板工具不一致（其中一邊漏改了）。"
+    fail "${role}：兩套薄殼提到的看板工具不一致（其中一邊漏改了）。"
     diff <(printf '%s\n' "$tools_a") <(printf '%s\n' "$tools_b") \
       | sed 's/^</  只在 Claude 版：/; s/^>/  只在 Codex  版：/' >&2
   else
-    ok "$role：工具集合一致（$(printf '%s' "$tools_a" | tr '\n' ' ')）"
+    ok "${role}：工具集合一致（$(printf '%s' "$tools_a" | tr '\n' ' ')）"
   fi
 
   # 3. category
@@ -117,11 +117,11 @@ for role in $claude_roles; do
       cat_a="$(extract_category "$a")"
       cat_b="$(extract_category "$b")"
       if [ -z "$cat_a" ]; then
-        fail "$role：Claude 版薄殼找不到 claim_next_task 的 category。"
+        fail "${role}：Claude 版薄殼找不到 claim_next_task 的 category。"
       elif [ "$cat_a" != "$cat_b" ]; then
-        fail "$role：認領的 category 不一致（Claude=$cat_a、Codex=$cat_b）。"
+        fail "${role}：認領的 category 不一致（Claude=${cat_a}、Codex=${cat_b}）。"
       else
-        ok "$role：category 一致（$cat_a）"
+        ok "${role}：category 一致（${cat_a}）"
       fi
       ;;
   esac

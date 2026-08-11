@@ -118,13 +118,41 @@ Claude Code。
 
 ### Codex
 
-repo 也包含 Codex plugin：`.codex-plugin/` 放角色薄殼、`claim-tasks` skill 與 MCP
-宣告，`.agents/plugins/marketplace.json` 是本機 marketplace 入口。在 Codex 開啟
-這個 repo 後，可從 plugin marketplace 安裝 **AI Project Board**；安裝時若提示
-啟用 `board` connector，需再確認一次，讓它連到 `http://127.0.0.1:8080/mcp`。
-安裝或更新後重開 task，讓角色與 skill 清單重新載入。
+repo 也包含 Codex plugin：`plugins/ai-project-board/` 放角色薄殼、`claim-tasks`
+skill 與 MCP 宣告，`.agents/plugins/marketplace.json` 則是 repo marketplace 入口。
+GitHub 版本可用下列指令加入並安裝：
 
-### 不用 plugin，手動接線
+```bash
+codex plugin marketplace add hpigu/AIProjectDashboard --ref main
+codex plugin add ai-project-board@ai-board
+```
+
+發布新版後，先刷新 Git marketplace snapshot，再重新安裝 plugin：
+
+```bash
+codex plugin marketplace upgrade ai-board
+codex plugin add ai-project-board@ai-board
+```
+
+若 `codex plugin marketplace list` 已顯示 `ai-board` 指向本機 clone，請勿直接加入
+同名 Git source。等新版推到遠端 `main` 後，先明確確認要切換來源，再執行：
+
+```bash
+codex plugin marketplace remove ai-board
+codex plugin marketplace add hpigu/AIProjectDashboard --ref main
+codex plugin add ai-project-board@ai-board
+```
+
+第一行只移除 marketplace source 設定；它不是 `codex plugin remove`，不會主動執行
+plugin 解除安裝。切換完成後開新 task，確認載入的是 Git marketplace 的版本。
+
+本機開發時，在 Codex 開啟這個 repo 也能直接看到同一份 marketplace。安裝
+**AI Project Board** 時若提示啟用 `board` connector，需再確認一次，讓它連到本機
+`http://127.0.0.1:8080/mcp`。安裝或更新後重開 task，讓角色與 skill 清單重新載入。
+
+如果不使用 plugin，仍可用下方 `~/.codex/config.toml` 手動接線；差別是只會得到
+MCP 工具，不會自動取得 `plugins/ai-project-board/agents/` 的角色薄殼與 leader
+skill。完整安裝方式與檔案對照見 [docs/installation.md](docs/installation.md)。
 
 差別是只會得到 MCP 工具，不會自動取得角色薄殼與 leader skill。
 
@@ -262,7 +290,7 @@ $env:BOARD_PORT='18080'; .\bin\board.ps1 start
 
 ```bash
 BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-local' ./mvnw clean package
-java -jar target/ai-project-board-backend-3.1.0.jar
+java -jar target/ai-project-board-backend-3.1.1.jar
 ```
 
 跑測試：
@@ -316,14 +344,9 @@ bin/restore-db.sh latest      # 還原最新一份
 
 **目前沒有 server-side 身分驗證。** 設計前提是單機本地執行。
 
-- 預設只綁 `127.0.0.1`，同機的瀏覽器與 MCP client 都可用
-  `127.0.0.1`／`localhost` 存取。
-- 綁 loopback 只保證「封包來自本機」，擋不住本機瀏覽器：惡意網頁把自己的網域
-  DNS 指向 `127.0.0.1`（**DNS rebinding**）之後，瀏覽器就認定它與看板同源，同源
-  政策與 CORS 完全不介入。因此服務會額外驗證每個請求的 `Host` 與 `Origin`，不是
-  loopback 就回 `403`（見 `config/LocalOriginGuardFilter`）。
-- 刻意要讓區網其他裝置或反向代理連進來時，用 `BOARD_ALLOWED_HOSTS` 逐一列出。
-  **這只是放行來源，不會產生任何認證。**
+- Codex：安裝本 repo 的 Codex plugin，使用 `plugins/ai-project-board/agents/*.md` 中的
+  六個獨立角色薄殼。不使用 plugin 時仍可手動接 MCP，但不建議在
+  `~/.codex/AGENTS.md` 再維護一份完整角色規則，以免與看板及 plugin 漂移。
 
 > ⚠️ `/mcp` 一旦綁定到非 loopback 位址（例如 `0.0.0.0`）並對外可達，**任何連得到
 > 的人都能呼叫全部 MCP 工具**。除非自行加上反向代理與認證層（Basic Auth／mTLS），
@@ -365,20 +388,24 @@ src/main/java/dev/aiboard/
 
 src/main/resources/
 ├── application.yml
-├── db/migration/   # Flyway migration（V1–V12）
-└── static/         # 零建置 Vue 3 前端；Vue 執行檔與字型皆 vendor 進
-                    # static/vendor/，完全離線可用，見 static/vendor/SOURCES.md
-
-bin/                # 每個平台四支，兩邊一一對應
-├── board / board.ps1              # 服務入口（start／stop／restart／status／logs）
-├── board-env.sh / board-env.ps1   # 埠號／資料庫／日誌／PID 預設值，單一事實來源
-├── backup-db.sh / backup-db.ps1   # 啟動前冷備份與保留策略
-└── restore-db.sh / restore-db.ps1 # 從備份還原（三種格式皆支援，保留現有資料庫）
-
-plugin/             # Claude Code plugin（agents/ 薄殼、claim-tasks skill、.mcp.json）
-.codex-plugin/      # Codex plugin（同上，格式依 Codex 慣例）
-.claude-plugin/marketplace.json   # Claude Code 的安裝入口，指向 plugin/
-.agents/plugins/marketplace.json  # Codex 的安裝入口，指向 .codex-plugin/
+├── db/migration/   # Flyway migration
+└── static/         # 零建置 Vue 3 前端（index.html / app.js / tokens.css），
+                     # Vue 執行檔與字型皆 vendor 進 static/vendor/，完全離線可用，
+                     # 不需連外部 CDN，見 static/vendor/SOURCES.md
+bin/
+├── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、啟動前備份、自動組裝）
+└── backup-db.sh    # 啟動前冷備份與保留策略，由 start-board.sh 呼叫
+plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
+plugins/
+└── ai-project-board/   # Codex plugin（manifest、agents、skill、.mcp.json）
+.claude-plugin/
+└── marketplace.json    # Claude Code 的安裝入口，指向 plugin/
+.agents/plugins/
+└── marketplace.json    # Codex repo/Git marketplace，指向 plugins/ai-project-board/
+docs/
+├── installation.md            # 完整安裝指南
+├── dev-isolation.md           # 開發環境隔離基線（埠號／資料庫／日誌／worktree 對照）
+└── scope-leader-dispatch.md   # Leader 派工架構、Git 邊界與角色責任分工
 ```
 
 ## 技術棧

@@ -104,7 +104,7 @@ jobs:
       - name: 確認各 manifest 版號與 pom.xml 一致
         run: ./scripts/check-versions.sh
 
-      # 同一組治理規則被迫存在兩份（plugin/ 與 .codex-plugin/ 有各自的安裝根目錄，
+      # 同一組治理規則被迫存在兩份（plugin/ 與 plugins/ai-project-board/ 有各自的安裝根目錄，
       # 檔案沒辦法真的合併）。改了一邊忘了另一邊，兩個平台的使用者就會拿到不同的
       # 工具邊界，而且不會有任何徵兆。比對的是工具名集合與 category，不是逐行 diff
       # ——兩邊的行文本來就刻意不同，逐行比會每次都紅燈然後被忽略。

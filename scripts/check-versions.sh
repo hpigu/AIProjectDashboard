@@ -30,7 +30,7 @@ cd "$REPO_ROOT"
 FILES="
 plugin/.claude-plugin/plugin.json
 .claude-plugin/marketplace.json
-.codex-plugin/.codex-plugin/plugin.json
+plugins/ai-project-board/.codex-plugin/plugin.json
 "
 
 # 不呼叫 `./mvnw help:evaluate`：那要開一個 JVM、組出 effective POM，還可能為了
