@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,16 +40,34 @@ class OperationalSafetyConfigurationTest {
                 .contains("exit 1");
     }
 
+    /**
+     * 目錄遍歷取代逐檔列舉（#156）：掃 static 根目錄下所有 *.js／*.css 與
+     * index.html，而非硬編碼檔名清單。新增任何 static 檔案（例如 #143 的
+     * i18n.js）都會自動被這個離線掃描涵蓋，不需要有人記得手動補列表。
+     */
     @Test
     void uiIsSelfContainedAndCspCannotFetchExternalDependencies() throws Exception {
         Path staticRoot = Path.of("src/main/resources/static");
         Pattern remoteUrl = Pattern.compile("(?i)https?://");
 
-        for (String resource : new String[]{"index.html", "app.js", "fonts.css", "tokens.css", "layout.css"}) {
-            Path path = staticRoot.resolve(resource);
-                assertThat(Files.readString(path))
-                        .as("離線 UI 資源不得引用外部 URL: %s", path)
-                        .doesNotMatch("(?s).*" + remoteUrl.pattern() + ".*");
+        List<Path> topLevelAssets;
+        try (Stream<Path> entries = Files.list(staticRoot)) {
+            topLevelAssets = entries
+                    .filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        return name.endsWith(".js") || name.endsWith(".css") || name.equals("index.html");
+                    })
+                    .toList();
+        }
+        assertThat(topLevelAssets)
+                .as("預期至少涵蓋 index.html、app.js、i18n.js 與既有 css")
+                .hasSizeGreaterThanOrEqualTo(5);
+
+        for (Path path : topLevelAssets) {
+            assertThat(Files.readString(path))
+                    .as("離線 UI 資源不得引用外部 URL: %s", path)
+                    .doesNotMatch("(?s).*" + remoteUrl.pattern() + ".*");
         }
 
         String index = Files.readString(staticRoot.resolve("index.html"));
