@@ -36,6 +36,12 @@ $env:BOARD_PORT = '8081'
 若 ZIP 缺少 bundled `runtime\bin\java.exe` 或 `app\ai-project-board-backend-V.jar`，
 launcher 會 fail closed 並要求重新下載，不會退回系統 Java。
 
+在一台真正沒裝過任何東西的 Windows 上（例如 Windows Sandbox）從頭走一次上述
+clean install 流程，可對照
+[docs/windows-sandbox-clean-install-checklist.md](windows-sandbox-clean-install-checklist.md)
+逐項確認；該清單同時列出哪些項目已由 CI 的 `windows-2022` runner 自動驗證、不需
+要在 Sandbox 內重做。
+
 ## 0. macOS／Linux stable release 安裝（不需 sudo）
 
 Stable release 的 macOS／Linux 安裝器不需要 repo checkout、Maven、`target/` 或

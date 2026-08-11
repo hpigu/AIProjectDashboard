@@ -74,6 +74,12 @@ console control event（`CTRL_C_EVENT`）通知行程，效果等同 mac/Linux �
   前的輸出不會落檔。改用 `.\bin\board.ps1 start -Foreground` 在當前視窗執行，
   直接看到那段輸出。
 
+要在真正沒裝過任何東西的 Windows（例如 Windows Sandbox）上驗證 stable release ZIP
+的免 JDK 安裝、SmartScreen 互動與 user-scope 資料落點，見
+[docs/windows-sandbox-clean-install-checklist.md](windows-sandbox-clean-install-checklist.md)；
+更新回滾等已由 CI 的 `windows-2022` runner 自動驗證過的部分，該清單也有說明何以
+不需要在 Sandbox 內重複人工操作。
+
 還原用 `.\bin\restore-db.ps1 -List` 與 `.\bin\restore-db.ps1 latest`，
 語意與 bash 版相同（拒絕在執行中還原、保留現有資料庫、驗證後才原子改名）。
 
