@@ -114,6 +114,30 @@
 .conn-dot.connected    { background: var(--st-done); }
 .conn-dot.reconnecting { background: var(--st-progress); }
 
+/* ---- 語言切換 ----
+   沿用 .filter-choice 的相連藥丸群組視覺語彙，與篩選列一致；擺在
+   header-tools 最左側，因為它影響整頁文案，優先度高於通知開關與連線狀態。 */
+.lang-switch {
+  display: flex;
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+.lang-switch .lang-option {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--ground);
+  cursor: pointer;
+  font: 11px var(--font-data);
+  border-radius: 0;
+}
+.lang-switch .lang-option:first-child { border-radius: 3px 0 0 3px; }
+.lang-switch .lang-option:last-child { border-radius: 0 3px 3px 0; }
+.lang-switch .lang-option + .lang-option { border-left: 0; }
+.lang-switch .lang-option.selected { color: var(--text); background: var(--line); }
+.lang-switch .lang-option:hover { color: var(--text); border-color: var(--muted); }
+
 .empty-state {
   color: var(--muted);
   font-size: 15px;
