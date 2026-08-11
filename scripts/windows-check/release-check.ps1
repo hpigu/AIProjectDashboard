@@ -91,11 +91,18 @@ try {
     Assert-True (Test-Path -LiteralPath $runtimeJava -PathType Leaf) 'bundled java.exe 可定位'
     Assert-True (Test-Path -LiteralPath $jar -PathType Leaf) 'bundled server JAR 可定位'
 
-    $versionText = & {
+    $versionProbe = & {
         $ErrorActionPreference = 'Continue'
-        (& $runtimeJava -version 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $text = (& $runtimeJava -version 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Text = $text
+        }
     }
-    Assert-True ($LASTEXITCODE -eq 0 -and $versionText -match 'version "21') 'bundled runtime 為 Java 21'
+    if ($versionProbe.ExitCode -ne 0 -or $versionProbe.Text -notmatch 'version "21') {
+        Fail "bundled runtime 不是可執行的 Java 21（exit $($versionProbe.ExitCode)）。輸出：$($versionProbe.Text)"
+    }
+    Write-Host '  [PASS] bundled runtime 為 Java 21'
 
     $metadata = Get-Content -LiteralPath (Join-Path $root 'app\release-metadata.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     Assert-True ($metadata.version -eq $version) 'release metadata version 正確'

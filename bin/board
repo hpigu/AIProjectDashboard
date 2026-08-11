@@ -196,6 +196,24 @@ version_is_21() {
   [[ "$ver" == *'"21'* ]]
 }
 
+# Java 在 Linux 上仍用 native locale 處理檔名與 launcher 參數。JDK 18+
+# 的 UTF-8 default charset 只規範內容編碼，不能保證 C/POSIX locale 下的中文
+# `-jar` 路徑不被轉成 `?`。sun.jnu.encoding 又是未支援的內部 property，
+# 不能靠 -D 覆寫。因此在啟動 Java 子行程前，先找出這台主機真正可用的
+# UTF-8 locale；只套用於 Java，不改變呼叫 board 的 shell 環境。
+find_utf8_locale() {
+  local candidate charmap
+  for candidate in "${LC_ALL:-}" "${LC_CTYPE:-}" "${LANG:-}" \
+    C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    [ -n "$candidate" ] || continue
+    charmap="$(LC_ALL="$candidate" locale charmap 2>/dev/null || true)"
+    case "$charmap" in
+      UTF-8|UTF8) printf '%s\n' "$candidate"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
 find_java21_macos() {
   local home
   # 1) java_home -v 21 最準
@@ -465,18 +483,17 @@ cmd_start() {
   # （JVM 參數錯誤、埠號綁不上的原始堆疊）只會出現在 stdout，丟掉的話啟動失敗時
   # 使用者會完全看不到原因。
   # -------------------------------------------------------------------------
-  local APP_PID
+  local APP_PID java_locale
   local CONSOLE_LOG_IS_NEW=0
   [ -e "$BOARD_CONSOLE_LOG" ] || CONSOLE_LOG_IS_NEW=1
-  # -Dsun.jnu.encoding/-Dfile.encoding：JVM 用 sun.jnu.encoding 在自己的字串與
-  # 作業系統的檔名之間轉換，而它取自 locale。在 LANG/LC_ALL 未設或為 C/POSIX 的
-  # 環境（精簡容器、cron、CI runner 常見）它會是 ASCII，於是安裝路徑裡的任何
-  # 非 ASCII 字元都變成 '?'，JVM 連自己的 jar 都開不起來——實際錯誤是
-  # 「An unexpected error occurred while trying to open file .../??????/...」。
-  # 路徑由使用者決定，中文或帶重音的家目錄都很正常，所以這裡明確指定 UTF-8，
-  # 不依賴呼叫端的 locale。JDK 18+ 的 file.encoding 已預設 UTF-8，一併寫出是
-  # 為了讓兩者一致且不受 -Dfile.encoding 舊習慣影響。
-  nohup "$JAVA_BIN" -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 \
+  java_locale="$(find_utf8_locale)" || {
+    err "找不到可用的 UTF-8 locale，無法安全啟動非 ASCII 路徑下的 jar。"
+    exit 1
+  }
+  # 保留 -Dfile.encoding=UTF-8 來固定應用內容編碼；檔名與 -jar 參數則由
+  # Java 子行程的 UTF-8 locale 保證。不再使用未支援的 sun.jnu.encoding。
+  LC_ALL="$java_locale" LANG="$java_locale" \
+    nohup "$JAVA_BIN" -Dfile.encoding=UTF-8 \
     -jar "$JAR_PATH" >> "$BOARD_CONSOLE_LOG" 2>&1 &
   APP_PID=$!
   # console log 可能含 JVM 參數錯誤等診斷資訊，收斂為僅目前使用者可讀寫；
