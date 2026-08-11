@@ -4,7 +4,78 @@
 執行 jar／接線。兩套 plugin 會帶入 MCP 宣告、角色 agent 與 leader skill；所有
 方式最終連到的都是同一顆 Spring Boot 行程。
 
-## 0. 前置需求
+## 0. macOS／Linux stable release 安裝（不需 sudo）
+
+Stable release 的 macOS／Linux 安裝器不需要 repo checkout、Maven、`target/` 或
+plugin cache。它只接受使用者明確取得的同版 JDK 21 executable JAR 與集中
+`SHA256SUMS.txt`，或在使用者明確指定 stable `vV` release URL 時下載該兩項；沒有
+背景下載、`latest` 推測或自動更新。
+
+先從同一個 GitHub stable release `vV` 下載**本機平台**的 JAR 與
+`ai-project-board-backend-V-SHA256SUMS.txt`。名稱必須完全符合
+[release contract](release-contract.md)：macOS Apple Silicon 是
+`ai-project-board-backend-macos-arm64-V.jar`、Intel macOS 是
+`...-macos-x64-V.jar`、Linux x64 是 `...-linux-x64-V.jar`。
+
+```bash
+# 在包含這個 installer 的 release source checkout 執行；V 以實際版本取代。
+./install/install.sh \
+  --jar /path/to/ai-project-board-backend-macos-arm64-V.jar \
+  --checksums /path/to/ai-project-board-backend-V-SHA256SUMS.txt
+```
+
+若要由 installer 在**這一次明確操作**下載，必須指定 immutable tag 的 asset URL 與
+版本，不能用 mutable `latest`：
+
+```bash
+./install/install.sh \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/vV" \
+  --version V
+```
+
+預設會安裝在 `~/.ai-project-board`；所有 server release、設定、H2 資料、備份、日誌
+與 PID 都在這個使用者範圍內，並以 0700／0600 權限建立。可用 `--home` 選擇另一個
+使用者可寫的根目錄（CI／測試應一律用隔離暫存目錄，而非改寫 `HOME`）：
+
+```bash
+./install/install.sh --jar /path/to/JAR --checksums /path/to/SHA256SUMS.txt \
+  --home "/private/tmp/my board install"
+```
+
+安裝器會拒絕不支援的平台、非 JDK 21、JDK／平台架構不符、錯誤 artifact basename／
+版本、任何不符合嚴格四行契約的 checksum list，以及 hash 不符。驗證及所有檔案複製
+都在安裝根目錄同一個 parent 的 staging directory 完成；只有成功才原子發佈。失敗時
+既有 release 與資料不會被覆蓋。
+
+安裝後可從任何工作目錄執行絕對路徑入口：
+
+```bash
+~/.ai-project-board/bin/board start
+~/.ai-project-board/bin/board status
+~/.ai-project-board/bin/board stop
+```
+
+該入口固定使用安裝根目錄的絕對 JAR 與資料路徑；仍只監聽預設的
+`127.0.0.1:8080`，因 MCP 沒有 server-side authentication，**不得**改成公開位址。
+若 `:8080` 已在使用，顯式指定另一個 loopback 埠，例如
+`BOARD_PORT=8081 ~/.ai-project-board/bin/board start`。
+
+### 從既有 repo H2 資料遷移
+
+遷移不是自動偵測；只有你明確指定舊資料目錄才會執行，且只允許建立全新的安裝根目錄：
+
+```bash
+./install/install.sh --jar /path/to/JAR --checksums /path/to/SHA256SUMS.txt \
+  --migrate-from /path/to/old-repo/data
+```
+
+它先把來源 `board.mv.db` 複製到新根目錄的
+`backups/migration-source-V-<UTC>/`，以 `cmp` 與 SHA-256 manifest 驗證，再複製到
+新 `data/`。來源檔永遠不移動或覆寫；任一失敗會捨棄 staging installation，因此原
+repo 與既有安裝仍可直接使用。若需回滾，只要不啟用新的安裝根目錄，繼續使用原 repo；
+新安裝內的 migration backup 也保留了已驗證的原始副本。
+
+## 1. 前置需求
 
 - **JDK 21**（`pom.xml` 的 `java.version` 寫死 21，其他版本編譯不會過）
 - **Maven**：不需要另外安裝，repo 內附 `./mvnw` 會自動下載對應版本
