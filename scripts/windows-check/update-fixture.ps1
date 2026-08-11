@@ -142,7 +142,7 @@ function New-Scenario {
         Checksums = $checksum
     }
     Set-ScenarioEnvironment -Scenario $scenario
-    Assert-PortClosed -Port $scenario.Port -Description "$Name: fixture port was free before start"
+    Assert-PortClosed -Port $scenario.Port -Description "${Name}: fixture port was free before start"
     return $scenario
 }
 function Stop-ScenarioSafely {
