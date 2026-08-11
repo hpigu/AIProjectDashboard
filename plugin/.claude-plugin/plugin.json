@@ -1,7 +1,7 @@
 {
   "name": "ai-project-board",
   "description": "AI 專案看板的 Claude Code 整合：認領/更新任務、取得角色指引、啟動看板服務。",
-  "version": "3.0.0",
+  "version": "3.1.1",
   "author": {
     "name": "Daniel Huang"
   },
