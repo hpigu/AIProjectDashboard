@@ -35,28 +35,49 @@ before_hash="$(shasum -a 256 "$root/data/board.mv.db" | awk '{print $1}')"
 # stop, or filesystem change — regardless of case or where "latest" appears in the path.
 # This models the exact shape of GitHub's mutable download endpoint that slipped past a
 # broken `[ "$x" != *latest* ]` literal-string guard (bug fixed alongside this fixture).
+#
+# Each bad_url deliberately ends in /v3.1.2 — the exact --version requested below — so it
+# also satisfies the downstream `*/v"$requested_version"` shape check. If the latest guard
+# were removed or weakened, the shape check alone would NOT stop these URLs: execution would
+# reach curl and fail there instead (offline/DNS failure), which also exits non-zero and also
+# leaves the activation pointer/release/service untouched. An exit-code-only assertion cannot
+# tell those two failures apart, so this asserts on the exact guard message instead. This
+# mirrors the #166 lesson (which repeats the #164 lesson): a bad_url, or an assertion, that a
+# downstream check would also reject on its own proves nothing about the guard under test.
 for bad_url in \
-  'https://github.com/x/releases/latest/download/v3.1.1' \
-  'https://github.com/x/releases/LATEST/download/v3.1.1' \
-  'https://github.com/x/releases/download/vLatest/v3.1.1'; do
-  if PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
-    BOARD_PORT=18998 "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --release-url "$bad_url" >/dev/null 2>&1; then
-    echo "[FAIL] mutable latest release-url was not rejected: $bad_url" >&2; exit 1
-  fi
+  'https://github.com/x/releases/latest/download/v3.1.2' \
+  'https://github.com/x/releases/LATEST/download/v3.1.2' \
+  'https://github.com/x/releases/download/vLatest/v3.1.2'; do
+  out="$(PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
+    BOARD_PORT=18998 "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --release-url "$bad_url" 2>&1)" && rc=0 || rc=$?
+  [ "$rc" -ne 0 ] || { echo "[FAIL] mutable latest release-url was not rejected: $bad_url" >&2; exit 1; }
+  printf '%s' "$out" | grep -Fq 'mutable latest URLs are forbidden' \
+    || { echo "[FAIL] mutable latest release-url failed for the wrong reason (not the latest guard): $bad_url -- $out" >&2; exit 1; }
   [ "$(readlink "$root/current")" = releases/3.1.1 ] || { echo "[FAIL] latest-url rejection changed the activation pointer: $bad_url" >&2; exit 1; }
   [ ! -e "$root/releases/3.1.2" ] || { echo "[FAIL] latest-url rejection published a release: $bad_url" >&2; exit 1; }
   [ -f "$root/running" ] || { echo "[FAIL] latest-url rejection stopped the running service: $bad_url" >&2; exit 1; }
 done
-echo '[PASS] mutable latest release-url is rejected case-insensitively before any change'
+echo '[PASS] mutable latest release-url is rejected case-insensitively before any change (by the latest guard specifically)'
 
-# The exact immutable vV shape must still be accepted by the same guard (curl is not faked
-# here, so this only proves the latest-rejection does not also reject valid URLs).
-if PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
-  BOARD_PORT=18998 "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --release-url 'https://github.com/x/releases/download/v3.1.2' 2>&1 \
-  | grep -Fq 'mutable latest URLs are forbidden'; then
-  echo '[FAIL] a valid immutable vV release-url was rejected as latest' >&2; exit 1
+# The exact immutable vV shape must still be accepted by the same guard and proceed past it.
+# curl is not faked here, so the request will actually reach curl and fail to download from a
+# fake host — proving execution passed the latest guard (no forbidden-latest message) and the
+# shape check (no shape-guard message) and reached the network step. If the latest guard were
+# deleted entirely, the absence of its message alone would prove nothing (it would never fire
+# for any input); asserting on the specific downstream network-failure message instead proves
+# the guard was actually evaluated and did not block this valid URL.
+out="$(PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
+  BOARD_PORT=18998 "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --release-url 'https://github.com/x/releases/download/v3.1.2' 2>&1)" && rc=0 || rc=$?
+[ "$rc" -ne 0 ] || { echo '[FAIL] valid immutable vV release-url unexpectedly succeeded (network should be unreachable in this fixture)' >&2; exit 1; }
+if printf '%s' "$out" | grep -Fq 'mutable latest URLs are forbidden'; then
+  echo "[FAIL] a valid immutable vV release-url was rejected as latest -- $out" >&2; exit 1
 fi
-echo '[PASS] immutable vV release-url passes the latest guard'
+if printf '%s' "$out" | grep -Fq 'must name the exact immutable vV release'; then
+  echo "[FAIL] a valid immutable vV release-url was rejected by the shape guard -- $out" >&2; exit 1
+fi
+printf '%s' "$out" | grep -Fq 'cannot download checksum list' \
+  || { echo "[FAIL] valid immutable vV release-url did not reach the download step as expected -- $out" >&2; exit 1; }
+echo '[PASS] immutable vV release-url passes the latest guard and shape check, reaching the download step'
 
 if PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
   BOARD_PORT=18998 BOARD_UPDATE_FAIL_AT=readiness "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --jar "$target" --checksums "$checksums"; then
