@@ -146,8 +146,17 @@ function Protect-BoardPath {
 
     try {
         $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $currentUser, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        # 繼承旗標只對「容器」（目錄）有意義；.NET 對檔案的 ACE 不允許設定
+        # ContainerInherit/ObjectInherit，會丟出 "No flags can be set." 例外，
+        # 必須依路徑實際型別（目錄／檔案）分別建立規則。
+        $isContainer = Test-Path -LiteralPath $Path -PathType Container
+        if ($isContainer) {
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $currentUser, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        } else {
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $currentUser, 'FullControl', 'None', 'None', 'Allow')
+        }
 
         # 停用繼承並清除既有規則（第二參數 $true = 移除繼承來的規則），
         # 只留下面明確加入的「目前使用者 FullControl」一條，等同 POSIX 的 0700/0600：
