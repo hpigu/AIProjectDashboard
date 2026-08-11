@@ -49,27 +49,28 @@ JDK 21 runtime）、`bin/board update` 明確更新與原子回滾、完整 SOP 
 
 | 序 | 缺口 | 為什麼是這個順序 |
 |---|---|---|
-| 1 | **推送 repo 到 `hpigu/AIProjectDashboard` 的 `main`，觸發第一次真實 release** | 沒有這一步，下面兩項都無法用真實 asset 驗證；`release.yml`、`codex plugin marketplace add hpigu/...` 都要等它才能實際跑 |
-| 2 | **Windows Sandbox 乾淨環境手動 clean install**（`docs/windows-sandbox-clean-install-checklist.md`，#163 追蹤） | 演練結果可能推翻其餘缺口的優先度；清單已就緒，缺的是實際找一台 Windows 執行 |
+| 1 | **推送 repo 到 `hpigu/AIProjectDashboard` 的 `main`（已完成，2026-08-11）；觸發第一次真實三平台 release（仍未完成）** | 推送這一步已由使用者完成（`main` = `537ec5f`），但**尚未觸發過任何 tag push 或 workflow_dispatch**，`release.yml` 從未真正跑過；沒有這一步，下一項都無法用真實 asset 驗證 |
+| 2 | **Windows Sandbox 乾淨環境手動 clean install**（`docs/windows-sandbox-clean-install-checklist.md`，#163 追蹤） | 演練結果可能推翻其餘缺口的優先度；清單已就緒，缺的是實際找一台 Windows 執行，且理想上應等真實三平台 release 產出 Windows ZIP 後再驗收 |
 | 3 | **#35** `RoleSeeder` 別把本 repo 的開發設定編進產品 | 陌生人裝到的東西不該內建你的路徑與埠號；三平台安裝器就緒後這是下一個會被陌生人踩到的坑 |
 | 4 | **#15** `delete_project`（先補 archive 測試） | 唯一有真實證據的項目，但不阻擋前面 |
 
 ### 未解決的產品發布缺口（2026-08-11 盤點）
 
 **本批（#144–#152）完成的是「三平台交付的程式碼與 CI 層級驗證」，不是「已對外
-發布並在真實環境驗證」。** 依規則本批未 push 到遠端，下列缺口全部源自這一點，
-誠實列出、不美化：
+發布並在真實環境驗證」。** repo 已於 2026-08-11 由使用者推送到
+`hpigu/AIProjectDashboard` 的 `main`（`537ec5f`），**推送本身不再是缺口**；但
+推送只解除了「觸發 release」的前提，尚未實際觸發過，下列缺口誠實列出、不美化：
 
 | 優先序 | 缺口 | 現況 | 影響 |
 |---|---|---|---|
-| P0 | **release CI 從未實際觸發過** | `.github/workflows/release.yml` 已建立且通過程式碼層級的四平台 build/self-validate job，但因本批規則不自行 push，**沒有一次 tag push 或 workflow_dispatch 真正跑過**，也就沒有任何真實 GitHub Release asset 存在 | 本文件與 `release-install-update-sop.md`／`release-contract.md` 引用的四個 asset（Linux／macOS arm64／macOS x64 JAR、Windows ZIP）與 `SHA256SUMS.txt` 目前只是**契約規格**，不是可下載的真實檔案；使用者現在唯一能用的安裝路徑是 3a（手動 clone + 現場組裝） |
-| P0 | **Windows Sandbox 乾淨環境手動驗收尚未執行** | `docs/windows-sandbox-clean-install-checklist.md` 清單已就緒（#163 追蹤），但**尚無一次真實執行紀錄**，「驗證記錄」一節仍是空的 | Windows ZIP 的 SmartScreen 互動、非系統管理員帳號、免 JDK 啟動這幾項只在 CI 的 `windows-2022` runner（預裝大量工具，非真正乾淨環境）驗證過，尚未在真正陌生人會遇到的環境確認過 |
-| P1 | **Codex Git marketplace 流程依賴尚未發生的 push** | `release-install-update-sop.md` 第 2、9 節的 `codex plugin marketplace add hpigu/AIProjectDashboard --ref main` 系列指令在推送完成前**執行會失敗**；本機路徑 marketplace（`.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json`）仍是目前唯一可用的安裝入口 | 目前只有本機開發者能安裝 plugin；不影響 server 本身能不能跑 |
+| P0 | **release CI 從未實際觸發過** | `.github/workflows/release.yml` 已建立且通過程式碼層級的四平台 build/self-validate job，repo 雖已推送，但**這批變更沒有一次 tag push 或 workflow_dispatch 真正跑過**，也就沒有任何真實 GitHub Release asset 存在。遠端目前唯一的 tag 是 `v3.1.0`（2026-08-05 發布，早於本批推送），只有 `ai-project-board-backend-3.1.0.jar` 與 `.jar.sha256` 兩個 asset，是舊的單 JAR 格式，不是三平台契約 | 本文件與 `release-install-update-sop.md`／`release-contract.md` 引用的四個 asset（Linux／macOS arm64／macOS x64 JAR、Windows ZIP）與 `SHA256SUMS.txt` 目前只是**契約規格**，不是可下載的真實檔案；使用者現在唯一能用的安裝路徑是 3a（手動 clone + 現場組裝） |
+| P0 | **Windows Sandbox 乾淨環境手動驗收尚未執行** | `docs/windows-sandbox-clean-install-checklist.md` 清單已就緒（#163 追蹤），但**尚無一次真實執行紀錄**，「驗證記錄」一節仍是空的 | Windows ZIP 的 SmartScreen 互動、非系統管理員帳號、免 JDK 啟動這幾項只在 CI 的 `windows-2022` runner（預裝大量工具，非真正乾淨環境）驗證過，尚未在真正陌生人會遇到的環境確認過；理想上應等真實三平台 release 產出的 Windows ZIP 後再驗收 |
+| P1 | **Codex Git marketplace 流程（已解除推送前提，仍待實測）** | repo 已推送，`.agents/plugins/marketplace.json`、`plugins/ai-project-board/` 確實存在於 `origin/main`；`release-install-update-sop.md` 第 2、9 節的 `codex plugin marketplace add hpigu/AIProjectDashboard --ref main` 系列指令理論上**可以執行**，但尚未有人實際跑過確認成功 | 本機路徑 marketplace（`.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json`）仍同時保留可用；不影響 server 本身能不能跑 |
 | P1 | **Claude Desktop／Codex Desktop 安裝流程未經驗證** | 本 repo 的 plugin 是為 Claude Code／Codex CLI 撰寫並驗證；是否有對應的桌面版圖形介面**未確認**（見 `release-install-update-sop.md` 第 10 節） | 桌面版使用者目前只能走「不用 plugin，手動接 MCP」路徑（本文件第 5 節），拿不到角色薄殼與 `claim-tasks` skill |
 | P2 | **`RoleSeeder` 把本 repo 開發設定編進產品**（#35，未變動） | 未修 | 見下方項目說明 |
 
-以上五項是目前對「別人能不能真的拿到並用起來」影響最大的缺口，順序依「不做這件事下一項就無法被真實驗證」排列——P0 兩項互為前後腳（推送才能觸發 release，
-release 產出後才能用真實 asset 做 Sandbox 驗收），因此並列最高優先。
+以上五項是目前對「別人能不能真的拿到並用起來」影響最大的缺口，順序依「不做這件事下一項就無法被真實驗證」排列——兩個 P0 互為前後腳（觸發 release 才有真實
+asset，asset 產出後才能用它做 Sandbox 驗收），因此並列最高優先。
 
 ### v3.2.0 的其餘項目
 
@@ -114,9 +115,9 @@ release 產出後才能用真實 asset 做 Sandbox 驗收），因此並列最�
 
 | 事項 | 狀態 | 說明 |
 |---|---|---|
-| **推送 repo 到 `hpigu/AIProjectDashboard` 的 `main`** | ⬜ | 本批規則要求不自行 push；沒有這一步，release CI、Codex Git marketplace 流程都無法實際觸發 |
+| **觸發第一次真實三平台 release**（tag push 或 workflow_dispatch） | ⬜ | 推送已完成（見下方「已完成的手動項目」），這是下一步；沒有這一步，Codex Git marketplace 雖已可用，但三平台 asset 仍不存在 |
 | **啟用 Windows Sandbox**（選用功能 + 重開機） | ⬜ | `docs/windows-sandbox-clean-install-checklist.md`（#163）的前置。Pro 版內建，目前未啟用 |
-| **在 Windows Sandbox 執行 clean install 清單並補上驗證記錄** | ⬜ | 清單本身已就緒；缺的是實際找一台 Windows 執行並把結果寫回該檔案的「驗證記錄」一節 |
+| **在 Windows Sandbox 執行 clean install 清單並補上驗證記錄** | ⬜ | 清單本身已就緒；缺的是實際找一台 Windows 執行並把結果寫回該檔案的「驗證記錄」一節，理想上應等真實三平台 release 產出 Windows ZIP 後再驗收 |
 
 *（其餘手動項目皆已完成，見[已完成](#已完成)。）*
 
@@ -184,7 +185,7 @@ release 產出後才能用真實 asset 做 Sandbox 驗收），因此並列最�
 | 25 | MCP 協定層 E2E 測試 | 7 個測試打真正的 `/mcp`：initialize 身分宣告、tools/list 完整清單、關鍵工具的參數名與必填集合、tools/call 走完整條線、業務錯誤回可讀訊息、未知工具被拒絕、缺 session 不被當正常請求。自寫極簡客戶端而非用 SDK。`59d82f6` |
 | 30 | jar 挑選的版號排序 | 見[修掉的 bug](#修掉的-bug)。`3b58b51` |
 | 31 | plugin 完整性 | 從 #13 拆出。**原本的假設有兩項是錯的**：<br>(1) ~~`plugin/bin/` 缺 Windows 腳本~~ → 實際更糟：`plugin/bin/start-board.sh` 是 git symlink，而 Windows 的 `core.symlinks` 預設 false，checkout 出來是 24 位元組的文字檔，**每個 Windows 使用者拿到的都是壞檔案**。它同時是死碼，因此直接移除。`d8ee0d5`<br>(2) ~~角色指引不跟著 plugin 走~~ → **不成立**。`plugin/agents/` 六個角色檔完整在 plugin 裡；實質指引走 `get_role`，而 `RoleSeeder` 啟動時以 `createRoleIfAbsent` 補齊通用角色。<br>(3) plugin 版號同步 → 隨 `e5fdcab` 解決 |
-| 32 | **三平台 release 交付**（取代原「免 JDK 的 Windows zip」） | **形狀比原描述大**：原 #32 只規劃 Windows zip，實際做成 Linux／macOS arm64／macOS x64／Windows x64 四平台契約（`docs/release-contract.md`，#144）、macOS／Linux user-scope installer（`install/install.sh`，#146）、Windows jlink ZIP 打包器（#147）、`bin/board update` 明確更新與原子回滾（#148）、擴充 `release.yml` 為四平台 build + 集中 publish job（#149）、跨平台安裝／更新／回滾與 H2 舊資料升級驗證（#150）、Claude／Codex 共用安裝更新 SOP（`docs/release-install-update-sop.md`，#151）。<br>**範圍是「程式碼與 CI 層級驗證完成」，不是「已對外發布」**：本批規則要求不自行 push，因此 release CI **從未實際觸發過**一次 tag push 或 workflow_dispatch，沒有真實 GitHub Release asset 存在；Windows Sandbox 乾淨環境手動驗收（`docs/windows-sandbox-clean-install-checklist.md`，#163）也**尚未實際執行**。這兩項是目前最高優先的產品發布缺口，見上方「未解決的產品發布缺口」 |
+| 32 | **三平台 release 交付**（取代原「免 JDK 的 Windows zip」） | **形狀比原描述大**：原 #32 只規劃 Windows zip，實際做成 Linux／macOS arm64／macOS x64／Windows x64 四平台契約（`docs/release-contract.md`，#144）、macOS／Linux user-scope installer（`install/install.sh`，#146）、Windows jlink ZIP 打包器（#147）、`bin/board update` 明確更新與原子回滾（#148）、擴充 `release.yml` 為四平台 build + 集中 publish job（#149）、跨平台安裝／更新／回滾與 H2 舊資料升級驗證（#150）、Claude／Codex 共用安裝更新 SOP（`docs/release-install-update-sop.md`，#151）。<br>**範圍是「程式碼與 CI 層級驗證完成」，不是「已對外發布」**：repo 已於 2026-08-11 推送到 `hpigu/AIProjectDashboard` 的 `main`，但這批變更**尚未觸發過**一次 tag push 或 workflow_dispatch，release CI 從未實際跑過，沒有真實三平台 GitHub Release asset 存在（遠端唯一的 `v3.1.0` tag 早於本批、只有舊單 JAR asset）；Windows Sandbox 乾淨環境手動驗收（`docs/windows-sandbox-clean-install-checklist.md`，#163）也**尚未實際執行**。這兩項是目前最高優先的產品發布缺口，見上方「未解決的產品發布缺口」 |
 
 ## v3.1.0（2026-08-06）
 
@@ -218,6 +219,7 @@ release 產出後才能用真實 asset 做 Sandbox 驗收），因此並列最�
 | Windows 上確認 JDK 21 自動偵測與埠號反查 | 埠號反查正確。**JDK 偵測原本是壞的**，見下方 bug 表 |
 | 推第一個 tag 發布 release | `v3.1.0`，附 jar 與 `.sha256`。第一次打錯（tag 打在未合併版號變更的 main 上，產出 `3.0.0.jar`），已加 CI 守門 |
 | 在真實瀏覽器確認 BLOCKED 通知會彈出 | 授權後實際觸發，通知內容與點擊跳轉都正確 |
+| **推送 repo 到 `hpigu/AIProjectDashboard` 的 `main`**（2026-08-11） | 使用者親自推送，`main` = `537ec5f`。**只解除了「觸發 release」與「Codex Git marketplace」這兩項的前提，不等於三平台 release 已觸發**——遠端唯一的 tag `v3.1.0` 早於本批、只有舊單 JAR asset，見上方「未解決的產品發布缺口」 |
 
 ---
 

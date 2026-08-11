@@ -98,10 +98,9 @@ rm ~/.claude/agents/{backend-dev,frontend-dev,qa,infra,docs}.md   # 視實際存
 
 repo 內的 Codex plugin 由 `plugins/ai-project-board/`（manifest、`.mcp.json`、
 角色薄殼、`skills/claim-tasks/`）與 `.agents/plugins/marketplace.json`（把上述
-目錄登錄為 marketplace 可安裝的 **AI Project Board**）組成。目前 repo 尚未推送到
-遠端（本批次規則要求不自行 push），下列 Git marketplace 指令示範的是加入已推送
-到 GitHub 的版本；**目前 repo 狀態下這組指令會失敗，需等 leader 實際 push 到
-`hpigu/AIProjectDashboard` 的 `main` 後才可執行**。
+目錄登錄為 marketplace 可安裝的 **AI Project Board**）組成。repo 現已推送到
+遠端 `hpigu/AIProjectDashboard` 的 `main`（含這兩份 plugin 檔案），下列 Git
+marketplace 指令示範的是加入已推送到 GitHub 的版本，**可以實際執行**。
 
 以下步驟全部必須用 CLI；Codex 目前沒有圖形化 marketplace 安裝介面可以取代。
 
@@ -385,11 +384,11 @@ marketplace；後續工作只能讓兩個既有 marketplace 指向的 thin plugi
 
 - `.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json` 這兩份
   **repo 內的路徑型 marketplace 定義本身不會被刪除或取代**，它們是本機開發、
-  demo 與尚未推送遠端時唯一可用的安裝路徑。
+  demo 時唯一可用的安裝路徑，即使 repo 已推送遠端也一併保留。
 - Git marketplace 是**額外**選項，給已經有遠端 `hpigu/AIProjectDashboard` 可用
   的使用者一個不需要本機路徑的安裝方式，兩者長期並存。
-- 目前 repo 尚未推送到遠端（見第 2 節開頭），所以本文件撰寫時 Git marketplace
-  流程**仍是待推送後才可執行的步驟**，本機路徑 marketplace 仍是唯一可用方式。
+- repo 現已推送到遠端（見第 2 節開頭），Git marketplace 流程**已可執行**；
+  本機路徑 marketplace 不因此被淘汰，仍是本機開發與 demo 的可用方式。
 
 ### 回退方法
 
@@ -416,12 +415,17 @@ Claude Code 沒有需要「切換」的問題——本文件涵蓋的 Claude plu
   節）。
 - Codex Desktop 是否有對應 CLI 指令的圖形介面**未經驗證**（見第 2 節）。
 - Codex Git marketplace 流程（第 2、9 節）依賴 repo 已推送到
-  `hpigu/AIProjectDashboard` 的 `main`；**目前尚未推送**，這些指令在推送完成前
-  無法實際執行成功，執行前請先確認推送已完成。
+  `hpigu/AIProjectDashboard` 的 `main`；**repo 現已推送**（`main` = `537ec5f`，
+  含 `.agents/plugins/marketplace.json` 與 `plugins/ai-project-board/`），這些
+  指令可以實際執行。
 - 三平台 release CI workflow（`.github/workflows/release.yml`）已建立並在本批
-  完成程式碼層級驗證，但**尚未實際觸發過一次 tag push 或 workflow_dispatch**，
-  因此本文件引用的 release asset 皆為契約規格，不是已產出並驗證過的真實
-  GitHub Release 檔案。
+  完成程式碼層級驗證，repo 雖已推送，但**這批變更尚未實際觸發過一次 tag push
+  或 workflow_dispatch**，因此本文件引用的三平台 release asset（Linux
+  x64／macOS arm64／macOS x64 JAR＋Windows ZIP＋集中式 `SHA256SUMS.txt`）皆為
+  契約規格，不是已產出並驗證過的真實 GitHub Release 檔案。遠端目前唯一的
+  tag 是 `v3.1.0`（2026-08-05 發布，早於本批推送），該 release 只有
+  `ai-project-board-backend-3.1.0.jar` 與 `.jar.sha256` 兩個 asset，是舊的單
+  JAR 格式，不符合三平台契約。
 - Windows Sandbox 乾淨環境手動驗收（`docs/windows-sandbox-clean-install-checklist.md`）
   **尚未實際執行**（#163 追蹤中）；本文件第 3c、4 節的 Windows 流程是依 CI
   自動化驗證與程式碼推導，不是 Sandbox 內人工操作的結果。
