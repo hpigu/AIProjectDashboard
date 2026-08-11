@@ -2,16 +2,19 @@ package dev.aiboard.web;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -47,25 +50,45 @@ class FrontendStaticAssetsTest {
     @Autowired
     private MockMvc mockMvc;
 
+    /**
+     * 目錄遍歷取代逐檔列舉（#156）：掃 static 根目錄下所有 *.js／*.css，加上
+     * index.html 與既有 vendor 字型/腳本清單。新增任何 static 檔案（例如 #143
+     * 的 i18n.js）都會自動被這份清單涵蓋，不需要有人記得手動補列表。
+     */
+    static Stream<String> staticAssetPaths() throws IOException {
+        Path staticRoot = Path.of("src/main/resources/static");
+        try (Stream<Path> entries = Files.list(staticRoot)) {
+            List<String> topLevel = entries
+                    .filter(Files::isRegularFile)
+                    .map(p -> p.getFileName().toString())
+                    .filter(name -> name.endsWith(".js") || name.endsWith(".css") || name.equals("index.html"))
+                    .map(name -> "/" + name)
+                    .toList();
+            return Stream.concat(topLevel.stream(), Stream.of(
+                    "/vendor/vue/vue.global.prod.js",
+                    "/vendor/fonts/archivo-700.woff2",
+                    "/vendor/fonts/archivo-800.woff2",
+                    "/vendor/fonts/ibm-plex-sans-400.woff2",
+                    "/vendor/fonts/ibm-plex-sans-500.woff2",
+                    "/vendor/fonts/ibm-plex-mono-400.woff2",
+                    "/vendor/fonts/ibm-plex-mono-500.woff2"
+            ));
+        }
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {
-            "/index.html",
-            "/app.js",
-            "/fonts.css",
-            "/tokens.css",
-            "/layout.css",
-            "/vendor/vue/vue.global.prod.js",
-            "/vendor/fonts/archivo-700.woff2",
-            "/vendor/fonts/archivo-800.woff2",
-            "/vendor/fonts/ibm-plex-sans-400.woff2",
-            "/vendor/fonts/ibm-plex-sans-500.woff2",
-            "/vendor/fonts/ibm-plex-mono-400.woff2",
-            "/vendor/fonts/ibm-plex-mono-500.woff2",
-    })
+    @MethodSource("staticAssetPaths")
     void everyAssetReferencedByIndexHtmlOrFontsCss_isServedSuccessfullyFromSameOrigin(String path) throws Exception {
         mockMvc.perform(get(path))
                 .andExpect(status().isOk())
                 .andExpect(header().exists("Content-Security-Policy"));
+    }
+
+    @Test
+    void i18nJs_isServedAsJavaScript() throws Exception {
+        mockMvc.perform(get("/i18n.js"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", org.hamcrest.Matchers.containsString("javascript")));
     }
 
     @Test
