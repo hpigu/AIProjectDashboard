@@ -71,6 +71,14 @@ node scripts/frontend-regression/check.mjs --base-url http://127.0.0.1:8091
 | SSE kill/restart 後重連且狀態保留 | - | 需要手動重啟後端，腳本僅檢測前端重連 UI 狀態 | 實際 kill/restart 後端程序需人工操作 |
 | 初次載入各 API 僅呼叫 1 次 | - | `checkApiCallCounts()`（Network 事件計數） | - |
 | DAG／大型相依圖展開收合 | - | 需要視覺比對 | 建議人工複查 |
+| i18n 字典 key parity／插值 placeholder 一致／無空值/未翻譯殘留 | `I18nDictionaryTest` | - | - |
+| app.js／index.html 靜態 `t('key')` 呼叫皆指向存在的 key | `I18nDictionaryTest` | - | - |
+| 手動切換語言即時更新 html lang、reload 後保留 | - | `checkManualSwitchUpdatesHtmlLangAndPersists()`（#145） | - |
+| 不支援的 stored locale（如殘留舊值）fallback 到 zh-TW | - | `checkUnsupportedStoredLocaleFallsBackToDefault()`（#145） | - |
+| 無 stored 偏好時依 `navigator.languages` 偵測（含 zh-CN 等變體 fallback） | - | `checkBrowserLanguageDetectionWithoutStoredPreference()`（#145） | - |
+| 實際渲染畫面無 raw key fallback（`⚠key`） | - | `checkNoRawKeyFallbackVisibleInRenderedDom()`（#145） | 更換語言後人工掃視畫面文字建議一併檢查 |
+| 插值（`{n}`／`{title}` 等）正確代入、不殘留樣板字面值 | - | `checkInterpolationRendersActualValues()`（#145） | - |
+| 主要看板／詳情／空態／錯誤／確認流程雙語下文案完整可讀 | - | - | 見 `docs/frontend-regression-checklist.md` 的「i18n（#145）」一節 |
 
 ## 已知限制
 
