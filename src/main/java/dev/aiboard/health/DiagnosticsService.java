@@ -44,13 +44,14 @@ public class DiagnosticsService {
     private static final long CACHE_TTL_MS = 5_000L;
     private static final Pattern H2_FILE_PATTERN = Pattern.compile("^jdbc:h2:file:([^;]+)");
     private static final Pattern BACKUP_FILE_PATTERN =
-            Pattern.compile("^board-(startup|shutdown)-(\\d{8}T\\d{6}Z)-.+\\.(mv\\.db|zip)$");
+            Pattern.compile("^board-(startup|shutdown|scheduled)-(\\d{8}T\\d{6}Z)-.+\\.(mv\\.db|zip)$");
 
     private final ProjectRepository projectRepository;
     private final TaskRepository taskRepository;
     private final SseEmitterRegistry sseEmitterRegistry;
     private final Flyway flyway;
     private final ToolCallbackProvider toolCallbackProvider;
+    private final BuildInfoProvider buildInfo;
     private final String datasourceUrl;
     private final Path backupDir;
     private final Instant startedAt = Instant.now();
@@ -64,6 +65,7 @@ public class DiagnosticsService {
                                SseEmitterRegistry sseEmitterRegistry,
                                Flyway flyway,
                                ToolCallbackProvider toolCallbackProvider,
+                               BuildInfoProvider buildInfo,
                                @Value("${spring.datasource.url}") String datasourceUrl,
                                @Value("${board.backup.dir:${user.home}/.ai-project-board/backups}") String backupDir) {
         this.projectRepository = projectRepository;
@@ -71,6 +73,7 @@ public class DiagnosticsService {
         this.sseEmitterRegistry = sseEmitterRegistry;
         this.flyway = flyway;
         this.toolCallbackProvider = toolCallbackProvider;
+        this.buildInfo = buildInfo;
         this.datasourceUrl = datasourceUrl;
         this.backupDir = Path.of(backupDir).toAbsolutePath().normalize();
     }
@@ -101,7 +104,8 @@ public class DiagnosticsService {
 
     private DiagnosticsInfo compute() {
         return new DiagnosticsInfo(
-                resolveVersion(),
+                buildInfo.version(),
+                buildInfo.commit(),
                 startedAt,
                 resolveDatabaseType(),
                 resolveMigrationInfo(),
@@ -111,11 +115,6 @@ public class DiagnosticsService {
                 resolveLatestBackup(),
                 resolveDiskStatus()
         );
-    }
-
-    private String resolveVersion() {
-        String version = getClass().getPackage().getImplementationVersion();
-        return version != null ? version : "unknown";
     }
 
     private String resolveDatabaseType() {
@@ -159,7 +158,7 @@ public class DiagnosticsService {
         Map<String, Long> statusTotals = new HashMap<>();
         long taskCount = 0;
         for (TaskRepository.StatusCountProjection row : taskRepository.countAllGroupedByProjectAndStatus()) {
-            statusTotals.merge(row.getStatus(), row.getCnt(), Long::sum);
+            statusTotals.merge(row.getStatus().name(), row.getCnt(), Long::sum);
             taskCount += row.getCnt();
         }
         return new ProjectTaskAggregate(projectCount, taskCount, statusTotals);
@@ -237,7 +236,7 @@ public class DiagnosticsService {
     public record DiskStatus(long totalBytes, long usableBytes, boolean available) {
     }
 
-    public record DiagnosticsInfo(String version, Instant startedAt, String databaseType,
+    public record DiagnosticsInfo(String version, String commit, Instant startedAt, String databaseType,
                                    MigrationSummary migration, List<String> tools,
                                    int sseConnectionCount, ProjectTaskAggregate projectTaskAggregate,
                                    BackupStatus latestBackup, DiskStatus disk) {

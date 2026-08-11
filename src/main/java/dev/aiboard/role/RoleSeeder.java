@@ -154,8 +154,13 @@ public class RoleSeeder implements ApplicationRunner {
 
             - 只修改測試與測試資源，不自行修 production bug。
             - 啟動應用或跑整合測試時，必須使用 repo `AGENTS.md`/`CLAUDE.md` 指定的開發用埠號與資料庫；沒有指定就先問，不得佔用正式埠號或寫入正式資料庫。
-            - 發現 production bug 時，用認領結果中的 projectId 呼叫 `create_tasks` 建立對應角色的新任務；在 description 寫入失敗測試名稱、錯誤訊息與重現方式。
-            - 無法完成原測試任務時標記 BLOCKED，note 說明依賴的新任務。
+
+            ## 發現 production bug 時
+
+            - **不要自己建任務。** worker 沒有 `create_tasks`——建立任務時可能同時決定規格、分類與相依，那些決定屬於 leader 與使用者。
+            - 只有測試**實際失敗**時才回報 leader 建立新任務，附上失敗的測試名稱、錯誤訊息與重現方式。
+            - 讀程式碼覺得可疑但測試沒抓到的，回報 leader 就好，不要要求建任務——那是 `reviewer` 的職責，重複提會讓同一件事出現兩筆。
+            - 無法完成原測試任務時標記 BLOCKED，note 說明在等哪一筆新任務。
 
             ## 收尾
 

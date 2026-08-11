@@ -21,7 +21,7 @@ import java.util.List;
  *   <li>{@code /api/diagnostics}——維運／debug 用的深度資訊，可能包含
  *       路徑等只有信任使用者才該看到的細節。</li>
  * </ul>
- * {@code /api/health} 保留給 {@code bin/start-board.sh} 既有的啟動檢查
+ * {@code /api/health} 保留給 {@code bin/board start} 既有的啟動檢查
  * （該腳本只確認回應中含有 {@code "version"} 欄位），內容已收斂為不含
  * 絕對 DB 路徑、JDBC URL 或 secret 的最小版本資訊。
  */
@@ -44,7 +44,7 @@ public class HealthController {
     @GetMapping("/api/health")
     public HealthView health() {
         HealthService.HealthInfo info = healthService.getHealth();
-        return new HealthView(info.version(), info.tools(), info.startedAt());
+        return new HealthView(info.version(), info.commit(), info.tools(), info.startedAt());
     }
 
     @GetMapping("/api/health/live")
@@ -66,7 +66,7 @@ public class HealthController {
         return diagnosticsService.getDiagnostics();
     }
 
-    public record HealthView(String version, List<String> tools, Instant startedAt) {
+    public record HealthView(String version, String commit, List<String> tools, Instant startedAt) {
     }
 
     public record LivenessView(String status) {

@@ -4,6 +4,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -28,8 +30,12 @@ import java.io.IOException;
  * - {@code font-src 'self'}：字型已全部離線化至 /vendor/fonts。
  * - {@code frame-ancestors 'none'} + {@code X-Frame-Options: DENY}：禁止被嵌入 iframe。
  * - 未加入任何登入/OAuth 相關 header 或導向。
+ *
+ * 執行順序：必須排在 {@link LocalOriginGuardFilter} 之前，這樣連「被 guard 擋下
+ * 的 403 回應」也帶著同一組安全 headers，不會出現一類沒有 CSP 的回應。
  */
 @Component
+@Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class SecurityHeadersFilter extends OncePerRequestFilter {
 
     private static final String CSP =

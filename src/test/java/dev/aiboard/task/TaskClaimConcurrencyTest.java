@@ -68,7 +68,7 @@ class TaskClaimConcurrencyTest {
             assertThat(results).filteredOn(TaskService.ClaimNextTaskResult::claimed).hasSize(1);
             assertThat(results).filteredOn(result -> !result.claimed()).hasSize(1);
             Task persisted = taskRepository.findAll().getFirst();
-            assertThat(persisted.getStatus()).isEqualTo("IN_PROGRESS");
+            assertThat(persisted.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
             assertThat(persisted.getAssignee()).isIn("backend-dev-a", "backend-dev-b");
             assertThat(persisted.getClaimedAt()).isNotNull();
         }
@@ -141,7 +141,7 @@ class TaskClaimConcurrencyTest {
                     .filter(t -> "被卡住的後端任務".equals(t.getTitle()))
                     .findFirst()
                     .orElseThrow();
-            assertThat(stillBlocked.getStatus()).isEqualTo("TODO");
+            assertThat(stillBlocked.getStatus()).isEqualTo(TaskStatus.TODO);
             assertThat(stillBlocked.getAssignee()).isNull();
         }
     }
@@ -174,7 +174,7 @@ class TaskClaimConcurrencyTest {
                 .isInstanceOf(dev.aiboard.common.BoardException.class);
 
         Task stillInProgress = taskRepository.findById(taskId).orElseThrow();
-        assertThat(stillInProgress.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(stillInProgress.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
 
         // 真正的認領者帶對 token 才能完成（走 complete_task，同樣受 token 保護）。
         TaskCompleteService.CompleteResult result = taskCompleteService.completeTask(
@@ -182,7 +182,7 @@ class TaskClaimConcurrencyTest {
                 List.of(new TaskCompleteService.VerificationInput("手動確認", "PASSED", null)),
                 null, null, null);
         assertThat(result.task().status()).isEqualTo("DONE");
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
     }
 
     @Test
@@ -234,7 +234,7 @@ class TaskClaimConcurrencyTest {
 
             assertThat(realSucceeded).isTrue();
             assertThat(fakeSucceeded).isFalse();
-            assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo("DONE");
+            assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
         }
     }
 

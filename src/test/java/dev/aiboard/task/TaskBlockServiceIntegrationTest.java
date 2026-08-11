@@ -1,6 +1,7 @@
 package dev.aiboard.task;
 
 import dev.aiboard.common.BoardException;
+import dev.aiboard.event.BoardEvent;
 import dev.aiboard.project.ProjectRepository;
 import dev.aiboard.project.ProjectService;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -35,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         "spring.jpa.hibernate.ddl-auto=validate",
         "logging.file.name=/tmp/ai-project-board-task-136-block-test.log"
 })
+@RecordApplicationEvents
 class TaskBlockServiceIntegrationTest {
 
     private static final List<String> ALLOWED_REASONS = List.of(
@@ -54,6 +58,7 @@ class TaskBlockServiceIntegrationTest {
     @Autowired private TaskCompletionVerificationRepository verificationRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private ApplicationEvents publishedEvents;
 
     private final AtomicInteger sequence = new AtomicInteger();
 
@@ -95,7 +100,7 @@ class TaskBlockServiceIntegrationTest {
 
             assertThat(result.reasonType().name()).isEqualTo(reason);
             assertThat(taskRepository.findById(claimed.taskId()).orElseThrow().getStatus())
-                    .isEqualTo("BLOCKED");
+                    .isEqualTo(TaskStatus.BLOCKED);
         }
 
         Claimed invalid = createClaimedTask();
@@ -118,6 +123,32 @@ class TaskBlockServiceIntegrationTest {
 
         assertUnchangedInProgress(claimed.taskId());
         assertThat(blockEventRepository.findByTaskIdOrderByIdAsc(claimed.taskId())).isEmpty();
+    }
+
+    /**
+     * BLOCKED 是唯一一定需要人介入的狀態，前端的桌面通知就掛在這個事件上。
+     * payload 少了 title，通知內容只會是「任務 #42 → BLOCKED」——讀了還是得回看板
+     * 查是哪一個任務，通知本身就沒有意義了。因此把它當成對外契約來測，而不是
+     * 只確認事件有發出去。
+     */
+    @Test
+    void blockTask_publishesEventCarryingTaskTitleForDesktopNotifications() {
+        Claimed claimed = createClaimedTask();
+
+        taskBlockService.blockTask(
+                claimed.taskId(), claimed.token(), "TECHNICAL", "等待上游修掉編碼問題", null, null);
+
+        BoardEvent blockedEvent = publishedEvents.stream(BoardEvent.class)
+                .filter(event -> "task.status_changed".equals(event.type()))
+                .filter(event -> "BLOCKED".equals(event.payload().get("to")))
+                .reduce((first, second) -> second)
+                .orElseThrow(() -> new AssertionError("沒有發出轉為 BLOCKED 的 task.status_changed 事件"));
+
+        assertThat(blockedEvent.payload())
+                .containsEntry("projectId", claimed.projectId())
+                .containsEntry("taskId", claimed.taskId())
+                .containsEntry("title", "受測任務")
+                .containsEntry("from", "IN_PROGRESS");
     }
 
     @Test
@@ -190,7 +221,7 @@ class TaskBlockServiceIntegrationTest {
         taskService.resetClaimAsLeader(blocked.taskId(), "agent 已離線");
 
         Task reset = taskRepository.findById(blocked.taskId()).orElseThrow();
-        assertThat(reset.getStatus()).isEqualTo("TODO");
+        assertThat(reset.getStatus()).isEqualTo(TaskStatus.TODO);
         assertThat(reset.getAssignee()).isNull();
         assertCleared(blocked);
         assertThat(taskDetailService.getTaskDetail(blocked.projectId(), blocked.taskId()).currentBlocker())
@@ -205,7 +236,7 @@ class TaskBlockServiceIntegrationTest {
                 List.of(new TaskCompleteService.VerificationInput("回歸測試", "PASSED", null)),
                 "src/main/Foo.java", "abc123", null);
 
-        assertThat(taskRepository.findById(blocked.taskId()).orElseThrow().getStatus()).isEqualTo("DONE");
+        assertThat(taskRepository.findById(blocked.taskId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
         assertCleared(blocked);
         assertThat(taskDetailService.getTaskDetail(blocked.projectId(), blocked.taskId()).currentBlocker())
                 .isNull();
@@ -248,7 +279,7 @@ class TaskBlockServiceIntegrationTest {
 
         Task persisted = taskRepository.findById(blocked.taskId()).orElseThrow();
         TaskBlockEvent event = blockEventRepository.findById(blocked.eventId()).orElseThrow();
-        assertThat(persisted.getStatus()).isEqualTo("BLOCKED");
+        assertThat(persisted.getStatus()).isEqualTo(TaskStatus.BLOCKED);
         assertThat(persisted.getCurrentBlockEventId()).isEqualTo(blocked.eventId());
         assertThat(event.getClearedAt()).isNull();
         assertThat(taskDetailService.getTaskDetail(blocked.projectId(), blocked.taskId()).currentBlocker())
@@ -280,7 +311,7 @@ class TaskBlockServiceIntegrationTest {
         var result = taskBlockService.blockTask(claimed.taskId(), claimed.token(), reasonType,
                 "原始阻礙說明", blockingTaskIds, null);
         Task persisted = taskRepository.findById(claimed.taskId()).orElseThrow();
-        assertThat(persisted.getStatus()).isEqualTo("BLOCKED");
+        assertThat(persisted.getStatus()).isEqualTo(TaskStatus.BLOCKED);
         assertThat(persisted.getCurrentBlockEventId()).isNotNull();
         return new Blocked(claimed.projectId(), claimed.taskId(), claimed.token(),
                 persisted.getCurrentBlockEventId(), result.detail());
@@ -288,7 +319,7 @@ class TaskBlockServiceIntegrationTest {
 
     private void assertUnchangedInProgress(Long taskId) {
         Task task = taskRepository.findById(taskId).orElseThrow();
-        assertThat(task.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
         assertThat(task.getCurrentBlockEventId()).isNull();
     }
 

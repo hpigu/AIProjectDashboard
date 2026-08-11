@@ -28,7 +28,7 @@ class OperationalSafetyConfigurationTest {
 
     @Test
     void startupBackupRunsBeforeJarAndAbortsOnFailure() throws Exception {
-        String script = Files.readString(Path.of("bin/start-board.sh"));
+        String script = Files.readString(Path.of("bin/board"));
         int backup = script.indexOf("backup_database \"${DB_FILE_PATH}.mv.db\"");
         int launch = script.indexOf("\"$JAVA_BIN\" -jar \"$JAR_PATH\"");
 

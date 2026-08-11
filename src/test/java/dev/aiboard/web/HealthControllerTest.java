@@ -42,11 +42,12 @@ class HealthControllerTest {
     @Test
     void publicHealthIsMinimalAndDoesNotLeakDatabaseOrSecrets() throws Exception {
         when(healthService.getHealth()).thenReturn(new HealthService.HealthInfo(
-                "3.0.0", List.of("list_tasks"), Instant.parse("2026-08-02T00:00:00Z")));
+                "3.1.0", "f23cd31", List.of("list_tasks"), Instant.parse("2026-08-02T00:00:00Z")));
 
         mockMvc.perform(get("/api/health"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.version").value("3.0.0"))
+                .andExpect(jsonPath("$.version").value("3.1.0"))
+                .andExpect(jsonPath("$.commit").value("f23cd31"))
                 .andExpect(jsonPath("$.tools[0]").value("list_tasks"))
                 .andExpect(content().string(not(containsString("jdbc:"))))
                 .andExpect(content().string(not(containsString("password"))))

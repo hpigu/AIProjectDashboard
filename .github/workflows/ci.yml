@@ -1,0 +1,187 @@
+name: CI
+
+# 每個 push 與 PR 都跑一次完整測試。專案原本沒有任何 CI，223 個測試只在
+# 開發者本機跑過，PR 沒有自動門檻——這個 workflow 就是那道門檻。
+# push 只綁 main：分支上的 push 與該分支的 PR 會各觸發一次，三個 job 就變成六個
+# 檢查，兩兩內容完全相同。concurrency 擋不掉，因為 push 的 github.ref 是
+# refs/heads/<branch>、PR 的是 refs/pull/<n>/merge，屬於兩個不同的 group。
+# 現在：分支開了 PR 就由 pull_request 跑，合進 main 由 push 跑，覆蓋率不變。
+# 還沒開 PR 的分支要臨時跑一輪時，用 workflow_dispatch 手動觸發。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # 同一分支連續推送時，取消還在跑的舊 run，不佔用 runner 額度。
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 測試（JDK 21）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # AGENTS.md 的隔離要求：正式看板的 :8080 與預設資料庫不得拿來跑測試。
+      # CI 容器雖然是全新環境，仍照同一組規則設定，讓 CI 與本機指令一致。
+      BOARD_PORT: '8081'
+      BOARD_DB_URL: 'jdbc:h2:file:./data/ci;DB_CLOSE_ON_EXIT=FALSE'
+      BOARD_LOG_FILE: './logs/ci.log'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 設定 JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: 執行測試
+        run: ./mvnw -B test
+
+      - name: 組裝 jar（確認 package 週期同樣可用）
+        run: ./mvnw -B -DskipTests package
+
+      - name: 上傳測試報告（失敗時才需要）
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 7
+
+  scripts:
+    name: 啟動腳本靜態檢查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # 受檢腳本只列一次。原本語法檢查與 shellcheck 各自維護一份清單，新增腳本
+      # 要改兩處，改漏一處就靜靜少一半覆蓋——正是這個 workflow 想擋的那種漏。
+      SHELL_SCRIPTS: >-
+        bin/board bin/board-env.sh bin/backup-db.sh bin/restore-db.sh
+        scripts/check-versions.sh scripts/shell-check/check.sh
+        scripts/check-plugin-parity.sh
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # 版號散落在三份 plugin manifest 與 README 的安裝指令裡，彼此沒有任何機制
+      # 互相對照。這件事已經出過兩次包：先是 MCP 的 serverInfo.version 寫死，修完
+      # 之後三份 manifest 仍然停在 3.0.0，而 plugin.json 的版號正是陌生人安裝時
+      # 看到的那個數字。放在這個 job 的第一步（它只需要 bash，不必等 JDK 與
+      # Maven 快取），讓「忘記跳版」在十秒內紅燈，而不是跑完整輪測試才發現。
+      # 新增的腳本忘了帶執行權限位元，在 CI 上是 exit 126（「找得到但不可執行」）
+      # ——一個完全不提示原因的離開碼。這已經是第三次：`8c13217` 補過兩支，
+      # `check-plugin-parity.sh` 又中一次。根因是作者在 Windows 上開發，git 的
+      # core.fileMode 預設 false，本機 chmod +x 根本不會進版；在 macOS/Linux 上
+      # 開發則完全不會遇到，所以無法靠「記得」解決。這一步放最前面，十秒內紅燈。
+      - name: 確認受檢腳本都有執行權限位元
+        run: |
+          missing=0
+          for script in ${SHELL_SCRIPTS}; do
+            mode="$(git ls-files -s "${script}" | cut -d' ' -f1)"
+            if [ "${mode}" != "100755" ]; then
+              echo "::error file=${script}::${script} 在 git 裡的 mode 是 ${mode}，應為 100755。"
+              echo "  修法：git update-index --chmod=+x ${script}"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "${missing}" -gt 0 ]; then
+            echo "有 ${missing} 支腳本缺少執行權限位元，CI 執行時會是 exit 126。" >&2
+            exit 1
+          fi
+          echo "全部 $(echo ${SHELL_SCRIPTS} | wc -w) 支腳本的權限位元正確。"
+
+      - name: 確認各 manifest 版號與 pom.xml 一致
+        run: ./scripts/check-versions.sh
+
+      # 同一組治理規則被迫存在兩份（plugin/ 與 .codex-plugin/ 有各自的安裝根目錄，
+      # 檔案沒辦法真的合併）。改了一邊忘了另一邊，兩個平台的使用者就會拿到不同的
+      # 工具邊界，而且不會有任何徵兆。比對的是工具名集合與 category，不是逐行 diff
+      # ——兩邊的行文本來就刻意不同，逐行比會每次都紅燈然後被忽略。
+      - name: 確認兩套 plugin 沒有漂移
+        run: ./scripts/check-plugin-parity.sh
+
+      # 語法檢查與 shellcheck 都看不出「排序鍵算錯」這類邏輯錯誤，而 bin/ 算錯的
+      # 後果是啟動成功卻跑到錯的 jar，完全沒有徵兆。這一步補上行為層的斷言，
+      # 放在 shellcheck 之前，才不用等 apt 裝完才知道邏輯壞了。
+      - name: bash 函式行為檢查
+        run: ./scripts/shell-check/check.sh
+
+      # bin/ 下的腳本是使用者的第一個接觸點，壞掉等於裝不起來，但它們不在
+      # Maven 測試範圍內（只有部分行為由 JUnit 以 ProcessBuilder 覆蓋）。
+      # 這裡先做語法檢查，再跑 shellcheck 補靜態問題。
+      - name: bash 語法檢查
+        run: |
+          for script in ${SHELL_SCRIPTS}; do
+            echo "檢查 ${script}"
+            bash -n "${script}"
+          done
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          # shellcheck 吃多個檔名，這裡刻意不加引號讓 SHELL_SCRIPTS 展開成多個參數。
+          shellcheck --severity=warning ${SHELL_SCRIPTS}
+
+  windows-scripts:
+    name: Windows 腳本檢查
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # bin/*.ps1 是 Windows 使用者的唯一入口，而它們碰的是使用者的資料庫檔案。
+      # 這個 job 在真正的 Windows 上做語法檢查，並用假的 H2 檔案跑完整的
+      # 備份／保留策略／兩種格式還原／各種拒絕路徑。跑的是 Windows PowerShell
+      # 5.1（Windows 內建版本），確保不會寫進只有 pwsh 7 才有的語法。
+      - name: Windows PowerShell 5.1 檢查
+        shell: powershell
+        run: .\scripts\windows-check\check.ps1
+
+      - name: PowerShell 7 檢查
+        shell: pwsh
+        run: .\scripts\windows-check\check.ps1
+
+  # ---------------------------------------------------------------------------
+  # 依賴弱點掃描
+  #
+  # Dependabot 回答的是「我的依賴有沒有比較新的版本」，不保證你合併前就知道
+  # 「這次改動引進的依賴有沒有已知漏洞」。dependency-review 補的正是後者：它比對
+  # PR 的 base 與 head，只看**這次新增或升級**的依賴，命中已知漏洞就擋下 PR。
+  #
+  # 為什麼不用 OWASP dependency-check：它要下載並維護整份 NVD 資料庫，2023 年起
+  # 沒有 API key 會被 rate limit 到跑數十分鐘，而 API key 要另外申請與存成 secret。
+  # 對單人專案來說那是一條會持續耗維運心力的路，而它解的問題跟這個 action 高度
+  # 重疊。哪天真的需要「掃描既有依賴而不只是新增的」，再評估把它加成排程 job。
+  #
+  # 只在 PR 上跑：這個 action 的輸入就是「兩個 commit 之間的依賴差異」，push 到
+  # main 沒有可比的 base。
+  # ---------------------------------------------------------------------------
+  dependency-review:
+    name: 依賴弱點檢查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 檢查新增／升級的依賴有無已知漏洞
+        uses: actions/dependency-review-action@v4
+        with:
+          # moderate 以上才擋。單機、只聽 loopback 的服務把 low 也設成阻擋，
+          # 只會製造一堆得手動放行的 PR，最後變成無條件放行的橡皮圖章。
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure

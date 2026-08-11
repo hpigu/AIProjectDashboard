@@ -3,7 +3,6 @@ package dev.aiboard.project;
 import dev.aiboard.common.BoardException;
 import dev.aiboard.event.BoardEvent;
 import dev.aiboard.event.BoardEventPublisher;
-import dev.aiboard.task.Task;
 import dev.aiboard.task.TaskRepository;
 import dev.aiboard.task.TaskStatus;
 import org.springframework.stereotype.Service;
@@ -95,16 +94,16 @@ public class ProjectArchiveService {
 
     private StatusCounts statusCounts(Long projectId) {
         return new StatusCounts(
-                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.TODO.name()),
-                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.IN_PROGRESS.name()),
-                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.BLOCKED.name()),
-                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE.name()));
+                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.TODO),
+                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.IN_PROGRESS),
+                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.BLOCKED),
+                taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE));
     }
 
     private List<Assignee> assignees(Long projectId) {
         return taskRepository.findByProjectIdOrderBySortOrderAsc(projectId).stream()
                 .filter(task -> task.getAssignee() != null && !task.getAssignee().isBlank())
-                .map(task -> new Assignee(task.getId(), task.getTitle(), task.getStatus(), task.getAssignee()))
+                .map(task -> new Assignee(task.getId(), task.getTitle(), task.getStatus().name(), task.getAssignee()))
                 .toList();
     }
 

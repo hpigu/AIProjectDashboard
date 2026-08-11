@@ -23,20 +23,47 @@ spring:
       server:
         protocol: STREAMABLE
         name: project-board
-        version: 3.0.0
+        # 從 pom 的 ${project.version} 帶入，不要寫死：這個值會出現在 MCP
+        # initialize 回應的 serverInfo.version，是 agent 端唯一看得到的版本。
+        # 寫死的話跳版時必然忘記改，實際就發生過（3.1.0 的 build 仍回報 3.0.0）。
+        # 引號不可省：YAML 把行首的 @ 視為保留字元，未引號會解析失敗。
+        # 過濾由 spring-boot-starter-parent 對 application*.yml 預設開啟。
+        version: '@project.version@'
 
 server:
   address: ${BOARD_HOST:127.0.0.1}
   port: ${BOARD_PORT:8080}
 
 board:
+  security:
+    # Host/Origin 白名單的額外項目（逗號分隔，可含埠號）。預設空值即「只接受
+    # loopback 與 server.address」，用於擋下 DNS rebinding，見
+    # config/LocalOriginGuardFilter。刻意要讓區網其他裝置或反向代理連入時才設定，
+    # 例如 BOARD_ALLOWED_HOSTS=192.168.1.20,board.local。設定它不會產生任何認證。
+    allowed-hosts: ${BOARD_ALLOWED_HOSTS:}
+  sse:
+    # 每條 /api/events 連線都佔用一個永不結束的 Tomcat async request。單機看板
+    # 正常是個位數分頁，上限是為了讓異常情況以明確的 503 收場而非慢慢拖垮行程。
+    max-connections: ${BOARD_SSE_MAX_CONNECTIONS:32}
+    # 每個客戶端的事件緩衝。滿了代表該客戶端跟不上，連線會被結束，讓前端重連後
+    # 整批重抓——比默默丟事件、讓畫面停在錯誤狀態要好。
+    client-queue-capacity: ${BOARD_SSE_CLIENT_QUEUE_CAPACITY:128}
   backup:
     # 與 bin/backup-db.sh 的啟動前備份共用同一個 BOARD_BACKUP_DIR（見
-    # bin/start-board.sh 第 4.5 節），確保 startup／shutdown 兩種備份
-    # 落在同一個目錄，方便管理與保留策略一併檢視。
+    # bin/board start 的啟動前備份），確保 startup／shutdown／scheduled 三種
+    # 備份落在同一個目錄，方便管理與保留策略一併檢視。
     dir: ${BOARD_BACKUP_DIR:${user.home}/.ai-project-board/backups}
+    # 保留策略是「依 phase 分桶」的：startup／shutdown／scheduled 各自擁有
+    # 獨立的份數額度，因此頻繁的排程備份不會把關閉前那份快照擠掉。
     retention-days: ${BOARD_BACKUP_RETENTION_DAYS:30}
     retention-min-count: ${BOARD_BACKUP_RETENTION_MIN_COUNT:7}
+    schedule:
+      # 定期備份。看板長時間不重啟正是它的預期用法，而在此之前備份只在啟動與
+      # 關閉發生——連續跑兩週等於兩週沒有新快照。
+      enabled: ${BOARD_BACKUP_SCHEDULE_ENABLED:true}
+      # 支援 6h、90m、PT6H 等寫法。間隔從「上一次執行結束」起算，且啟動後會先
+      # 等一個間隔才跑第一次（啟動前備份剛做過，不需要馬上再來一份）。
+      interval: ${BOARD_BACKUP_INTERVAL:6h}
 
 logging:
   # 實際輪替策略（每日/容量雙門檻、gzip 壓縮、保留天數、總容量上限）

@@ -59,7 +59,7 @@ class TaskCompleteServiceTest {
         setField(task, "id", taskId);
         setField(task, "assignee", assignee);
         setField(task, "claimedAt", LocalDateTime.now());
-        setField(task, "status", TaskStatus.IN_PROGRESS.name());
+        setField(task, "status", TaskStatus.IN_PROGRESS);
         return task;
     }
 
@@ -84,7 +84,7 @@ class TaskCompleteServiceTest {
                 });
         when(verificationRepository.save(any(TaskCompletionVerification.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(taskRepository.countByProjectIdAndStatus(projectId, "DONE")).thenReturn(1L);
+        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(1L);
         when(taskRepository.countByProjectId(projectId)).thenReturn(2L);
     }
 
@@ -112,7 +112,7 @@ class TaskCompleteServiceTest {
         TaskCompleteService.CompleteResult result =
                 service.completeTask(taskId, null, "完成 CRUD API", verifications, "Foo.java", "abc123", null);
 
-        assertThat(task.getStatus()).isEqualTo("DONE");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.DONE);
         assertThat(result.task().status()).isEqualTo("DONE");
         assertThat(result.evidence().summary()).isEqualTo("完成 CRUD API");
         assertThat(result.evidence().verifications()).hasSize(1);
@@ -125,6 +125,9 @@ class TaskCompleteServiceTest {
         ArgumentCaptor<BoardEvent> eventCaptor = ArgumentCaptor.forClass(BoardEvent.class);
         verify(eventPublisher).publish(eventCaptor.capture());
         assertThat(eventCaptor.getValue().type()).isEqualTo("task.status_changed");
+        assertThat(eventCaptor.getValue().payload())
+                .containsEntry("title", "實作交易 CRUD API")
+                .containsEntry("to", "DONE");
     }
 
     @Test
@@ -196,7 +199,7 @@ class TaskCompleteServiceTest {
                 .isInstanceOf(BoardException.class)
                 .hasMessageContaining("FAILED");
 
-        assertThat(task.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
         verify(evidenceRepository, never()).save(any());
         verify(taskLogRepository, never()).save(any());
         verify(eventPublisher, never()).publish(any());

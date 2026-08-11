@@ -41,12 +41,68 @@
   margin: 0;
 }
 
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .conn-status {
   font-family: var(--font-data);
   font-size: 13px;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ---- BLOCKED 桌面通知開關 ----
+   沿用連線指示器的燈號語彙：一顆點加一行等寬字。點亮起來就是「這條警報線是通
+   的」，與 andon 的判讀方式一致，不另外引入圖示系統。 */
+.notify-toggle {
+  font-family: var(--font-data);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.notify-toggle:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.notify-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--muted);
+  /* 關閉時是空心的：一眼就能分辨「警報線沒接上」與「接上但目前沒事」。 */
+  box-shadow: inset 0 0 0 2px var(--ground);
+}
+
+.notify-toggle.is-on {
+  color: var(--text);
+  border-color: var(--st-blocked);
+}
+
+.notify-toggle.is-on .notify-dot {
+  background: var(--st-blocked);
+  box-shadow: none;
+}
+
+/* 權限被瀏覽器封鎖時不是「關著」而是「按了也沒用」，必須看得出差別，
+   否則使用者只會反覆點同一個沒有反應的按鈕。 */
+.notify-toggle.is-blocked {
+  border-style: dashed;
+  cursor: help;
 }
 
 .conn-dot {
@@ -62,6 +118,87 @@
   color: var(--muted);
   font-size: 15px;
   padding: 48px 8px;
+}
+
+/* ---- 首次啟動引導 ----
+   看板第一次開起來必然是空的（寫入只走 MCP，REST 唯讀，沒有種子資料），
+   原本只顯示一行「還沒有符合條件的專案」，等於把新使用者留在原地。 */
+.onboarding {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 28px 32px;
+  margin-top: 24px;
+  max-width: 720px;
+}
+
+.onboarding-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+.onboarding-lead,
+.onboarding-foot {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 0 0 20px;
+}
+
+.onboarding-foot {
+  margin: 20px 0 0;
+}
+
+.onboarding-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.onboarding-steps li {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.onboarding-hint {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.onboarding-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.onboarding-endpoint code {
+  font-family: var(--font-data);
+  font-size: 13px;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+.onboarding-copy {
+  font-family: var(--font-data);
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.onboarding-copy:hover {
+  border-color: var(--st-progress);
 }
 
 /* ---- 篩選器 ---- */

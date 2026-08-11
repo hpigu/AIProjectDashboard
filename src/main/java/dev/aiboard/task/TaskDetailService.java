@@ -55,13 +55,13 @@ public class TaskDetailService {
         CompletionEvidence completionEvidence = readCurrentEvidence(taskId);
 
         return new TaskDetail(task.getId(), task.getProjectId(), task.getTitle(), task.getDescription(),
-                task.getStatus(), task.getCategory(), task.getSortOrder(), task.getAssignee(),
+                task.getStatus().name(), task.getCategory(), task.getSortOrder(), task.getAssignee(),
                 task.getClaimedAt(), task.getCreatedAt(), task.getUpdatedAt(), task.getVersion(),
                 prerequisites, downstreamTasks, history, currentBlocker, completionEvidence);
     }
 
     private RelatedTask toRelatedTask(TaskDependencyRepository.RelatedTaskProjection row) {
-        return new RelatedTask(row.getId(), row.getTitle(), row.getStatus(), row.getCategory(),
+        return new RelatedTask(row.getId(), row.getTitle(), row.getStatus().name(), row.getCategory(),
                 row.getAssignee());
     }
 

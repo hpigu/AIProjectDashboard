@@ -1,0 +1,26 @@
+version: 2
+
+# 專案依賴 Spring Boot、Spring AI、H2、Flyway，且 /mcp 沒有認證層，
+# 更需要及時跟上上游的安全修補。每週檢查一次即可，避免 PR 洗版。
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Spring Boot 的模組必須整組一起升，分開升版容易產生版本不一致。
+      spring:
+        patterns:
+          - 'org.springframework.*'
+          - 'org.springframework.boot:*'
+          - 'org.springframework.ai:*'
+    commit-message:
+      prefix: 'deps'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: 'ci'

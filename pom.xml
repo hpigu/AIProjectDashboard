@@ -13,13 +13,14 @@
 
     <groupId>dev.aiboard</groupId>
     <artifactId>ai-project-board-backend</artifactId>
-    <version>3.0.0</version>
+    <version>3.1.0</version>
     <name>ai-project-board-backend</name>
     <description>AI Project Board MCP Server (Streamable HTTP) + REST/SSE</description>
 
     <properties>
         <java.version>21</java.version>
         <spring-ai.version>1.1.8</spring-ai.version>
+        <git-commit-id-plugin.version>9.0.1</git-commit-id-plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -47,6 +48,16 @@
                     <groupId>com.knuddels</groupId>
                     <artifactId>jtokkit</artifactId>
                 </exclusion>
+                <!-- javax.validation:validation-api 1.1.0.Final 是 2014 年的產物，
+                     javax 命名空間早已被 jakarta.validation 取代且不再維護。它經由
+                     spring-ai-commons -> jackson-module-jsonSchema 傳遞進來，本專案
+                     的 main 與 test 程式碼完全沒有 javax.validation / jakarta.validation
+                     的任何引用（grep 零命中）。留著只是讓弱點掃描多一個永遠不會被修的
+                     報告項目。 -->
+                <exclusion>
+                    <groupId>javax.validation</groupId>
+                    <artifactId>validation-api</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
@@ -73,8 +84,15 @@
         </dependency>
 
         <dependency>
+            <!-- runtime 而非 compile：H2 只以 JDBC driver 身分被反射載入
+                 （application.yml 的 driver-class-name），main 程式碼沒有任何
+                 org.h2 引用。降 scope 之後，若哪天有人直接 import org.h2.*
+                 把服務綁死在 H2 上，編譯期就會擋下來而不是等到換 DB 才發現。
+                 spring-boot-maven-plugin 的 repackage 仍會把 runtime scope 打進
+                 fat jar，執行不受影響。 -->
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <dependency>
@@ -101,6 +119,56 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <!-- 產生 target/classes/META-INF/build-info.properties，Spring Boot
+                             的 ProjectInfoAutoConfiguration 會據此建立 BuildProperties bean。
+                             關鍵在於它寫進 classes 目錄而不是 jar 的 manifest：mvnw
+                             spring-boot:run 與 IDE 直接跑 main 也讀得到，/api/health 才不會
+                             在開發時一律回報 "unknown"。 -->
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <!-- 產生 target/classes/git.properties → GitProperties bean，讓
+                     /api/health 帶得出這份 build 到底是哪一個 commit。沒有它就只有版號，
+                     而同一個版號在 tag 前後可能對應好幾份不同的 build。 -->
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>${git-commit-id-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>get-the-git-infos</id>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                        <phase>initialize</phase>
+                    </execution>
+                </executions>
+                <configuration>
+                    <generateGitPropertiesFile>true</generateGitPropertiesFile>
+                    <generateGitPropertiesFilename>
+                        ${project.build.outputDirectory}/git.properties
+                    </generateGitPropertiesFilename>
+                    <!-- 從沒有 .git 的原始碼壓縮檔建置是正常情境（release 頁面的
+                         Source code (zip)），此時應該少一個欄位而不是整個 build 失敗。
+                         BuildInfoProvider 對缺少 GitProperties 有退路。 -->
+                    <failOnNoGitDirectory>false</failOnNoGitDirectory>
+                    <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
+                    <!-- 只留健康端點與診斷會用到的欄位。預設會寫入 committer 的姓名與
+                         e-mail，那些會一路進到公開 release 的 jar 裡，沒有必要。 -->
+                    <includeOnlyProperties>
+                        <includeOnlyProperty>^git.commit.id.abbrev$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.commit.id.full$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.commit.time$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.branch$</includeOnlyProperty>
+                        <includeOnlyProperty>^git.dirty$</includeOnlyProperty>
+                    </includeOnlyProperties>
+                </configuration>
             </plugin>
         </plugins>
     </build>

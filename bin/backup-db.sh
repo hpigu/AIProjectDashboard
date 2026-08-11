@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # backup-db.sh — 啟動前資料庫冷備份與保留策略
 #
-# 由 bin/start-board.sh 在確認 H2 檔案未被其他行程持有之後、啟動 jar
+# 由 bin/board start 在確認 H2 檔案未被其他行程持有之後、啟動 jar
 # （進而觸發 Flyway migration）之前呼叫。目的：一旦某次啟動的 migration
 # 或後續操作把資料庫弄壞，還有啟動當下的快照可以還原。
 #
-# 用法（被 start-board.sh source 後呼叫函式，也可獨立執行）：
+# 用法（被 bin/board source 後呼叫函式，也可獨立執行）：
 #   source bin/backup-db.sh
 #   backup_database "$DB_MV_FILE" "$BACKUP_DIR"
 #
@@ -22,13 +22,23 @@
 #      對 H2 Driver／JDBC 的依賴（開機腳本不應該還要拉 classpath），只做
 #      檔案層級的完整性檢查。
 #   4. 備份失敗（複製失敗、驗證失敗、目錄建立失敗等）一律回傳非 0，呼叫端
-#      （start-board.sh）必須因此中止啟動，不得繼續 migrate。
+#      （bin/board start）必須因此中止啟動，不得繼續 migrate。
 #   5. 保留策略：刪除 30 天前的備份，但刪除後至少要留最新 7 份——即使
 #      所有備份都超過 30 天，也只刪到剩 7 份為止；不足 7 份時完全不刪。
 #   6. 不引入常駐、排程（cron/launchd）或跨 OS 互動 CLI；純粹是啟動流程中
 #      的一個同步步驟。
 
 set -u
+
+# 需要 board_file_mtime()（見 board-env.sh 內對 stat 可攜性的完整說明：
+# GNU 與 BSD 的 stat 時間格式選項不同，寫錯會讓保留策略拿到垃圾時間戳）。
+# bin/board 會先 source board-env.sh，此時不必重複載入；獨立執行時自行載入。
+if ! declare -f board_file_mtime >/dev/null 2>&1; then
+  _BACKUP_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  REPO_ROOT="${REPO_ROOT:-$(cd -P "${_BACKUP_SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)}"
+  # shellcheck source=bin/board-env.sh
+  source "${_BACKUP_SCRIPT_DIR}/board-env.sh"
+fi
 
 _backup_log()  { printf '[backup-db] %s\n' "$*"; }
 _backup_err()  { printf '[backup-db][錯誤] %s\n' "$*" >&2; }
@@ -109,18 +119,32 @@ _backup_apply_retention() {
   local total="${#files[@]}"
   [ "$total" -eq 0 ] && return 0
 
-  # 依 mtime 新到舊排序（macOS/BSD 與 GNU find 皆可用的可攜寫法：用 stat 取
-  # mtime 後交給 sort，避免依賴 find -newer 之類非可攜選項）。
+  # 依 mtime 新到舊排序（用 stat 取 mtime 後交給 sort，避免依賴 find -newer
+  # 之類非可攜選項）。時間戳一律經 board_file_mtime 取得，它會處理 GNU 與 BSD
+  # 的 stat 差異並保證回傳純數字。
   local sortable=()
   local f mtime
   for f in "${files[@]}"; do
-    mtime="$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null)"
+    if ! mtime="$(board_file_mtime "$f")"; then
+      # 取不到時間戳就無法判斷新舊；保守起見保留該檔案，不納入刪除候選。
+      _backup_err "無法取得備份檔時間戳，保留不刪：$f"
+      continue
+    fi
     sortable+=("${mtime}:${f}")
   done
 
+  [ "${#sortable[@]}" -eq 0 ] && return 0
+
+  # 逐行讀進陣列，不用 sorted=($(...))：後者會依 IFS 對命令輸出做 word splitting，
+  # 備份目錄路徑一旦含有空白（macOS 的家目錄很常見），單一項目會被拆成兩筆，
+  # 保留策略就會對著不存在的路徑做判斷。也刻意不用 mapfile——macOS 內建的
+  # bash 3.2 沒有這個 builtin，而本腳本必須能在原生 bash 上跑。
   local sorted=()
-  IFS=$'\n' sorted=($(printf '%s\n' "${sortable[@]}" | sort -t: -k1,1nr))
-  unset IFS
+  local sorted_entry
+  while IFS= read -r sorted_entry; do
+    [ -n "$sorted_entry" ] || continue
+    sorted+=("$sorted_entry")
+  done < <(printf '%s\n' "${sortable[@]}" | sort -t: -k1,1nr)
 
   # remaining 追蹤「目前為止仍會保留的實際份數」，不是走訪位置。30 天內的
   # 檔案一律保留並計入 remaining；30 天外的檔案，只有在刪除後 remaining
@@ -130,6 +154,16 @@ _backup_apply_retention() {
   for entry in "${sorted[@]}"; do
     entry_mtime="${entry%%:*}"
     entry_file="${entry#*:}"
+
+    # 縱深防禦：任何非純數字的時間戳都不可以走到 rm。這裡曾因 stat 的可攜性
+    # 問題而收到檔案系統資訊字串，導致刪除判斷完全失效。
+    case "$entry_mtime" in
+      ''|*[!0-9]*)
+        _backup_err "略過無法判讀時間戳的項目：$entry_file"
+        remaining=$((remaining + 1))
+        continue
+        ;;
+    esac
 
     if [ "$entry_mtime" -ge "$cutoff_epoch" ]; then
       # 30 天內，一律保留。

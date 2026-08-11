@@ -73,7 +73,7 @@ public class TaskCompleteService {
                     .formatted(project.name(), taskId));
         }
 
-        TaskStatus current = TaskStatus.valueOf(task.getStatus());
+        TaskStatus current = task.getStatus();
         // #137：complete_task 是比通用 update_task_status 更嚴謹的替代路徑（帶
         // claim token／expectedVersion／完成證據驗證），額外允許 BLOCKED 直接轉
         // DONE——語意是「帶著已完成的證據回報，任務本身不再受阻」。這裡刻意不放寬
@@ -139,10 +139,10 @@ public class TaskCompleteService {
         String logNote = "complete_task：%s".formatted(trimmedSummary);
         taskLogRepository.save(new TaskLog(taskId, current.name(), TaskStatus.DONE.name(), logNote));
         eventPublisher.publish(BoardEvent.taskStatusChanged(
-                task.getProjectId(), taskId, current.name(), TaskStatus.DONE.name(),
+                task.getProjectId(), taskId, task.getTitle(), current.name(), TaskStatus.DONE.name(),
                 task.getUpdatedAt().toString()));
 
-        long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE.name());
+        long doneCount = taskRepository.countByProjectIdAndStatus(task.getProjectId(), TaskStatus.DONE);
         long totalCount = taskRepository.countByProjectId(task.getProjectId());
 
         return new CompleteResult(toDto(task), project, doneCount, totalCount,
@@ -213,7 +213,7 @@ public class TaskCompleteService {
 
     private TaskService.TaskDto toDto(Task task) {
         return new TaskService.TaskDto(task.getId(), task.getProjectId(), task.getTitle(),
-                task.getDescription(), task.getStatus(), task.getCategory(), task.getSortOrder(),
+                task.getDescription(), task.getStatus().name(), task.getCategory(), task.getSortOrder(),
                 task.getAssignee(), task.getClaimedAt());
     }
 
