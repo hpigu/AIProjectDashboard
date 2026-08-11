@@ -420,6 +420,8 @@ Flyway、Vue 3（零建置，執行檔與字型皆 vendor 進 repo，前端完�
 | [docs/mcp-tools.md](docs/mcp-tools.md) | 完整 MCP 工具與 REST 端點參考、狀態機、完成證據、治理規則 |
 | [docs/agent-roles.md](docs/agent-roles.md) | 六個角色、兩階段派工流程、薄殼與看板指引的兩層來源 |
 | [docs/installation.md](docs/installation.md) | 完整安裝指南、資料目錄規劃、plugin 疑難排解 |
+| [docs/release-install-update-sop.md](docs/release-install-update-sop.md) | Claude／Codex 共用的 GitHub 發布、安裝與更新 SOP：marketplace 加入/更新、plugin 安裝、server 首次安裝、`board update`、版本相容矩陣、本機轉 Git marketplace 的影響與回退 |
+| [docs/release-contract.md](docs/release-contract.md) | Release asset 契約：檔名、SHA-256 清單格式、四平台 CI 流程 |
 | [docs/operations.md](docs/operations.md) | 維運手冊：啟停、備份還原演練、開機自動啟動、疑難排解 |
 | [docs/roadmap.md](docs/roadmap.md) | 產品化清單與決策紀錄（想知道「為什麼是這樣」看這份） |
 | [AGENTS.md](AGENTS.md) | 給 AI agent 的開發規則（架構限制、開發用埠號與資料庫隔離） |
