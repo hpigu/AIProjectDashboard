@@ -65,6 +65,7 @@ $scriptFiles = @(
     (Join-Path $PSScriptRoot 'check.ps1'),
     (Join-Path $PSScriptRoot 'release-check.ps1'),
     (Join-Path $PSScriptRoot 'package-fixture.ps1'),
+    (Join-Path $PSScriptRoot 'update-fixture.ps1'),
     (Join-Path $RepoRoot 'scripts\release\package-windows-x64.ps1')
 )
 
@@ -132,6 +133,23 @@ try {
     $dirRules = @($dirAcl.Access | Where-Object { $_.FileSystemRights -match 'FullControl' -and $_.IdentityReference.Value -eq $currentUserName })
     Assert-True ($dirRules.Count -ge 1) '新建目錄的 ACL 僅含目前使用者的 FullControl 規則'
     Assert-True ($dirAcl.Access.Count -eq 1) '新建目錄的 ACL 不含其他規則（無群組／Everyone／繼承規則）'
+
+    # 一次建立多層時，不能只保護最內層。外層或中間祖先若保留預設繼承 ACL，
+    # 同機其他使用者仍能沿路列出敏感資料。刻意建立三層全新的鏈，並直接檢查
+    # 中間祖先，而不是只用 leaf 成功推論父目錄也安全。
+    $secureChainRoot = Join-Path $workRoot 'acl-chain-root'
+    $secureIntermediate = Join-Path $secureChainRoot 'middle'
+    $secureLeaf = Join-Path $secureIntermediate 'leaf'
+    Assert-True (New-BoardSecureDirectory -Path $secureLeaf) '多層新建目錄逐層套用 ACL 成功'
+    $rootAcl = Get-Acl -Path $secureChainRoot
+    $intermediateAcl = Get-Acl -Path $secureIntermediate
+    $intermediateRules = @($intermediateAcl.Access | Where-Object {
+        $_.FileSystemRights -match 'FullControl' -and $_.IdentityReference.Value -eq $currentUserName
+    })
+    Assert-True $rootAcl.AreAccessRulesProtected '新建外層祖先已停用 ACL 繼承'
+    Assert-True $intermediateAcl.AreAccessRulesProtected '新建中間祖先已停用 ACL 繼承'
+    Assert-True ($intermediateRules.Count -ge 1) '新建中間祖先含目前使用者的 FullControl 規則'
+    Assert-True ($intermediateAcl.Access.Count -eq 1) '新建中間祖先不含其他 ACL 規則'
 
     $secureFile = Join-Path $secureDir 'secret.txt'
     [System.IO.File]::WriteAllText($secureFile, 'sensitive')

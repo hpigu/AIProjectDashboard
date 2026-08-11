@@ -69,6 +69,14 @@ final class SensitiveDirectories {
     }
 
     /**
+     * 低頻收斂一個執行期間才出現或被重建的敏感檔案。結果由呼叫端彙總記錄，
+     * 這一層刻意不輸出絕對路徑。
+     */
+    static LocalFilePermissionHardener.PosixFileHardeningResult secureExistingPosixFile(Path file) {
+        return LocalFilePermissionHardener.secureExistingPosixFile(file.toAbsolutePath().normalize());
+    }
+
+    /**
      * 回傳「目前不存在、待會會被 {@code Files.createDirectories} 一併建立」的父目錄
      * 鏈，由最外層（離根最近）到最內層排序，不含 {@code target} 本身。
      */

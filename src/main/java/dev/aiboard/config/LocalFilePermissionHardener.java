@@ -5,11 +5,14 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.AclEntry;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileOwnerAttributeView;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
@@ -66,6 +69,53 @@ final class LocalFilePermissionHardener {
             PosixFilePermission.OWNER_WRITE);
 
     private LocalFilePermissionHardener() {
+    }
+
+    /**
+     * 週期性收斂既有敏感檔案時的結果。呼叫端只依結果輸出不含路徑或連線字串的
+     * 彙總警告，避免 chmod 失敗本身反而把敏感位置寫進 rolling log。
+     */
+    enum PosixFileHardeningResult {
+        SECURED,
+        ALREADY_SECURE,
+        NOT_PRESENT,
+        UNSUPPORTED,
+        FAILED
+    }
+
+    /**
+     * 將一個既有的一般檔案收斂為 {@code 0600}。
+     *
+     * <p>這個入口專供低頻週期修補使用，因此永不拋出例外也不自行記錄路徑。
+     * 檔案可能正好被 H2 重建或被 Logback 輪替，消失視為正常競態；符號連結與
+     * 非一般檔案不跟隨，避免候選目錄內的連結讓服務修改到範圍外的目標。
+     */
+    static PosixFileHardeningResult secureExistingPosixFile(Path path) {
+        try {
+            BasicFileAttributes attributes = Files.readAttributes(
+                    path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!attributes.isRegularFile()) {
+                return PosixFileHardeningResult.NOT_PRESENT;
+            }
+
+            PosixFileAttributeView view = Files.getFileAttributeView(
+                    path, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            if (view == null) {
+                return PosixFileHardeningResult.UNSUPPORTED;
+            }
+
+            Set<PosixFilePermission> current = view.readAttributes().permissions();
+            if (current.equals(FILE_PERMISSIONS)) {
+                return PosixFileHardeningResult.ALREADY_SECURE;
+            }
+
+            view.setPermissions(FILE_PERMISSIONS);
+            return PosixFileHardeningResult.SECURED;
+        } catch (NoSuchFileException ex) {
+            return PosixFileHardeningResult.NOT_PRESENT;
+        } catch (IOException | RuntimeException ex) {
+            return PosixFileHardeningResult.FAILED;
+        }
     }
 
     /**

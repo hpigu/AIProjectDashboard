@@ -17,7 +17,11 @@ $ErrorActionPreference = 'Stop'
 
 function Log { param([string]$Message) Write-Host "[board update] $Message" }
 function Fail { param([string]$Message) throw "[board update] $Message" }
-function Test-FailAt { param([string]$Step) return ($env:BOARD_UPDATE_FAIL_AT -eq $Step) }
+function Test-FailAt {
+    param([string]$Step)
+    if ([string]::IsNullOrWhiteSpace($env:BOARD_UPDATE_FAIL_AT)) { return $false }
+    return @($env:BOARD_UPDATE_FAIL_AT.Split(',') | ForEach-Object { $_.Trim() }) -contains $Step
+}
 function Get-Sha256 { param([string]$Path) return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function Assert-True { param([bool]$Condition, [string]$Message) if (-not $Condition) { Fail $Message } }
 
@@ -122,13 +126,34 @@ try {
         param([string]$Reason)
         Write-Host "[board update][錯誤] update failed at $Reason; beginning rollback"
         $newBoard = Join-Path $targetRoot 'bin\board.ps1'
-        if (Test-Path $newBoard) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard stop *> $null }
+        if (Test-Path $newBoard) {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard stop *> $null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[board update][錯誤] rollback could not stop the target runtime; do not rename either versioned root until the process on port $script:BoardPort is stopped"
+                return $false
+            }
+        }
         if ($oldMoved) {
             $failed = $targetRoot + '.failed-' + [Guid]::NewGuid().ToString('N')
             try {
                 if (Test-Path $targetRoot) { Move-Item -LiteralPath $targetRoot -Destination $failed -ErrorAction Stop }
+                if (Test-FailAt 'rollback_activate') { throw 'failure injection: rollback_activate' }
                 Move-Item -LiteralPath $rollback -Destination $root -ErrorAction Stop
-            } catch { Write-Host "[board update][錯誤] rollback activation failed; recover manually: rename '$rollback' to '$root'"; return $false }
+            } catch {
+                Write-Host "[board update][錯誤] retained target diagnostics: $failed; database snapshot: $snapshot"
+                if ($snapshotReady -and $dbBase -and (Test-Path (Join-Path $snapshot 'board.mv.db'))) {
+                    Write-Host "[board update][錯誤] rollback activation failed; service remains stopped. Manual recovery step 1: Copy-Item -LiteralPath '$snapshot\board.mv.db' -Destination '$($dbBase + '.mv.db')' -Force"
+                } else {
+                    Write-Host '[board update][錯誤] rollback activation failed; service remains stopped. Manual recovery step 1: no pre-update database file existed; do not create one manually'
+                }
+                Write-Host "[board update][錯誤] Manual recovery step 2: Move-Item -LiteralPath '$rollback' -Destination '$root'"
+                if ($wasRunning) {
+                    Write-Host "[board update][錯誤] Manual recovery step 3: & '$root\bin\board.ps1' start"
+                } else {
+                    Write-Host '[board update][錯誤] Manual recovery step 3: leave the service stopped (it was stopped before the update)'
+                }
+                return $false
+            }
         }
         if ($snapshotReady -and $dbBase -and (Test-Path (Join-Path $snapshot 'board.mv.db'))) {
             $expected = (Get-Content (Join-Path $snapshot 'SHA256SUMS.txt') | Where-Object { $_ -match ' board\.mv\.db$' } | Select-Object -First 1).Split(' ')[0]

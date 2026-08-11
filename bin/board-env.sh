@@ -190,6 +190,59 @@ board_secure_file() {
   return 0
 }
 
+# POSIX 子行程繼承呼叫端的 umask。啟動 JVM 前先設成 077，H2 重建 .mv.db、
+# Logback 建立 active／rolling log 時，核心會從建立當下就移除 group／other 權限，
+# 不必等到事後 chmod 才補救，也不需要用高頻輪詢浪費資源。
+board_set_secure_umask() {
+  umask 077
+}
+
+# 啟動前補修既有的 H2 資料庫與 Logback 檔案。這是 `umask 077` 的升級路徑：
+# umask 只影響之後新建的檔案，舊版留下的 0644 檔案仍需顯式收斂。
+#
+# 失敗語意沿用 board_secure_file：既有資料只警告、絕不阻擋啟動或刪改內容。
+# Logback 的 rolling pattern 是 <active-log>.YYYY-MM-DD.<index>.gz，因此只處理
+# active log 的精確名稱與符合該格式的輪替檔，不碰觸同 basename 的其他檔案。
+board_secure_runtime_files() {
+  local db_file="${1:-}"
+  local log_file="${2:-}"
+  local console_file="${3:-}"
+  local file
+  local rolling_index
+  local rolling_name
+
+  if [ -n "$db_file" ] && [ -f "$db_file" ] && [ ! -L "$db_file" ]; then
+    board_secure_file "$db_file" 0
+  fi
+
+  if [ -n "$log_file" ]; then
+    for file in "$log_file" \
+        "$log_file".[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].*.gz; do
+      [ -f "$file" ] || continue
+      [ -L "$file" ] && continue
+
+      if [ "$file" != "$log_file" ]; then
+        rolling_name=${file#"$log_file".}
+        rolling_index=${rolling_name#????-??-??.}
+        rolling_index=${rolling_index%.gz}
+        case "$rolling_index" in
+          ''|*[!0-9]*) continue ;;
+        esac
+      fi
+
+      board_secure_file "$file" 0
+    done
+  fi
+
+  # 自訂 BOARD_CONSOLE_LOG 不一定以 BOARD_LOG_FILE 為前綴，需獨立處理。
+  if [ -n "$console_file" ] && [ "$console_file" != "$log_file" ] \
+      && [ -f "$console_file" ] && [ ! -L "$console_file" ]; then
+    board_secure_file "$console_file" 0
+  fi
+
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # 取得檔案的 mtime（epoch 秒）。
 #

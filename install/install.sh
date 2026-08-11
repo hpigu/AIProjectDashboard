@@ -99,7 +99,7 @@ sha256_file() {
 java_is_21_and_matches_platform() {
   [ -x "$java_bin" ] || return 1
   "$java_bin" -version 2>&1 | grep -Eq 'version "21([.\"]|$)' || return 1
-  java_arch="$($java_bin -XshowSettings:properties -version 2>&1 | sed -n 's/^[[:space:]]*os\.arch = //p' | head -n1)"
+  java_arch="$("$java_bin" -XshowSettings:properties -version 2>&1 | sed -n 's/^[[:space:]]*os\.arch = //p' | head -n1)"
   case "$release_platform:$java_arch" in
     macos-arm64:aarch64|macos-arm64:arm64|macos-x64:x86_64|macos-x64:amd64|linux-x64:x86_64|linux-x64:amd64) return 0 ;;
     *) return 1 ;;
