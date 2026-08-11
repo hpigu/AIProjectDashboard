@@ -46,6 +46,17 @@ class OperationalSafetyConfigurationTest {
                 .contains("exit 1");
     }
 
+    @Test
+    void javaLaunchUsesAnAvailableUtf8LocaleInsteadOfUnsupportedJnuOverride() throws Exception {
+        String script = Files.readString(Path.of("bin/board"));
+
+        assertThat(script)
+                .contains("find_utf8_locale()")
+                .contains("LC_ALL=\"$java_locale\" LANG=\"$java_locale\"")
+                .contains("nohup \"$JAVA_BIN\" -Dfile.encoding=UTF-8")
+                .doesNotContain("-Dsun.jnu.encoding");
+    }
+
     /**
      * 目錄遍歷取代逐檔列舉（#156）：掃 static 根目錄下所有 *.js／*.css 與
      * index.html，而非硬編碼檔名清單。新增任何 static 檔案（例如 #143 的
