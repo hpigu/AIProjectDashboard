@@ -86,14 +86,19 @@ done
 # 那是陌生人照抄的第一行指令：版號沒跟上，他複製貼上後看到的是「檔案不存在」，
 # 而 manifest 全對、CI 全綠。這裡把檔名裡的版號也一起比對。
 #
-# 只鎖定 `java -jar` 那一行：README 裡還會提到「舊 release tag 底下實際的
-# asset 檔名」這類歷史事實敘述，那些檔名本來就該維持發布當時的舊版號，若和
-# 整份文件裡所有同樣式的引用一起比對，會把正確的歷史敘述誤判成沒跟上版號。
-readme_refs="$(grep -o 'java -jar target/ai-project-board-backend-[0-9][0-9A-Za-z.-]*\.jar' README.md \
+# 只掃 code fence 內的內容：README 裡還會提到「舊 release tag 底下實際的 asset
+# 檔名」這類歷史事實敘述（散文，不在 fence 裡），那些檔名本來就該維持發布當時
+# 的舊版號，跟著 pom 一起比對會把正確的歷史敘述誤判成沒跟上版號。
+#
+# 用 fence 而不是比對 `java -jar` 這種指令寫法，是因為要判斷的是「這個檔名是不是
+# 一句要讀者照抄的指令」，而 fence 正是 README 自己標記這件事的方式。綁指令寫法
+# 只能認得當下這一種形式：日後多一段 `java -jar ./target/...` 或加上 JVM 參數的
+# 安裝指令，比對會悄悄漏掉它而仍然回報 [OK]。
+readme_refs="$(awk '/^```/{in_fence=!in_fence; next} in_fence' README.md \
   | grep -o 'ai-project-board-backend-[0-9][0-9A-Za-z.-]*\.jar' | sort -u || true)"
 if [ -z "$readme_refs" ]; then
-  echo "::error::README.md 裡找不到 java -jar 安裝指令引用的 ai-project-board-backend-<版號>.jar。" >&2
-  echo "安裝指令若改寫成別的形式，請一併更新本腳本，否則這道檢查等於沒作用。" >&2
+  echo "::error::README.md 的 code fence 裡找不到 ai-project-board-backend-<版號>.jar。" >&2
+  echo "安裝指令若移出 code block，請一併更新本腳本，否則這道檢查等於沒作用。" >&2
   failures=$((failures + 1))
 fi
 for ref in $readme_refs; do
