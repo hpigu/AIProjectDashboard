@@ -128,9 +128,31 @@ expected_hash="$(awk -v name="$jar_base" -F '  ' '$2 == name { print $1 }' "$che
 command -v jar >/dev/null 2>&1 || die 'JDK jar tool is required to inspect the downloaded JAR'
 jar tf "$jar" >/dev/null 2>&1 || die 'target artifact is not a readable executable JAR'
 inspect_dir="$(mktemp -d "${TMPDIR:-/tmp}/ai-project-board-update-inspect.XXXXXX")" || die 'cannot create JAR inspection stage'
-if ! (cd "$inspect_dir" && jar xf "$jar" META-INF/MANIFEST.MF META-INF/build-info.properties) \
+# 解析成絕對路徑再進 inspect_dir：下面的 jar xf 是在 `cd "$inspect_dir"` 之後
+# 執行的，$jar 若是相對路徑（--jar release-assets/... 這種呼叫方式），cd 之後
+# 就指向不存在的位置，jar xf 以 NoSuchFileException 失敗，最後只會報出一句
+# 「not a Spring Boot executable release」——把「找不到檔案」誤述成「這不是
+# 合法的 release JAR」，完全指錯方向。
+case "$jar" in
+  /*) jar_abs="$jar" ;;
+  *)  jar_abs="$PWD/$jar" ;;
+esac
+[ -f "$jar_abs" ] || die "target JAR path could not be resolved: $jar"
+if ! (cd "$inspect_dir" && jar xf "$jar_abs" META-INF/MANIFEST.MF META-INF/build-info.properties) \
   || ! grep -Eq '^Main-Class: org\.springframework\.boot\.loader\.launch\.JarLauncher\r?$' "$inspect_dir/META-INF/MANIFEST.MF" \
   || ! grep -Eq '^build\.version='"$requested_version"'\r?$' "$inspect_dir/META-INF/build-info.properties"; then
+  # 分別點出是哪一項不成立：三個條件擠在同一句 die 裡時，"not a Spring Boot
+  # executable release" 對「manifest 對但版號不符」「根本沒解出檔案」一視同仁，
+  # 使用者與 CI 都無從判斷該往哪裡查。
+  if [ ! -f "$inspect_dir/META-INF/MANIFEST.MF" ]; then
+    err "無法從 $jar_abs 取出 META-INF/MANIFEST.MF（JAR 損毀或不是 ZIP 格式）"
+  elif ! grep -Eq '^Main-Class: org\.springframework\.boot\.loader\.launch\.JarLauncher\r?$' "$inspect_dir/META-INF/MANIFEST.MF"; then
+    err "MANIFEST 的 Main-Class 不是 Spring Boot JarLauncher（這不是 repackage 過的可執行 JAR）"
+  elif [ ! -f "$inspect_dir/META-INF/build-info.properties" ]; then
+    err 'JAR 內沒有 META-INF/build-info.properties（build 缺少 spring-boot:build-info）'
+  else
+    err "JAR 的 build.version 與目標版號 ${requested_version} 不符：$(grep '^build\.version=' "$inspect_dir/META-INF/build-info.properties" 2>/dev/null || printf '(讀不到)')"
+  fi
   rm -rf -- "$inspect_dir"
   die 'target JAR is not a Spring Boot executable release'
 fi

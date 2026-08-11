@@ -77,9 +77,17 @@ try {
     $archive.Dispose()
 }
 
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ('board-release-check-' + [Guid]::NewGuid().ToString('N') + '-空白')
-$extract = Join-Path $work '解壓 空白'
-$profile = Join-Path $work '使用者 空白'
+# $work／$extract 只能用 ASCII：解壓出來的是自帶的 jlink runtime，而 Windows 的
+# java.exe launcher 以 ANSI code page 解析自身路徑去定位 java.dll，安裝路徑含非
+# ASCII 字元時會失敗（Error: could not find java.dll / Could not find Java SE
+# Runtime Environment），這是 Windows 自帶 runtime 的已知限制，不是本專案的 bug。
+# 這裡刻意保留空白字元，因為帶空白的路徑必須能用。
+#
+# 相對地，$smokeHome（使用者資料目錄）仍刻意使用中文：那是由已啟動的 JVM 建立與
+# 讀寫的，不經過 launcher 定位 DLL 的路徑，中文家目錄是真實且必須支援的情境。
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ('board-release-check-' + [Guid]::NewGuid().ToString('N') + '-space test')
+$extract = Join-Path $work 'extract space'
+$profile = Join-Path $work 'user space'
 $smokeBoard = $null
 $smokeStarted = $false
 try {

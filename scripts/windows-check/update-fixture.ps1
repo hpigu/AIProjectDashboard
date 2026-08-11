@@ -110,9 +110,14 @@ function New-ChecksumFile {
 function New-Scenario {
     param([string]$Name, [int]$Port)
 
-    $scenarioRoot = Join-Path $work ($Name + '-空白 路徑')
-    $programs = Join-Path $scenarioRoot '程式 根目錄'
-    $extract = Join-Path $scenarioRoot '解壓 暫存'
+    # $scenarioRoot／$programs／$extract 只能用 ASCII：bundled 的 jlink runtime 會
+    # 落在 $programs 底下並由 board.ps1 啟動，而 Windows 的 java.exe launcher 以
+    # ANSI code page 解析自身路徑定位 java.dll，非 ASCII 路徑會失敗（could not
+    # find java.dll）。這是 Windows 自帶 runtime 的已知限制。空白字元仍保留。
+    # 下面的 $home／Profile（使用者資料）維持中文，那些由 JVM 自己處理，不受限。
+    $scenarioRoot = Join-Path $work ($Name + '-space path')
+    $programs = Join-Path $scenarioRoot 'programs root'
+    $extract = Join-Path $scenarioRoot 'extract temp'
     $assets = Join-Path $scenarioRoot 'release assets'
     New-Item -ItemType Directory -Path $programs, $extract, $assets -Force | Out-Null
     Expand-Archive -LiteralPath $zipPath -DestinationPath $extract -Force
@@ -314,7 +319,9 @@ if ((Split-Path $zipPath -Leaf) -ne ($expectedTop + '.zip')) { Fail "ReleaseZip 
 $versionParts = $Version.Split('.')
 $oldPatch = if ([int]$versionParts[2] -eq 0) { 1 } else { [int]$versionParts[2] - 1 }
 $oldVersion = "$($versionParts[0]).$($versionParts[1]).$oldPatch"
-$work = Join-Path ([IO.Path]::GetTempPath()) ('board-update-release-fixture-' + [Guid]::NewGuid().ToString('N') + '-空白')
+# ASCII only：這是所有 scenario 的父目錄，bundled runtime 就解壓在它底下，
+# 理由見 New-Scenario 內的說明。空白字元保留。
+$work = Join-Path ([IO.Path]::GetTempPath()) ('board-update-release-fixture-' + [Guid]::NewGuid().ToString('N') + '-space test')
 $environmentNames = @('USERPROFILE', 'HOME', 'BOARD_HOME_DIR', 'BOARD_PORT', 'BOARD_HOST', 'BOARD_DB_URL',
     'BOARD_LOG_FILE', 'BOARD_CONSOLE_LOG', 'BOARD_BACKUP_DIR', 'BOARD_CONFIG_DIR', 'BOARD_PID_FILE',
     'BOARD_START_TIMEOUT_SEC', 'BOARD_STOP_TIMEOUT_SEC', 'BOARD_JAVA', 'JAVA_HOME', 'BOARD_JAR', 'BOARD_UPDATE_FAIL_AT')
