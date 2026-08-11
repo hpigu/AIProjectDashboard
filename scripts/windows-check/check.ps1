@@ -113,6 +113,37 @@ try {
     Assert-True (-not (Test-BoardHttpReady -TimeoutSec 1)) '未啟動時 Test-BoardHttpReady 為 false'
     Assert-True ((Get-BoardPidFromFile) -eq 0) '沒有 PID 檔時回傳 0'
 
+    Write-Host '=== 2a. BOARD_DB_URL 遮罩（#142：不在 console 印出敏感連線資訊）==='
+    Assert-True ((Get-BoardMaskedDbUrl 'jdbc:h2:file:./data/board;USER=sa;PASSWORD=secret') `
+        -eq 'jdbc:h2:file:./data/board;USER=***;PASSWORD=***') '同時遮罩 USER 與 PASSWORD'
+    Assert-True ((Get-BoardMaskedDbUrl 'jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE') `
+        -eq 'jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE') '沒有內嵌帳密時原樣輸出'
+
+    Write-Host '=== 2b. 敏感目錄／檔案的 ACL 收斂（#142）==='
+    $secureDir = Join-Path $workRoot 'acl-dir-test'
+    Assert-True (New-BoardSecureDirectory -Path $secureDir) '新建目錄套用 ACL 成功'
+    $dirAcl = Get-Acl -Path $secureDir
+    Assert-True $dirAcl.AreAccessRulesProtected '新建目錄已停用 ACL 繼承'
+    $currentUserName = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $dirRules = @($dirAcl.Access | Where-Object { $_.FileSystemRights -match 'FullControl' -and $_.IdentityReference.Value -eq $currentUserName })
+    Assert-True ($dirRules.Count -ge 1) '新建目錄的 ACL 僅含目前使用者的 FullControl 規則'
+    Assert-True ($dirAcl.Access.Count -eq 1) '新建目錄的 ACL 不含其他規則（無群組／Everyone／繼承規則）'
+
+    $secureFile = Join-Path $secureDir 'secret.txt'
+    [System.IO.File]::WriteAllText($secureFile, 'sensitive')
+    Protect-BoardPath -Path $secureFile -NewlyCreated $true
+    $fileAcl = Get-Acl -Path $secureFile
+    Assert-True $fileAcl.AreAccessRulesProtected '新建檔案已停用 ACL 繼承'
+    Assert-True ($fileAcl.Access.Count -eq 1) '新建檔案的 ACL 僅含一條規則（目前使用者）'
+
+    # 既有路徑：先人為放寬（還原繼承），確認收斂後又能修正回來，且失敗不拋例外
+    # （既有路徑收斂失敗只能警告、不能中止，語意見 board-env.ps1 的
+    # Protect-BoardPath 註解，這裡驗證的是「成功」路徑；失敗降級行為在 Java 側
+    # LocalFilePermissionHardenerTest 涵蓋，兩邊語意一致）。
+    New-BoardSecureDirectory -Path $secureDir | Out-Null
+    $reAcl = Get-Acl -Path $secureDir
+    Assert-True $reAcl.AreAccessRulesProtected '既有目錄重複收斂後仍維持僅目前使用者可存取'
+
     Write-Host '=== 3. 啟動前備份 ==='
     New-FakeH2File -Path $dbFile -Marker 'original'
     Assert-True (Invoke-BoardStartupBackup -DatabaseFile $dbFile -BackupDir $backupDir) '備份回傳成功'

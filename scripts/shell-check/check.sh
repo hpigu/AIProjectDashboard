@@ -82,6 +82,25 @@ assert_eq 'target/ai-project-board-backend-3.1.0.jar' "$latest" \
   '單筆輸入原樣輸出'
 
 echo ""
+echo '=== board_mask_db_url ==='
+
+assert_eq 'jdbc:h2:file:./data/board;USER=***;PASSWORD=***' \
+  "$(board_mask_db_url 'jdbc:h2:file:./data/board;USER=sa;PASSWORD=secret')" \
+  '同時內嵌 USER 與 PASSWORD 都要被遮罩'
+
+assert_eq 'jdbc:h2:file:./data/board;user=***;password=***' \
+  "$(board_mask_db_url 'jdbc:h2:file:./data/board;user=sa;password=secret')" \
+  '大小寫不敏感（H2 參數名不區分大小寫）'
+
+assert_eq 'jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE' \
+  "$(board_mask_db_url 'jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE')" \
+  '沒有內嵌帳密時原樣輸出，不誤傷其他參數'
+
+assert_eq 'jdbc:h2:file:./data/board;PASSWORD=***;DB_CLOSE_ON_EXIT=FALSE' \
+  "$(board_mask_db_url 'jdbc:h2:file:./data/board;PASSWORD=secret;DB_CLOSE_ON_EXIT=FALSE')" \
+  '只遮罩帳密參數本身，同一 URL 中其他參數維持可見'
+
+echo ""
 if [ "$failures" -gt 0 ]; then
   echo "${failures} 項檢查失敗。"
   exit 1

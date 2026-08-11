@@ -202,8 +202,9 @@ backup_database() {
     return 0
   fi
 
-  if ! mkdir -p "$backup_dir" 2>/dev/null; then
-    _backup_err "無法建立備份目錄：$backup_dir"
+  # 建立（若不存在）並收斂為僅目前使用者可存取；board_secure_dir 對新建目錄
+  # fail closed，對既有目錄則安全修正、失敗只警告，語意見 board-env.sh。
+  if ! board_secure_dir "$backup_dir"; then
     return 1
   fi
 
@@ -231,6 +232,13 @@ backup_database() {
 
   if ! _backup_verify_file "$db_mv_file" "$tmp_path"; then
     _backup_err "備份驗證失敗，中止啟動。"
+    rm -f -- "$tmp_path" 2>/dev/null || true
+    return 1
+  fi
+
+  # 在原子改名成正式備份檔名之前，先收斂為僅目前使用者可讀寫；`cp -p`
+  # 通常已從來源繼承嚴格權限，這裡是明確保證，不依賴來源檔案權限剛好正確。
+  if ! board_secure_file "$tmp_path" 1; then
     rm -f -- "$tmp_path" 2>/dev/null || true
     return 1
   fi

@@ -1,5 +1,6 @@
 package dev.aiboard.config;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -9,6 +10,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -50,6 +52,31 @@ class RestoreScriptTest {
         assertThat(preserved).as("既有資料庫必須改名保留，不得直接覆蓋").hasSize(1);
         assertThat(Files.readString(preserved.get(0))).isEqualTo("H:2-current-database");
         assertThat(result.output()).contains("還原完成");
+    }
+
+    @Test
+    void restoredDatabaseFileIsRestrictedToOwnerOnly() throws Exception {
+        // #142：還原流程重寫的 .mv.db 不得沿用預設 umask（macOS/Linux 常見
+        // 022，即其他使用者可讀）；還原的正是使用者的完整看板資料。
+        Assumptions.assumeTrue(
+                Files.getFileAttributeView(tempDir, PosixFileAttributeView.class) != null,
+                "此檔案系統不支援 POSIX 權限，略過");
+
+        Path backups = Files.createDirectories(tempDir.resolve("backups"));
+        Path dataDir = Files.createDirectories(tempDir.resolve("data"));
+        Path database = dataDir.resolve("board.mv.db");
+        Files.writeString(database, "H:2-current-database");
+        Files.setPosixFilePermissions(database,
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+        Path backup = backups.resolve("board-startup-20240101T000000Z-UTC.mv.db");
+        Files.writeString(backup, "H:2-backup-content");
+
+        ProcessResult result = run(backups, dataDir, List.of(backup.toString(), "--yes"));
+
+        assertThat(result.exitCode()).as(result.output()).isZero();
+        assertThat(Files.getPosixFilePermissions(database))
+                .as(result.output())
+                .isEqualTo(LocalFilePermissionHardener.FILE_PERMISSIONS);
     }
 
     @Test

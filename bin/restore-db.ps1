@@ -46,7 +46,7 @@ if ($BackupDir) { $script:BoardBackupDir = $BackupDir }
 
 if (-not $DbPath) { $DbPath = Get-BoardDbFilePath }
 if ([string]::IsNullOrWhiteSpace($DbPath)) {
-    Write-RestoreErr "無法從 BOARD_DB_URL 取得 H2 檔案路徑（目前為：$script:BoardDbUrl）。"
+    Write-RestoreErr "無法從 BOARD_DB_URL 取得 H2 檔案路徑（目前為：$(Get-BoardMaskedDbUrl $script:BoardDbUrl)）。"
     Write-RestoreErr "非 file 模式（mem:／tcp:）不適用本腳本，或請用 -DbPath 明確指定。"
     exit 2
 }
@@ -168,8 +168,11 @@ if (-not $Yes) {
 # 還原本體：先產生 .tmp、驗證通過後才動現有資料庫
 # ---------------------------------------------------------------------------
 $parent = Split-Path $dbMvFile
-if ($parent -and -not (Test-Path $parent)) {
-    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+if ($parent) {
+    if (-not (New-BoardSecureDirectory -Path $parent)) {
+        Write-RestoreErr "資料庫目錄權限收斂失敗，已中止。"
+        exit 1
+    }
 }
 
 $tmpRestore = "$dbMvFile.restore.tmp"
@@ -179,7 +182,10 @@ $preserved = $null
 try {
     if ([System.IO.Path]::GetExtension($sourceBackup) -eq '.zip') {
         $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("board-restore-" + [Guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+        if (-not (New-BoardSecureDirectory -Path $workDir)) {
+            Write-RestoreErr "暫存目錄權限收斂失敗，已中止。"
+            exit 1
+        }
         Write-RestoreLog "解壓一致性備份（zip）……"
         Expand-Archive -LiteralPath $sourceBackup -DestinationPath $workDir -Force
 
@@ -197,6 +203,13 @@ try {
 
     if (-not (Test-BoardH2File -Path $tmpRestore)) {
         Write-RestoreErr "還原來源缺少 H2 MVStore 檔頭（H:2），不是有效的 H2 資料庫，已中止。"
+        exit 1
+    }
+
+    try {
+        Protect-BoardPath -Path $tmpRestore -NewlyCreated $true
+    } catch {
+        Write-RestoreErr $_.Exception.Message
         exit 1
     }
 

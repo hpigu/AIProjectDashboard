@@ -1,11 +1,13 @@
 package dev.aiboard.config;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.time.Instant;
 import java.util.List;
 import java.util.stream.Stream;
@@ -41,6 +43,33 @@ class StartupBackupScriptTest {
                     .matches("board-startup-\\d{8}T\\d{6}Z-.+\\.mv\\.db");
             assertThat(Files.readAllBytes(completed.get(0))).isEqualTo(Files.readAllBytes(database));
             assertThat(created).noneMatch(path -> path.getFileName().toString().endsWith(".tmp"));
+        }
+    }
+
+    @Test
+    void backupDirectoryAndFileAreRestrictedToOwnerOnly() throws Exception {
+        // #142：新建的備份目錄與備份檔都不得沿用預設 umask。
+        Assumptions.assumeTrue(
+                Files.getFileAttributeView(tempDir, PosixFileAttributeView.class) != null,
+                "此檔案系統不支援 POSIX 權限，略過");
+
+        Path database = tempDir.resolve("board.mv.db");
+        Path backups = tempDir.resolve("fresh-backups");
+        Files.write(database, "H:2-test-database".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        ProcessResult result = run(database, backups, null, null);
+
+        assertThat(result.exitCode()).as(result.output()).isZero();
+        assertThat(Files.getPosixFilePermissions(backups))
+                .as(result.output())
+                .isEqualTo(LocalFilePermissionHardener.DIRECTORY_PERMISSIONS);
+
+        try (Stream<Path> files = Files.list(backups)) {
+            Path created = files.filter(p -> p.getFileName().toString().endsWith(".mv.db"))
+                    .findFirst().orElseThrow();
+            assertThat(Files.getPosixFilePermissions(created))
+                    .as(result.output())
+                    .isEqualTo(LocalFilePermissionHardener.FILE_PERMISSIONS);
         }
     }
 

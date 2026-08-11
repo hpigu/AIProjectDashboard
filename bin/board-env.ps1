@@ -85,6 +85,100 @@ function Get-BoardDbFilePath {
 }
 
 # ---------------------------------------------------------------------------
+# 遮罩 BOARD_DB_URL 中可能內嵌的連線憑證，供任何要印到 console／log 的地方使用。
+#
+# 對應 bin/board-env.sh 的 board_mask_db_url：H2 的 JDBC URL 允許把帳密當成
+# 分號分隔參數內嵌在 URL 裡（USER=.../PASSWORD=...），而 BOARD_DB_URL 整串來自
+# 使用者可控的環境變數，直接印出可能讓密碼明文留在終端機或日誌檔。
+# ---------------------------------------------------------------------------
+function Get-BoardMaskedDbUrl {
+    param([string]$Url)
+
+    if ([string]::IsNullOrEmpty($Url)) { return $Url }
+    $masked = $Url -replace '(?i)(USER=)[^;]*', '$1***'
+    $masked = $masked -replace '(?i)(PASSWORD=)[^;]*', '$1***'
+    return $masked
+}
+
+# ---------------------------------------------------------------------------
+# 套用「僅目前使用者」的 NTFS ACL：停用繼承、移除既有規則，只留目前使用者的
+# FullControl。對稱於 dev.aiboard.config.LocalFilePermissionHardener 在 JVM
+# 端對 Windows 套用的 AclFileAttributeView，以及 bin/board-env.sh 的
+# board_secure_dir／board_secure_file（POSIX 0700／0600）。
+#
+# 新建路徑（$NewlyCreated=$true）套用失敗會拋例外，呼叫端必須讓它中止啟動——
+# 此時路徑裡還沒有使用者資料，放行只會留下一個從一開始就權限過寬的路徑。
+# 既有路徑套用失敗只印警告並回傳，不刪除或搬動任何資料、不阻擋服務繼續運作。
+#
+# 非 NTFS 磁碟區（例如 FAT32/exFAT，常見於隨身碟或部分虛擬磁碟）不支援
+# Get-Acl/Set-Acl 的物件式 ACL，會在 Get-Acl 或 SetAccessRuleProtection 丟出
+# 例外；這裡統一當成「檔案系統不支援此安全機制」的降級情境處理，而不是失敗，
+# 語意與 Java 端 LocalFilePermissionHardener 對「找不到 AclFileAttributeView」
+# 的處理一致。
+# ---------------------------------------------------------------------------
+function Protect-BoardPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][bool]$NewlyCreated
+    )
+
+    try {
+        $acl = Get-Acl -Path $Path -ErrorAction Stop
+    } catch {
+        Write-Host "[board-env] 檔案系統不支援 NTFS ACL，略過權限收斂（僅本機存取風險仍在，建議改用 NTFS 磁碟區）：$Path"
+        return
+    }
+
+    try {
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $currentUser, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+
+        # 停用繼承並清除既有規則（第二參數 $true = 移除繼承來的規則），
+        # 只留下面明確加入的「目前使用者 FullControl」一條，等同 POSIX 的 0700/0600：
+        # 沒有群組、沒有 Everyone、沒有繼承自父目錄的任何規則。
+        #
+        # 先用 @(...) 把 $acl.Access 具體化成獨立陣列再逐一移除：直接對
+        # $acl.Access 管線呼叫 RemoveAccessRule 是邊列舉邊修改同一個底層集合，
+        # .NET 對此的行為未定義（輕則漏刪，重則丟例外），必須先拷貝一份快照。
+        $acl.SetAccessRuleProtection($true, $false)
+        $existingRules = @($acl.Access)
+        foreach ($existingRule in $existingRules) { $acl.RemoveAccessRule($existingRule) | Out-Null }
+        $acl.AddAccessRule($rule)
+
+        Set-Acl -Path $Path -AclObject $acl -ErrorAction Stop
+        Write-Host "[board-env] 已套用僅限目前使用者的 ACL：$Path"
+    } catch {
+        if ($NewlyCreated) {
+            throw "無法為新建路徑套用僅限目前使用者的 ACL，為避免留下權限過寬的敏感路徑，已中止：$Path ($($_.Exception.Message))"
+        }
+        Write-Host "[board-env][錯誤] 警告：無法修正既有路徑的 ACL（不影響服務運作、未變更任何資料）：$Path ($($_.Exception.Message))"
+    }
+}
+
+# 建立目錄（若不存在）並套用僅限目前使用者的 ACL。回傳 $true 成功／$false 失敗
+# （新建路徑套用 ACL 失敗時）；呼叫端應在 $false 時中止對應流程。
+function New-BoardSecureDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $wasNew = -not (Test-Path $Path)
+    try {
+        New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "[board-env][錯誤] 無法建立目錄：$Path ($($_.Exception.Message))"
+        return $false
+    }
+
+    try {
+        Protect-BoardPath -Path $Path -NewlyCreated $wasNew
+        return $true
+    } catch {
+        Write-Host "[board-env][錯誤] $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 確認某個 PID 真的是本看板的 Java 行程，而不是 PID 被回收後的無關行程。
 # stop/restart 前一定要問過這一題：對著陌生行程動手是這類腳本最典型的災難。
 # ---------------------------------------------------------------------------

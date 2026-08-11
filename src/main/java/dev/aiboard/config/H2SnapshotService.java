@@ -119,6 +119,17 @@ public class H2SnapshotService {
             return Optional.empty();
         }
 
+        // H2 的 BACKUP TO 以一般檔案 I/O 寫出，繼承行程 umask（macOS/Linux 常見
+        // 022，即其他使用者可讀）。在原子改名成正式檔名之前先收斂為僅目前使用者
+        // 可讀寫，避免備份檔以任何權限過寬的狀態存在於磁碟上，即便只是一瞬間。
+        try {
+            SensitiveDirectories.secureExistingFile(tmpTarget, true);
+        } catch (SecurityHardeningException ex) {
+            log.error("{} 無法將備份檔收斂為僅目前使用者可存取，備份已放棄：{}", logTag, tmpTarget, ex);
+            deleteQuietly(tmpTarget);
+            return Optional.empty();
+        }
+
         try {
             Files.move(tmpTarget, target);
         } catch (IOException ex) {
@@ -197,9 +208,17 @@ public class H2SnapshotService {
 
     private boolean ensureBackupDir(String logTag) {
         try {
-            Files.createDirectories(backupDir);
+            // 建立（若不存在）並收斂為僅目前使用者可存取；新建路徑收斂失敗會
+            // fail closed（見 SensitiveDirectories/LocalFilePermissionHardener），
+            // 但備份是背景流程，不能讓例外往外傳到排程執行緒或關閉流程，因此
+            // 這裡攔下並轉成一般備份失敗處理，與其餘失敗路徑一致（記錄、回傳
+            // false，呼叫端略過本次備份）。
+            SensitiveDirectories.ensureSecureDirectory(backupDir);
             return true;
-        } catch (IOException ex) {
+        } catch (SecurityHardeningException ex) {
+            log.error("{} 無法將備份目錄收斂為僅目前使用者可存取，備份已放棄：{}", logTag, backupDir, ex);
+            return false;
+        } catch (Exception ex) {
             log.error("{} 無法建立備份目錄，備份已放棄：{}", logTag, backupDir, ex);
             return false;
         }

@@ -338,7 +338,7 @@ function Invoke-BoardStart {
     }
     Write-BoardLog "使用 JDK 21：$javaBin"
     Write-BoardLog "BOARD_PORT=$script:BoardPort"
-    Write-BoardLog "BOARD_DB_URL=$script:BoardDbUrl"
+    Write-BoardLog "BOARD_DB_URL=$(Get-BoardMaskedDbUrl $script:BoardDbUrl)"
     Write-BoardLog "BOARD_LOG_FILE=$script:BoardLogFile"
 
     # 埠號檢查：被佔用時先判斷是不是看板自己，避免重複啟動或誤殺別的服務。
@@ -348,8 +348,10 @@ function Invoke-BoardStart {
         if (Test-BoardHttpReady -TimeoutSec 3) {
             Write-BoardLog "偵測到看板已在 :$script:BoardPort 正常運作（PID $portPid），不重複啟動。"
             # 補寫 PID 檔：看板可能是手動 java -jar 起的，補上之後 stop 才停得掉。
-            New-Item -ItemType Directory -Path (Split-Path $script:BoardPidFile) -Force -ErrorAction SilentlyContinue | Out-Null
+            # 此路徑是盡力而為的補救（看板其實已在正常運作），ACL 收斂失敗不阻擋。
+            New-BoardSecureDirectory -Path (Split-Path $script:BoardPidFile) | Out-Null
             Set-Content -Path $script:BoardPidFile -Value $portPid -Encoding ASCII
+            try { Protect-BoardPath -Path $script:BoardPidFile -NewlyCreated $true } catch { Write-Host "[board][錯誤] $($_.Exception.Message)" }
             return 0
         }
         Write-BoardErr "埠號 $script:BoardPort 被其他行程佔用（PID $portPid，非本看板服務）。"
@@ -367,7 +369,12 @@ function Invoke-BoardStart {
             Write-BoardErr "請先確認並結束該行程（.\bin\board.ps1 status 可看目前的看板行程），再重試。"
             return 1
         }
-        New-Item -ItemType Directory -Path (Split-Path $dbMvFile) -Force -ErrorAction SilentlyContinue | Out-Null
+        # 新建目錄套用 ACL 失敗必須中止：此時目錄下還沒有任何使用者資料，
+        # 資料庫檔案即將在這個目錄下誕生，不能讓它落在權限過寬的目錄裡。
+        if (-not (New-BoardSecureDirectory -Path (Split-Path $dbMvFile))) {
+            Write-BoardErr "資料庫目錄權限收斂失敗，已中止啟動。"
+            return 1
+        }
     }
 
     # 啟動前冷備份：失敗必須中止啟動，不可讓 migration 在沒有備份的情況下繼續。
@@ -405,8 +412,14 @@ function Invoke-BoardStart {
     }
 
     Write-BoardLog "啟動 jar：$jarPath"
-    New-Item -ItemType Directory -Path (Split-Path $script:BoardLogFile) -Force -ErrorAction SilentlyContinue | Out-Null
-    New-Item -ItemType Directory -Path (Split-Path $script:BoardPidFile) -Force -ErrorAction SilentlyContinue | Out-Null
+    if (-not (New-BoardSecureDirectory -Path (Split-Path $script:BoardLogFile))) {
+        Write-BoardErr "日誌目錄權限收斂失敗，已中止啟動。"
+        return 1
+    }
+    if (-not (New-BoardSecureDirectory -Path (Split-Path $script:BoardPidFile))) {
+        Write-BoardErr "PID 目錄權限收斂失敗，已中止啟動。"
+        return 1
+    }
 
     if ($Foreground) {
         # 診斷模式：logback 初始化之前的錯誤（JVM 參數、classpath、埠號綁定失敗的
@@ -424,6 +437,12 @@ function Invoke-BoardStart {
         -WindowStyle Hidden -PassThru
     $boardPid = $process.Id
     Set-Content -Path $script:BoardPidFile -Value $boardPid -Encoding ASCII
+    try {
+        Protect-BoardPath -Path $script:BoardPidFile -NewlyCreated $true
+    } catch {
+        Write-BoardErr $_.Exception.Message
+        return 1
+    }
     Write-BoardLog "已啟動子行程 PID=$boardPid（PID 檔：$script:BoardPidFile），等待服務就緒……"
 
     $elapsed = 0
@@ -553,7 +572,7 @@ function Invoke-BoardStatus {
     if (-not (Test-Path $script:BoardPidFile)) { $pidNote = '（不存在）' }
     Write-BoardLog "PID 檔：$script:BoardPidFile$pidNote"
     Write-BoardLog "埠號：$script:BoardPort"
-    Write-BoardLog "資料庫：$script:BoardDbUrl"
+    Write-BoardLog "資料庫：$(Get-BoardMaskedDbUrl $script:BoardDbUrl)"
     Write-BoardLog "日誌：$script:BoardLogFile"
 
     $httpReady = Test-BoardHttpReady -TimeoutSec 3
