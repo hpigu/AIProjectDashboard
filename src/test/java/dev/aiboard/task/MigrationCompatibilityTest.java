@@ -75,12 +75,15 @@ class MigrationCompatibilityTest {
 
     /**
      * #150：用真正的 file-backed H2 模擬從舊 repo 搬來的 V1 資料庫。測試刻意把
-     * 路徑、專案名稱、任務描述與歷史紀錄都放入空白及非 ASCII 字元，並在 V1
-     * 寫完資料後執行 SHUTDOWN，確保後半段真的是另一個行程可能做的冷升級，而
-     * 不是同一個記憶體資料庫連線內的假象。
+     * 路徑、專案名稱、任務描述與歷史紀錄都放入空白及非 ASCII 字元，並在每個中繼
+     * 版本寫完資料後都執行 SHUTDOWN，確保後續步驟真的是另一個行程可能做的冷
+     * 升級，而不是同一個記憶體資料庫連線內的假象。額外在 V5（{@code
+     * task_dependency} 剛建表）寫入第二個任務與一筆相依關係，證明「較舊但已
+     * 累積相依資料的資料庫」升級到最新版後，相依關係本身（不只是表結構）不
+     * 遺失——涵蓋驗收條件裡「資料／任務／相依完整」的相依部分。
      */
     @Test
-    void oldFileBackedV1DatabaseUpgradesToLatestWithoutLosingUserData() throws Exception {
+    void oldFileBackedV1DatabaseUpgradesToLatestWithoutLosingUserDataAndDependencies() throws Exception {
         Path databaseDir = tempDir.resolve("舊 repo with spaces").resolve("data");
         Files.createDirectories(databaseDir);
         String url = "jdbc:h2:file:" + databaseDir.resolve("board") + ";DB_CLOSE_ON_EXIT=FALSE";
@@ -123,6 +126,36 @@ class MigrationCompatibilityTest {
             connection.createStatement().execute("SHUTDOWN");
         }
 
+        // task_dependency 要到 V5 才存在；先只升到 V5，寫入第二個舊任務與一筆
+        // 相依關係，代表「陌生人的舊資料庫已經跑過幾版、累積了相依資料」，而不是
+        // 全新建表後才插入，再次 SHUTDOWN 後繼續升到最新版。
+        Flyway.configure().dataSource(url, "sa", "").locations("classpath:db/migration")
+                .target("5").load().migrate();
+
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            try (var task = connection.prepareStatement(
+                    "INSERT INTO task (id, project_id, title, description, status, category, sort_order, "
+                            + "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")) {
+                task.setLong(1, 202L);
+                task.setLong(2, 101L);
+                task.setString(3, "前置任務 / blocking task");
+                task.setString(4, "被 201 相依的舊任務");
+                task.setString(5, "TODO");
+                task.setString(6, "OTHER");
+                task.setInt(7, 6);
+                task.executeUpdate();
+            }
+            try (var dependency = connection.prepareStatement(
+                    "INSERT INTO task_dependency (id, task_id, depends_on_task_id, created_at) "
+                            + "VALUES (?, ?, ?, CURRENT_TIMESTAMP)")) {
+                dependency.setLong(1, 401L);
+                dependency.setLong(2, 201L);
+                dependency.setLong(3, 202L);
+                dependency.executeUpdate();
+            }
+            connection.createStatement().execute("SHUTDOWN");
+        }
+
         Flyway.configure().dataSource(url, "sa", "").locations("classpath:db/migration")
                 .load().migrate();
 
@@ -159,6 +192,22 @@ class MigrationCompatibilityTest {
                 assertThat(row.getString("from_status")).isEqualTo("IN_PROGRESS");
                 assertThat(row.getString("to_status")).isEqualTo("DONE");
                 assertThat(row.getString("note")).isEqualTo("舊歷史不可遺失");
+            }
+
+            try (var row = connection.createStatement().executeQuery(
+                    "SELECT status, sort_order FROM task WHERE id = 202")) {
+                assertThat(row.next()).isTrue();
+                assertThat(row.getString("status")).isEqualTo("TODO");
+                assertThat(row.getInt("sort_order")).isEqualTo(6);
+            }
+
+            try (var row = connection.createStatement().executeQuery(
+                    "SELECT task_id, depends_on_task_id FROM task_dependency WHERE id = 401")) {
+                assertThat(row.next())
+                        .as("升級前於 V5 建立的 task_dependency 資料列必須存活")
+                        .isTrue();
+                assertThat(row.getLong("task_id")).isEqualTo(201L);
+                assertThat(row.getLong("depends_on_task_id")).isEqualTo(202L);
             }
 
             Set<String> tables = new HashSet<>();
