@@ -128,6 +128,58 @@ resolve_pid() {
   return 1
 }
 
+# JVM 已經由本次 start 啟動、但後續的安全收尾失敗時，不能只讓啟動腳本退出：
+# 那會留下沒有可信 PID 檔可管理、卻仍持有資料庫的孤兒行程。這裡只操作由 `$!`
+# 當場記下的確切 PID，絕不以名稱或命令列子字串搜尋行程。
+#
+# 先送 SIGTERM，讓 Spring 有機會正常關閉；逾時才對同一個確切 PID 送 SIGKILL。
+# 這和使用者主動執行 stop 的語意不同：stop 預設不強制終止健康、已受 PID 檔管理
+# 的服務；此處是啟動交易尚未完成，不能把未受管理的子行程留在系統裡。
+abort_started_process() {
+  local pid="$1"
+  local reason="$2"
+  local elapsed=0
+  local cleanup_timeout="$STOP_TIMEOUT_SEC"
+  [[ "$cleanup_timeout" =~ ^[0-9]+$ ]] || cleanup_timeout=60
+
+  err "$reason"
+  err "啟動交易未完成，正在終止本次啟動的確切 PID=${pid}，避免留下孤兒行程。"
+
+  if kill -0 "$pid" 2>/dev/null; then
+    if ! kill -TERM "$pid" 2>/dev/null; then
+      if kill -0 "$pid" 2>/dev/null; then
+        err "無法對本次啟動的 PID=${pid} 送出 SIGTERM；仍會等待並只對同一個確切 PID 做後續收尾。"
+      fi
+    fi
+  fi
+
+  while kill -0 "$pid" 2>/dev/null && [ "$elapsed" -lt "$cleanup_timeout" ]; do
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  if kill -0 "$pid" 2>/dev/null; then
+    err "PID=${pid} 在 ${cleanup_timeout} 秒後仍未結束；啟動交易無法安全完成，改對同一個確切 PID 送出 SIGKILL。"
+    force_kill_exact_pid "$pid"
+    sleep 1
+  fi
+
+  if kill -0 "$pid" 2>/dev/null; then
+    err "SIGKILL 後 PID=${pid} 仍存在；未使用名稱比對清理，請手動確認這個確切 PID。"
+    return 1
+  fi
+
+  # disown 前失敗時它仍是目前 shell 的子行程；盡力 reap，避免短暫 zombie。
+  wait "$pid" 2>/dev/null || true
+  if [ -f "$BOARD_PID_FILE" ]; then
+    local recorded_pid
+    recorded_pid="$(head -n1 "$BOARD_PID_FILE" 2>/dev/null | tr -d '[:space:]')"
+    [ "$recorded_pid" = "$pid" ] && rm -f -- "$BOARD_PID_FILE"
+  fi
+  log "已終止本次啟動的 PID=${pid}；未留下未受管理的看板行程。"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # JDK 偵測：找 21，找不到給出對應平台安裝指令
 # ---------------------------------------------------------------------------
@@ -418,12 +470,24 @@ cmd_start() {
   [ -e "$BOARD_CONSOLE_LOG" ] || CONSOLE_LOG_IS_NEW=1
   nohup "$JAVA_BIN" -jar "$JAR_PATH" >> "$BOARD_CONSOLE_LOG" 2>&1 &
   APP_PID=$!
-  disown "$APP_PID" 2>/dev/null || true
   # console log 可能含 JVM 參數錯誤等診斷資訊，收斂為僅目前使用者可讀寫；
   # 既有檔案（重啟後續寫）收斂失敗不阻擋啟動，只記錄警告。
-  board_secure_file "$BOARD_CONSOLE_LOG" "$CONSOLE_LOG_IS_NEW" || true
-  printf '%s\n' "$APP_PID" > "$BOARD_PID_FILE"
-  board_secure_file "$BOARD_PID_FILE" 1 || exit 1
+  if ! board_secure_file "$BOARD_CONSOLE_LOG" "$CONSOLE_LOG_IS_NEW"; then
+    abort_started_process "$APP_PID" \
+      "無法安全收斂本次新建的 console log，已中止啟動：${BOARD_CONSOLE_LOG}"
+    exit 1
+  fi
+  if ! printf '%s\n' "$APP_PID" > "$BOARD_PID_FILE"; then
+    abort_started_process "$APP_PID" \
+      "無法寫入 PID 檔，已中止啟動：${BOARD_PID_FILE}"
+    exit 1
+  fi
+  if ! board_secure_file "$BOARD_PID_FILE" 1; then
+    abort_started_process "$APP_PID" \
+      "無法安全收斂本次寫入的 PID 檔，已中止啟動：${BOARD_PID_FILE}"
+    exit 1
+  fi
+  disown "$APP_PID" 2>/dev/null || true
   log "已啟動子行程 PID=${APP_PID}（PID 檔：${BOARD_PID_FILE}），等待服務就緒……"
 
   # -------------------------------------------------------------------------
@@ -517,7 +581,7 @@ cmd_stop() {
   if [ "$force" -eq 1 ]; then
     err "等待 ${STOP_TIMEOUT_SEC} 秒仍未結束，依 --force 送出 SIGKILL。"
     err "注意：SIGKILL 不會執行關閉前備份，本次停止沒有一致性快照。"
-    kill -KILL "$pid" 2>/dev/null || true
+    force_kill_exact_pid "$pid"
     sleep 1
     if kill -0 "$pid" 2>/dev/null; then
       err "SIGKILL 後行程仍存在（PID=${pid}），請手動確認。"
@@ -532,6 +596,13 @@ cmd_stop() {
   err "刻意不自動送 SIGKILL：那會中斷關閉前備份。可先查看 ${BOARD_LOG_FILE} 確認"
   err "是否正在進行備份；確定要強制終止再執行：bin/board stop --force"
   return 1
+}
+
+# 集中唯一一處 SIGKILL 實作，讓 stop --force 與「啟動交易失敗後不得留下孤兒」
+# 共用同一條只接受確切 PID 的路徑。呼叫端必須先完成自己的 TERM／等待／診斷語意。
+force_kill_exact_pid() {
+  local pid="$1"
+  kill -KILL "$pid" 2>/dev/null || true
 }
 
 cmd_restart() {
