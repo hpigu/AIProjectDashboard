@@ -30,6 +30,34 @@ printf '%064d  ai-project-board-backend-macos-x64-3.1.2.jar\n' 0 >> "$checksums"
 printf '%064d  ai-project-board-backend-windows-x64-3.1.2.zip\n' 0 >> "$checksums"
 
 before_hash="$(shasum -a 256 "$root/data/board.mv.db" | awk '{print $1}')"
+
+# A mutable GitHub "latest" release URL must be rejected before any network call, service
+# stop, or filesystem change — regardless of case or where "latest" appears in the path.
+# This models the exact shape of GitHub's mutable download endpoint that slipped past a
+# broken `[ "$x" != *latest* ]` literal-string guard (bug fixed alongside this fixture).
+for bad_url in \
+  'https://github.com/x/releases/latest/download/v3.1.1' \
+  'https://github.com/x/releases/LATEST/download/v3.1.1' \
+  'https://github.com/x/releases/download/vLatest/v3.1.1'; do
+  if PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
+    BOARD_PORT=18998 "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --release-url "$bad_url" >/dev/null 2>&1; then
+    echo "[FAIL] mutable latest release-url was not rejected: $bad_url" >&2; exit 1
+  fi
+  [ "$(readlink "$root/current")" = releases/3.1.1 ] || { echo "[FAIL] latest-url rejection changed the activation pointer: $bad_url" >&2; exit 1; }
+  [ ! -e "$root/releases/3.1.2" ] || { echo "[FAIL] latest-url rejection published a release: $bad_url" >&2; exit 1; }
+  [ -f "$root/running" ] || { echo "[FAIL] latest-url rejection stopped the running service: $bad_url" >&2; exit 1; }
+done
+echo '[PASS] mutable latest release-url is rejected case-insensitively before any change'
+
+# The exact immutable vV shape must still be accepted by the same guard (curl is not faked
+# here, so this only proves the latest-rejection does not also reject valid URLs).
+if PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
+  BOARD_PORT=18998 "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --release-url 'https://github.com/x/releases/download/v3.1.2' 2>&1 \
+  | grep -Fq 'mutable latest URLs are forbidden'; then
+  echo '[FAIL] a valid immutable vV release-url was rejected as latest' >&2; exit 1
+fi
+echo '[PASS] immutable vV release-url passes the latest guard'
+
 if PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
   BOARD_PORT=18998 BOARD_UPDATE_FAIL_AT=readiness "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --jar "$target" --checksums "$checksums"; then
   echo '[FAIL] readiness injection unexpectedly succeeded' >&2; exit 1
