@@ -70,4 +70,35 @@ class HealthControllerTest {
                 .andExpect(jsonPath("$.checks[0].name").value("database"))
                 .andExpect(jsonPath("$.checks[0].pass").value(false));
     }
+
+    /**
+     * 回歸測試（#134、#141、#153）：即使 {@link ReadinessService} 內部因為
+     * DB／Flyway／MCP 例外夾帶密碼、JDBC 連線字串或家目錄路徑，經 HTTP 層
+     * 傳回的公開 {@code /api/health/ready} 回應仍只能有 503 與安全摘要，
+     * 不含任何底層例外原文。
+     */
+    @Test
+    void readyEndpointReturns503WithOnlySafeSummaryWhenDatabaseUnavailable() throws Exception {
+        String unsafeDetailIfBugRegresses =
+                "jdbc:h2:file:/Users/daniel/secret-project/data/board;PASSWORD=super-secret&token=abc123";
+        when(livenessService.getLiveness()).thenReturn(new LivenessService.LivenessInfo("UP"));
+        when(readinessService.getReadiness()).thenReturn(new ReadinessService.ReadinessInfo(
+                "DOWN", List.of(
+                        new ReadinessService.CheckResult("database", false, "無法取得資料庫連線，詳情請查閱伺服器日誌"),
+                        new ReadinessService.CheckResult("flyway", true, null),
+                        new ReadinessService.CheckResult("mcpTools", true, null))));
+
+        mockMvc.perform(get("/api/health/ready"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value("DOWN"))
+                .andExpect(jsonPath("$.checks[0].name").value("database"))
+                .andExpect(jsonPath("$.checks[0].pass").value(false))
+                .andExpect(content().string(not(containsString("jdbc:"))))
+                .andExpect(content().string(not(containsString("password"))))
+                .andExpect(content().string(not(containsString("PASSWORD"))))
+                .andExpect(content().string(not(containsString("token="))))
+                .andExpect(content().string(not(containsString("/Users/"))))
+                .andExpect(content().string(not(containsString("super-secret"))))
+                .andExpect(content().string(not(containsString(unsafeDetailIfBugRegresses))));
+    }
 }
