@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# board — 看板的服務生命週期入口（start / stop / restart / status / logs）
+# board — 看板的服務生命週期入口（start / stop / restart / status / logs / update）
 #
 # 這支腳本是 mac 與 Linux 上唯一的服務入口，對稱於 Windows 的 bin\board.ps1。
 # 兩邊的形狀刻意一致：每個平台各一支主入口（board / board.ps1）、一份共用預設值
@@ -85,6 +85,7 @@ usage() {
   restart            stop 後再 start
   status             顯示 PID、埠號與 /api/health 版本資訊
   logs [-n N]        追蹤日誌（tail -f）；-n 指定先顯示的行數，預設 50
+  update ...         明確指定 stable vV 的交易式更新；詳見 board update --help
 
 還原資料庫請用 bin/restore-db.sh——它必須在看板停止的狀態下執行，且會覆寫
 資料庫檔，刻意不放進這個天天使用的入口。
@@ -600,6 +601,7 @@ case "$COMMAND" in
   restart) cmd_restart "$@" ;;
   status)  cmd_status "$@" ;;
   logs)    cmd_logs "$@" ;;
+  update)  exec "${SCRIPT_DIR}/board-update.sh" "$@" ;;
   ''|-h|--help|help) usage ;;
   *) err "不認識的指令：${COMMAND}"; echo; usage >&2; exit 1 ;;
 esac

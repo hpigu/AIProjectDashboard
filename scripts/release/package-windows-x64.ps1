@@ -95,6 +95,7 @@ function Assert-StagingTree {
     $required = @(
         (Join-Path $Root ('app\' + $ExpectedJarName)),
         (Join-Path $Root 'bin\board.ps1'),
+        (Join-Path $Root 'bin\board-update.ps1'),
         (Join-Path $Root 'bin\board-env.ps1'),
         (Join-Path $Root 'bin\backup-db.ps1'),
         (Join-Path $Root 'runtime\bin\java.exe'),
@@ -135,6 +136,7 @@ function Assert-ZipLayout {
         foreach ($required in @(
             "$TopLevel/app/$ExpectedJarName",
             "$TopLevel/bin/board.ps1",
+            "$TopLevel/bin/board-update.ps1",
             "$TopLevel/runtime/bin/java.exe",
             "$TopLevel/app/release-metadata.json")) {
             if ($names -notcontains $required) { Fail "ZIP 缺少契約路徑：$required" }
@@ -170,7 +172,7 @@ Assert-ServerJar -JarPath $serverJarPath -ExpectedVersion $Version
 if (-not (Test-Path -LiteralPath $jlink -PathType Leaf) -or -not (Test-Path -LiteralPath $jmods -PathType Container)) {
     Fail "JdkHome 必須是含 bin\\jlink.exe 與 jmods 的完整 JDK：$jdkHomePath"
 }
-foreach ($source in @('bin\board.ps1', 'bin\board-env.ps1', 'bin\backup-db.ps1')) {
+foreach ($source in @('bin\board.ps1', 'bin\board-env.ps1', 'bin\backup-db.ps1', 'bin\board-update.ps1')) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $source) -PathType Leaf)) { Fail "repo 缺少 ZIP launcher 需要的檔案：$source" }
 }
 Assert-Java21X64 -Java $java
@@ -186,7 +188,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'app') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $stagingRoot 'bin') -Force | Out-Null
     Copy-Item -LiteralPath $serverJarPath -Destination (Join-Path $stagingRoot ('app\' + $expectedJarName)) -Force
-    foreach ($source in @('board.ps1', 'board-env.ps1', 'backup-db.ps1')) {
+    foreach ($source in @('board.ps1', 'board-env.ps1', 'backup-db.ps1', 'board-update.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot ('bin\' + $source)) -Destination (Join-Path $stagingRoot ('bin\' + $source)) -Force
     }
 

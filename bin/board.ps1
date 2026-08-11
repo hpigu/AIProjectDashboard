@@ -20,7 +20,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'help')]
+    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'update', 'help')]
     [string]$Command = 'help',
 
     # stop：等待逾時後強制終止（會失去關閉前備份）
@@ -30,7 +30,14 @@ param(
     [switch]$Foreground,
 
     # logs：先顯示的行數
-    [int]$Lines = 50
+    [int]$Lines = 50,
+
+    # update：必須由使用者明確指定 immutable stable vV 與來源。
+    [string]$Version,
+    [string]$ReleaseUrl,
+    [string]$ReleaseZip,
+    [string]$Checksums,
+    [switch]$Check
 )
 
 Set-StrictMode -Version 2.0
@@ -678,6 +685,7 @@ function Show-BoardUsage {
   restart              stop 後再 start
   status               顯示 PID、埠號與 /api/health 版本資訊
   logs [-Lines N]      追蹤日誌，預設先顯示 50 行
+  update -Version V ... 明確指定 stable vV 的交易式更新；執行 update -? 看完整用法
 
 環境變數：
   BOARD_PORT               預設 8080
@@ -706,5 +714,10 @@ switch ($Command) {
     }
     'status'  { exit (Invoke-BoardStatus) }
     'logs'    { exit (Invoke-BoardLogs) }
+    'update'  {
+        & (Join-Path $PSScriptRoot 'board-update.ps1') -Version $Version -ReleaseUrl $ReleaseUrl `
+            -ReleaseZip $ReleaseZip -Checksums $Checksums -Check:$Check
+        exit $LASTEXITCODE
+    }
     default   { Show-BoardUsage; exit 0 }
 }

@@ -54,6 +54,7 @@ try {
     foreach ($required in @(
         "$expectedTop/app/$expectedJar",
         "$expectedTop/bin/board.ps1",
+        "$expectedTop/bin/board-update.ps1",
         "$expectedTop/bin/board-env.ps1",
         "$expectedTop/bin/backup-db.ps1",
         "$expectedTop/runtime/bin/java.exe",
@@ -99,6 +100,7 @@ try {
 
     foreach ($scriptPath in @(
         (Join-Path $root 'bin\board.ps1'),
+        (Join-Path $root 'bin\board-update.ps1'),
         (Join-Path $root 'bin\board-env.ps1'),
         (Join-Path $root 'bin\backup-db.ps1'))) {
         $bytes = [System.IO.File]::ReadAllBytes($scriptPath)
