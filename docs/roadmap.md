@@ -2,7 +2,8 @@
 
 「從能跑的專案 → 別人能拿去用的產品」還缺什麼、已經補了什麼、以及為什麼是這樣。
 
-**最後更新**：2026-08-07 ｜ **目前版本**：v3.1.0 ｜ **下一批**：v3.2.0
+**最後更新**：2026-08-11 ｜ **目前版本**：`pom.xml` 為 3.1.1（尚未推 tag，未發布）｜
+**已發布最新版**：v3.1.0 ｜ **下一批**：v3.2.0
 
 編號沿用 2026-08-05 的產品化分析，**數字永不重排**，方便對照歷史討論。
 
@@ -32,34 +33,44 @@
 **對象**：真的想拿去跟 agent 用的使用者——不是想貢獻的開發者，也不是路過看 README 的人。
 **終點線**：在一台沒裝過任何東西的 Windows 上，從下載到「agent 實際建了任務、瀏覽器上看得到」。
 
-一次發 v3.2.0，不拆 patch。執行順序：
+**原 #32（免 JDK 的 Windows zip）已被 #144–#150 這批取代並做完**：三平台
+release CI（`.github/workflows/release.yml` 的 `linux-x64`／`macos-arm64`／
+`macos-x64`／`windows-x64` 四個 build job ＋集中 publish job）、macOS／Linux
+user-scope installer（`install/install.sh`）、Windows jlink ZIP（含 bundled
+JDK 21 runtime）、`bin/board update` 明確更新與原子回滾、完整 SOP 文件
+（[release-install-update-sop.md](release-install-update-sop.md)）都已建立並
+通過**本機／CI 層級**驗證（見下方「未解決的產品發布缺口」，這不等於已產出過
+真實 GitHub Release 或在真正乾淨機器上跑過）。終點線因此還剩下三個缺口，
+按優先序排列：
 
-| 序 | 工作 | 為什麼是這個順序 |
+| 序 | 缺口 | 為什麼是這個順序 |
 |---|---|---|
-| 1 | **乾淨安裝演練 v1** | 演練結果可能推翻 #32 的優先度，必須最先拿到 |
-| 2 | **#32** 免 JDK 的 Windows zip | 目標下的真正瓶頸 |
-| 3 | **#35** `RoleSeeder` 別把本 repo 的開發設定編進產品 | 陌生人裝到的東西不該內建你的路徑與埠號 |
+| 1 | **推送 repo 到 `hpigu/AIProjectDashboard` 的 `main`，觸發第一次真實 release** | 沒有這一步，下面兩項都無法用真實 asset 驗證；`release.yml`、`codex plugin marketplace add hpigu/...` 都要等它才能實際跑 |
+| 2 | **Windows Sandbox 乾淨環境手動 clean install**（`docs/windows-sandbox-clean-install-checklist.md`，#163 追蹤） | 演練結果可能推翻其餘缺口的優先度；清單已就緒，缺的是實際找一台 Windows 執行 |
+| 3 | **#35** `RoleSeeder` 別把本 repo 的開發設定編進產品 | 陌生人裝到的東西不該內建你的路徑與埠號；三平台安裝器就緒後這是下一個會被陌生人踩到的坑 |
 | 4 | **#15** `delete_project`（先補 archive 測試） | 唯一有真實證據的項目，但不阻擋前面 |
 
-### 演練 v1 的設定
+### 未解決的產品發布缺口（2026-08-11 盤點）
 
-- **環境**：Windows Sandbox（Windows 11 Pro 內建，需在「選用功能」啟用並重開機）。
-  每次啟動全新、關閉即銷毀，正是「沒裝過任何東西的機器」的準確定義。
-- **受測物**：現況——下載 v3.1.0 的 jar、自備 JDK。**不是** zip，zip 還不存在。
-  這是前測量：先知道陌生人今天實際卡在哪、卡多久。
-- **切法**：Sandbox 只回答「沒有 JDK 的人能不能把看板跑起來」（那是它唯一能回答
-  而主機回答不了的）。agent 接線與 plugin 在主機用一個全新專案目錄驗——那段跟
-  JDK 無關，塞進 Sandbox 只會為了重裝 Claude Code 而增加噪音。
-- **最大的風險是演練者本人**：你知道太多，會下意識補上文件沒寫的步驟。必須嚴格照
-  文件字面走，不准用記憶。否則演練會回報「很順」，然後陌生人照樣卡死。
-- **文件端已就緒**：#29（README 重整）已於 2026-08-07 完成，演練不會量到文件結構
-  的噪音。
+**本批（#144–#152）完成的是「三平台交付的程式碼與 CI 層級驗證」，不是「已對外
+發布並在真實環境驗證」。** 依規則本批未 push 到遠端，下列缺口全部源自這一點，
+誠實列出、不美化：
 
-### v3.2.0 的項目
+| 優先序 | 缺口 | 現況 | 影響 |
+|---|---|---|---|
+| P0 | **release CI 從未實際觸發過** | `.github/workflows/release.yml` 已建立且通過程式碼層級的四平台 build/self-validate job，但因本批規則不自行 push，**沒有一次 tag push 或 workflow_dispatch 真正跑過**，也就沒有任何真實 GitHub Release asset 存在 | 本文件與 `release-install-update-sop.md`／`release-contract.md` 引用的四個 asset（Linux／macOS arm64／macOS x64 JAR、Windows ZIP）與 `SHA256SUMS.txt` 目前只是**契約規格**，不是可下載的真實檔案；使用者現在唯一能用的安裝路徑是 3a（手動 clone + 現場組裝） |
+| P0 | **Windows Sandbox 乾淨環境手動驗收尚未執行** | `docs/windows-sandbox-clean-install-checklist.md` 清單已就緒（#163 追蹤），但**尚無一次真實執行紀錄**，「驗證記錄」一節仍是空的 | Windows ZIP 的 SmartScreen 互動、非系統管理員帳號、免 JDK 啟動這幾項只在 CI 的 `windows-2022` runner（預裝大量工具，非真正乾淨環境）驗證過，尚未在真正陌生人會遇到的環境確認過 |
+| P1 | **Codex Git marketplace 流程依賴尚未發生的 push** | `release-install-update-sop.md` 第 2、9 節的 `codex plugin marketplace add hpigu/AIProjectDashboard --ref main` 系列指令在推送完成前**執行會失敗**；本機路徑 marketplace（`.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json`）仍是目前唯一可用的安裝入口 | 目前只有本機開發者能安裝 plugin；不影響 server 本身能不能跑 |
+| P1 | **Claude Desktop／Codex Desktop 安裝流程未經驗證** | 本 repo 的 plugin 是為 Claude Code／Codex CLI 撰寫並驗證；是否有對應的桌面版圖形介面**未確認**（見 `release-install-update-sop.md` 第 10 節） | 桌面版使用者目前只能走「不用 plugin，手動接 MCP」路徑（本文件第 5 節），拿不到角色薄殼與 `claim-tasks` skill |
+| P2 | **`RoleSeeder` 把本 repo 開發設定編進產品**（#35，未變動） | 未修 | 見下方項目說明 |
+
+以上五項是目前對「別人能不能真的拿到並用起來」影響最大的缺口，順序依「不做這件事下一項就無法被真實驗證」排列——P0 兩項互為前後腳（推送才能觸發 release，
+release 產出後才能用真實 asset 做 Sandbox 驗收），因此並列最高優先。
+
+### v3.2.0 的其餘項目
 
 | # | 項目 | 狀態 | 要做什麼 |
 |---|---|---|---|
-| 32 | **免 JDK 的 Windows zip** | ⬜ | 走 **jlink 自帶 runtime 的 zip**：解壓即用，`bin/` 腳本完全保留，只改 java 的定位邏輯（優先找包裡的 runtime）。內容為 runtime + jar + Windows 腳本 + `plugin/`，**不放 `.sh`**（Windows zip 裡的 bash 腳本只會讓人猜錯）。**只出 Windows**，mac／Linux 維持現有 jar。`release.yml` 需從單一 ubuntu job 改成 matrix。<br>**兩個已知坑**：(1) java 定位邏輯是已經爆過兩次的同一塊程式碼（`JAVA_TOOL_OPTIONS` 前置行、PowerShell 5.1 的 `NativeCommandError`），第三次動它必須帶測試；(2) Spring 大量用反射與動態載入，`jdeps` 自動推導的模組集會漏掉執行期才要的東西（典型是 `jdk.crypto.ec`、`java.naming`、`java.sql`），要明確列模組或 `--add-modules ALL-MODULE-PATH`。<br>**待決**：解壓後的 `BOARD_DATA_DIR` 預設值——`Program Files` 沒寫入權限，Downloads 又容易被清掉 |
 | 35 | **`RoleSeeder` 把本 repo 的開發設定編進產品** | ⬜ | `seedGenericRoles()` 是必要的——沒有它全新安裝的 `role` 表是空的，`get_role` 回「找不到角色」。但 `seedAgentDashboardOverrides()` 會偵測看板上有沒有叫 `AgentDashboard` 的專案，有就注入寫死本 repo 路徑所有權、埠號與 commit 規則的 `AGENT_DASHBOARD_SEEDS`。**等於把這個 repo 的開發夾層編譯進要發給陌生人的 jar**：任何人只要把專案取名 AgentDashboard 就會拿到這套慣例。也讓 `RoleSeeder.java` 膨脹到 350+ 行、絕大部分是寫死的文字。<br>**做法**：移到測試 fixture，或改為從外部檔案載入 |
 | 15 | **`delete_project`（清掉整個專案）** | ⬜ | **形狀已改**。原規格是逐筆 `delete_tasks`，但真實場景是「我剛剛亂試了一堆，想把痕跡清掉」——要的是一次清整區；而且任務之間有前置相依，逐筆硬刪會留下孤兒相依。<br>**設計**：`delete_project`，**要求專案先是 ARCHIVED 才能刪**。理由見[決策紀錄](#決策紀錄)。<br>**前置**：先補 `ProjectArchiveTools` 的測試，否則整條「先封存才能刪」的安全鎖鏈建立在未被測試的邏輯上。<br>逐筆刪除留待真的有人要求再說——從來沒出現過「我想刪掉某一筆」這個痛點 |
 
@@ -81,7 +92,6 @@
 
 | # | 項目 | 狀態 | 觸發條件／備註 |
 |---|---|---|---|
-| 34 | **升 Spring Boot 4 / Spring AI 2** | ⬜ | Dependabot 想把 Spring Boot `3.5.16 → 4.1.0`、Spring AI `1.1.8 → 2.0.0`——**兩個都是主版號跳躍，不是安全修補**，不能當一般依賴更新合併。整個 MCP 層直接建在 Spring AI 的 tool API 上（`McpToolConfig` 的 `MethodToolCallbackProvider`、六個工具類別的 `@Tool`／`@ToolParam`），1.x → 2.0 很可能改掉這些，那是移植工作不是升版號。**Dependabot 把它包成一個 PR 是因為自己設的 Spring 群組規則**——規則是對的，但它讓一次大改長得跟一般更新一樣。<br>**觸發**：3.5.x 進入 EOL，或出現只有 4.x 才修的安全問題。做之前先在分支上跑 `mvnw test` 量損害範圍。#25 的 MCP 協定層 E2E 測試正好是這次升級的安全網 |
 | 33 | `TaskEditTools`／`TaskBlockTools` 補測試 | ⬜ | 兩個 MCP 工具類別目前無覆蓋測試。`ProjectArchiveTools` 的部分已納入 #15 前置。**觸發**：任一類別要改動時 |
 | 12b | 依賴弱點掃描 | 🟡 | Dependabot alerts 已開；`dependency-review` 已於 2026-08-07 加進 CI（擋 PR 新引進的漏洞依賴）。**仍缺**：對「已存在依賴」的定期掃描（CodeQL 或 OWASP dependency-check）。**觸發**：專案開始有外部使用者，或依賴數再翻倍 |
 | 27 | 升級 migration 測試 | ⬜ | 缺「舊版 data 檔升到新版」的回歸。**觸發**：下一次有破壞性 schema 變更時 |
@@ -100,7 +110,9 @@
 
 | 事項 | 狀態 | 說明 |
 |---|---|---|
-| **啟用 Windows Sandbox**（選用功能 + 重開機） | ⬜ | 演練 v1 的前置。Pro 版內建，目前未啟用 |
+| **推送 repo 到 `hpigu/AIProjectDashboard` 的 `main`** | ⬜ | 本批規則要求不自行 push；沒有這一步，release CI、Codex Git marketplace 流程都無法實際觸發 |
+| **啟用 Windows Sandbox**（選用功能 + 重開機） | ⬜ | `docs/windows-sandbox-clean-install-checklist.md`（#163）的前置。Pro 版內建，目前未啟用 |
+| **在 Windows Sandbox 執行 clean install 清單並補上驗證記錄** | ⬜ | 清單本身已就緒；缺的是實際找一台 Windows 執行並把結果寫回該檔案的「驗證記錄」一節 |
 
 *（其餘手動項目皆已完成，見[已完成](#已完成)。）*
 
@@ -138,7 +150,8 @@
 | 2026-08-06 | **下一批的目標是「陌生人能 clone 就用」，對象是「想拿去跟 agent 用的使用者」** | 三種陌生人（想用的、想貢獻的、路過的）需要的東西完全不同，做錯對象就是白做。選「想用的」是因為另兩種都要先有這種人才會出現 |
 | 2026-08-06 | **這個目標沒有真實使用者，所以先演練再投** | 選了這個目標就等於承認整批工作沒有證據支撐——「陌生人會需要 X」全是猜的。用一次乾淨環境演練把猜測換成觀察，做法沿用 `docs/operations.md` 的還原演練（那次抓出三個真機 bug）|
 | 2026-08-06 | **免 JDK 走 jlink zip，不走 Docker、不走 jpackage** | `bin/` 腳本、PID 檔、埠號反查、`CTRL_C_EVENT`、備份還原**全部建立在「JVM 直接跑在主機上」的假設上**，那是整個 P0 的主要投資。Docker 會讓它們全部作廢，jpackage 則是簽章與公證的無底洞。jlink 只需要改 java 的定位邏輯 |
-| 2026-08-06 | **只出 Windows zip** | 只出能真機驗證的平台。發一個自己驗不了的產物給陌生人，比不發更傷信任 |
+| 2026-08-06 | **只出 Windows zip**（**已被推翻，見下**） | 只出能真機驗證的平台。發一個自己驗不了的產物給陌生人，比不發更傷信任 |
+| 2026-08-11 | **推翻上一項：三平台一起做，不是只出 Windows zip** | #144 制定契約時發現「只出 Windows」低估了 mac／Linux 使用者裝 JDK 的實際痛點，且四平台 CI job 之間高度共用（同一份 preflight、同一份 checksum 契約），拆成兩批反而增加協調成本。**驗證方式改變**：Windows 走真機（Sandbox），Linux／macOS 走 CI runner 上的程式碼層級 build/self-validate（`release-check.ps1 -Smoke` 對等的 smoke 目前只有 Windows 有）——這不是「四平台都同等驗證過」，見上方「未解決的產品發布缺口」 |
 | 2026-08-06 | **備份保留額度依階段分桶**（startup／shutdown／scheduled 各自獨立） | 共用一個桶的話，每 6 小時一次的排程備份一週內就會把關閉前那份一致性快照擠掉，而那份往往最值得留。且這種錯誤毫無徵兆，只有需要還原時才會發現 |
 | 2026-08-06 | **跟不上的 SSE 客戶端直接斷線，不默默丟事件** | 前端在重連後本來就會整批重抓，斷線讓它自我修復到正確狀態；丟事件則讓畫面停在一個沒人知道是錯的狀態 |
 | 2026-08-06 | **MCP 測試自寫客戶端，不引入 MCP client SDK** | 這層測試要驗的正是「線上實際傳了什麼」，用官方 client 會把 schema 與分幀細節一起抽象掉，等於用被測物件驗自己 |
@@ -160,12 +173,14 @@
 
 | # | 項目 | 改動 |
 |---|---|---|
+| 34 | **升 Spring Boot 4 / Spring AI 2** | 完成 Spring Boot `3.5.16 → 4.1.0`、Spring AI `1.1.8 → 2.0.0` 的移植（原描述的觸發條件——EOL 或安全問題——**尚未成立就先做了**，實際觸發是本批次以此為升級基準）。同步改用 Boot 4 模組化的 Web MVC、Flyway 與測試 starter，完成 Jackson 3、MockMvc 與 TestRestTemplate 測試 API 遷移；Spring AI 2.0 依工具 JSON Schema 驗證 MCP 輸入，16 個工具的 schema 與端到端呼叫皆已驗證。`#25` 的 MCP 協定層 E2E 測試如預期發揮安全網作用。`3ce460a` |
 | 29 | **README 拆分** | **提前做掉，因為它擋在 #32 前面**：#32 的終點線是「陌生人照文件字面走能不能跑起來」，而演練的受測物就是 README。用一份把入門與治理混在一起的 34KB 單檔去演練，量到的是文件結構的問題，不是免 JDK 的問題。<br>README 584 行 → 400 行，只走入門路徑（安裝 → 接 agent → 第一次使用 → 設定 → 備份 → 安全），**Windows 與 mac／Linux 並列成表格而非附註在後**；完整介面參考移到 `docs/mcp-tools.md`、角色與派工移到 `docs/agent-roles.md`。順帶刪掉兩份「不是任何東西的正本」的文件（`scope-leader-dispatch.md`、`dev-isolation.md`）。`cb17d95` |
 | 7 | 排程備份 | 執行中預設每 6 小時產生一份 H2 一致性快照（`BOARD_BACKUP_INTERVAL` 可調、`BOARD_BACKUP_SCHEDULE_ENABLED=false` 可停）。**保留額度依階段分桶**，否則排程備份一週內就會把關閉前那份快照擠掉。還原工具與 `/api/diagnostics` 同步納入新 phase。`bbd8425` |
 | 12 | SSE 連線上限與非同步廣播 | 廣播改為入列 + 背景執行緒寫入，解除與 agent tool call 的耦合；每連線有界佇列，跟不上就斷線讓前端重連重抓；連線上限 32，超過回 503。`9c711ed`（PR #8） |
 | 25 | MCP 協定層 E2E 測試 | 7 個測試打真正的 `/mcp`：initialize 身分宣告、tools/list 完整清單、關鍵工具的參數名與必填集合、tools/call 走完整條線、業務錯誤回可讀訊息、未知工具被拒絕、缺 session 不被當正常請求。自寫極簡客戶端而非用 SDK。`59d82f6` |
 | 30 | jar 挑選的版號排序 | 見[修掉的 bug](#修掉的-bug)。`3b58b51` |
 | 31 | plugin 完整性 | 從 #13 拆出。**原本的假設有兩項是錯的**：<br>(1) ~~`plugin/bin/` 缺 Windows 腳本~~ → 實際更糟：`plugin/bin/start-board.sh` 是 git symlink，而 Windows 的 `core.symlinks` 預設 false，checkout 出來是 24 位元組的文字檔，**每個 Windows 使用者拿到的都是壞檔案**。它同時是死碼，因此直接移除。`d8ee0d5`<br>(2) ~~角色指引不跟著 plugin 走~~ → **不成立**。`plugin/agents/` 六個角色檔完整在 plugin 裡；實質指引走 `get_role`，而 `RoleSeeder` 啟動時以 `createRoleIfAbsent` 補齊通用角色。<br>(3) plugin 版號同步 → 隨 `e5fdcab` 解決 |
+| 32 | **三平台 release 交付**（取代原「免 JDK 的 Windows zip」） | **形狀比原描述大**：原 #32 只規劃 Windows zip，實際做成 Linux／macOS arm64／macOS x64／Windows x64 四平台契約（`docs/release-contract.md`，#144）、macOS／Linux user-scope installer（`install/install.sh`，#146）、Windows jlink ZIP 打包器（#147）、`bin/board update` 明確更新與原子回滾（#148）、擴充 `release.yml` 為四平台 build + 集中 publish job（#149）、跨平台安裝／更新／回滾與 H2 舊資料升級驗證（#150）、Claude／Codex 共用安裝更新 SOP（`docs/release-install-update-sop.md`，#151）。<br>**範圍是「程式碼與 CI 層級驗證完成」，不是「已對外發布」**：本批規則要求不自行 push，因此 release CI **從未實際觸發過**一次 tag push 或 workflow_dispatch，沒有真實 GitHub Release asset 存在；Windows Sandbox 乾淨環境手動驗收（`docs/windows-sandbox-clean-install-checklist.md`，#163）也**尚未實際執行**。這兩項是目前最高優先的產品發布缺口，見上方「未解決的產品發布缺口」 |
 
 ## v3.1.0（2026-08-06）
 
