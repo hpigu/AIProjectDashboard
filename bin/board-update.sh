@@ -223,6 +223,10 @@ fi
 printf 'current=%s\ntarget=%s\npid_before=%s\nactivation=%s\n' "$current_version" "$requested_version" "$pid_before" "$old_link" > "$snapshot/manifest.txt"
 snapshot_ready=1
 
+# 注意：publish 成功之後才失敗的 rollback（activate／start／readiness）不會移除
+# 這個目錄，restore_old 只還原 current 指標與資料庫。留著它是為了保住現場，但
+# 上面第 138 行會因為「releases/<版號> 已存在」拒絕再跑同一版；重試前要先人工
+# 確認並刪除該目錄。診斷訊息裡的 release=... 就是這個路徑。
 if fail_at publish || ! mv "$stage" "$root/releases/$requested_version"; then restore_old publish || true; die 'runtime publish failed'; fi
 if fail_at activate || ! ln -s "releases/$requested_version" "$root/.current.new.$$" || ! replace_activation_link "$root/.current.new.$$" "$root/current"; then restore_old activate || true; die 'activation pointer switch failed'; fi
 activated=1

@@ -121,6 +121,11 @@ function Get-BoardMaskedDbUrl {
 # 端對 Windows 套用的 AclFileAttributeView，以及 bin/board-env.sh 的
 # board_secure_dir／board_secure_file（POSIX 0700／0600）。
 #
+# 但有一處刻意不對稱：這裡會對目錄加上 ContainerInherit/ObjectInherit，讓之後
+# 在該目錄下新建的項目直接繼承這條 ACE；Java 端的 applyWindowsAcl 不分目錄或
+# 檔案，一律寫入不帶繼承旗標的 ACE。兩邊都能達成「只有目前使用者可存取」，
+# 差別只在新建子項目是否自動被涵蓋，不要當成其中一邊寫錯而「修正」成一致。
+#
 # 新建路徑（$NewlyCreated=$true）套用失敗會拋例外，呼叫端必須讓它中止啟動——
 # 此時路徑裡還沒有使用者資料，放行只會留下一個從一開始就權限過寬的路徑。
 # 既有路徑套用失敗只印警告並回傳，不刪除或搬動任何資料、不阻擋服務繼續運作。
@@ -148,15 +153,14 @@ function Protect-BoardPath {
         $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
         # 繼承旗標只對「容器」（目錄）有意義；.NET 對檔案的 ACE 不允許設定
         # ContainerInherit/ObjectInherit，會丟出 "No flags can be set." 例外，
-        # 必須依路徑實際型別（目錄／檔案）分別建立規則。
-        $isContainer = Test-Path -LiteralPath $Path -PathType Container
-        if ($isContainer) {
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $currentUser, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        # 因此只有目錄帶繼承旗標，檔案一律 None。
+        $inheritance = if (Test-Path -LiteralPath $Path -PathType Container) {
+            'ContainerInherit,ObjectInherit'
         } else {
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $currentUser, 'FullControl', 'None', 'None', 'Allow')
+            'None'
         }
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $currentUser, 'FullControl', $inheritance, 'None', 'Allow')
 
         # 停用繼承並清除既有規則（第二參數 $true = 移除繼承來的規則），
         # 只留下面明確加入的「目前使用者 FullControl」一條，等同 POSIX 的 0700/0600：
