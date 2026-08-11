@@ -45,15 +45,22 @@ function Get-BoardUserHome {
 # ---------------------------------------------------------------------------
 # 家目錄與資料目錄
 #
-# 資料目錄預設值有兩種情境，與 board-env.sh 完全相同（不可任意更動，否則既有
-# 使用者的看板會「看起來資料不見了」）：
-#   a) 既有使用者：repo 內 <repo>\data\board.mv.db 已存在 → 沿用該路徑。
-#   b) 全新環境：改用 %USERPROFILE%\.ai-project-board\data\board。
+# 資料目錄預設值有三種情境：
+#   a) Windows release ZIP：一律使用 user scope，ZIP 程式目錄可被覆蓋或刪除。
+#   b) 既有 repo 使用者：repo 內 <repo>\data\board.mv.db 已存在 → 沿用該路徑。
+#   c) 全新 repo 環境：改用 %USERPROFILE%\.ai-project-board\data\board。
 #      plugin 目錄可能因更新而遺失內容，H2 檔案不能放在會被覆蓋的路徑下。
 # ---------------------------------------------------------------------------
 $script:BoardHomeDir = Get-BoardEnvValue 'BOARD_HOME_DIR' (Join-Path (Get-BoardUserHome) '.ai-project-board')
 
-if (Test-Path (Join-Path $RepoRoot 'data\board.mv.db')) {
+# Release ZIP 的根目錄同時含 app/ 與 runtime/；只要其中一個存在就視為 release
+# 佈局，讓損壞／不完整的 ZIP 也 fail closed，絕不退回 PATH、target 或 repo data。
+$script:BoardIsBundledRelease = (Test-Path (Join-Path $RepoRoot 'app')) -or `
+    (Test-Path (Join-Path $RepoRoot 'runtime'))
+
+if ($script:BoardIsBundledRelease) {
+    $script:BoardDefaultDbDir = Join-Path $script:BoardHomeDir 'data'
+} elseif (Test-Path (Join-Path $RepoRoot 'data\board.mv.db')) {
     $script:BoardDefaultDbDir = Join-Path $RepoRoot 'data'
 } else {
     $script:BoardDefaultDbDir = Join-Path $script:BoardHomeDir 'data'
@@ -62,8 +69,14 @@ if (Test-Path (Join-Path $RepoRoot 'data\board.mv.db')) {
 $script:BoardPort      = Get-BoardEnvValue 'BOARD_PORT' '8080'
 $script:BoardDbUrl     = Get-BoardEnvValue 'BOARD_DB_URL' `
     ("jdbc:h2:file:" + (Join-Path $script:BoardDefaultDbDir 'board') + ";DB_CLOSE_ON_EXIT=FALSE")
-$script:BoardLogFile   = Get-BoardEnvValue 'BOARD_LOG_FILE' (Join-Path $RepoRoot 'logs\board.log')
+if ($script:BoardIsBundledRelease) {
+    $defaultBoardLogFile = Join-Path $script:BoardHomeDir 'logs\board.log'
+} else {
+    $defaultBoardLogFile = Join-Path $RepoRoot 'logs\board.log'
+}
+$script:BoardLogFile   = Get-BoardEnvValue 'BOARD_LOG_FILE' $defaultBoardLogFile
 $script:BoardBackupDir = Get-BoardEnvValue 'BOARD_BACKUP_DIR' (Join-Path $script:BoardHomeDir 'backups')
+$script:BoardConfigDir = Get-BoardEnvValue 'BOARD_CONFIG_DIR' (Join-Path $script:BoardHomeDir 'config')
 
 # PID 檔放在家目錄而非 repo 內：repo 可能被 plugin 更新覆蓋，且同一份 repo 可能
 # 被多個 worktree 共用，而「正在跑的看板」在一台機器上只有一個。
@@ -74,6 +87,8 @@ $env:BOARD_PORT = $script:BoardPort
 $env:BOARD_DB_URL = $script:BoardDbUrl
 $env:BOARD_LOG_FILE = $script:BoardLogFile
 $env:BOARD_BACKUP_DIR = $script:BoardBackupDir
+$env:BOARD_HOME_DIR = $script:BoardHomeDir
+$env:BOARD_CONFIG_DIR = $script:BoardConfigDir
 
 # ---------------------------------------------------------------------------
 # 由 BOARD_DB_URL 反推 H2 檔案路徑（不含 .mv.db 副檔名）。

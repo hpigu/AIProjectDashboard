@@ -4,6 +4,38 @@
 執行 jar／接線。兩套 plugin 會帶入 MCP 宣告、角色 agent 與 leader skill；所有
 方式最終連到的都是同一顆 Spring Boot 行程。
 
+## Windows x64 stable release ZIP（不需預裝 Java）
+
+從同一個 stable release `vV` 取得
+`ai-project-board-backend-windows-x64-V.zip` 與
+`ai-project-board-backend-V-SHA256SUMS.txt`，先依
+[release contract](release-contract.md#4-sha-256-完整性契約) 驗證 ZIP 的 SHA-256，
+再解壓到使用者可寫的位置（路徑可含空白或非 ASCII 字元）。不要解到 plugin cache，
+也不要從 ZIP 中挑出 JAR 或 runtime 另行搬動。
+
+ZIP 內的唯一服務入口固定是同層 bundled JDK 21 runtime；它**不會**改用
+`JAVA_HOME`、PATH、網路下載或其他 JAR：
+
+```powershell
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 start
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 status
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 stop
+```
+
+預設只監聽 `127.0.0.1:8080`。由於 MCP 沒有 server-side authentication，不能改成
+公開位址；若埠號已被使用，明確設定其他 loopback port，例如：
+
+```powershell
+$env:BOARD_PORT = '8081'
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 start
+```
+
+資料、備份、日誌、PID 與設定預設都在
+`%USERPROFILE%\.ai-project-board`，而不是可被更新／刪除的解壓程式目錄；新建路徑
+會收斂為目前使用者專用 ACL。可用 `BOARD_HOME_DIR` 改成另一個使用者可寫的根目錄。
+若 ZIP 缺少 bundled `runtime\bin\java.exe` 或 `app\ai-project-board-backend-V.jar`，
+launcher 會 fail closed 並要求重新下載，不會退回系統 Java。
+
 ## 0. macOS／Linux stable release 安裝（不需 sudo）
 
 Stable release 的 macOS／Linux 安裝器不需要 repo checkout、Maven、`target/` 或
