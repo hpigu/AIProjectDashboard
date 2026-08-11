@@ -1,6 +1,7 @@
 package dev.aiboard.config;
 
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -20,6 +21,17 @@ class StartupBackupScriptTest {
     Path tempDir;
 
     private final Path script = Path.of("bin/backup-db.sh").toAbsolutePath().normalize();
+
+    // 這裡跑的是真正的 POSIX shell 腳本，只在 Linux/macOS 上有意義。Windows 的
+    // 對應實作是 bin/backup-db.ps1，由 scripts/windows-check/check.ps1 涵蓋。
+    // 少了這道防護，Windows 上的 `bash` 會被解析成 WSL；沒有安裝任何
+    // distribution 時它印出安裝指引並回傳 1，測試就會拿這段訊息去比對而失敗。
+    @BeforeEach
+    void requirePosixShellHost() {
+        Assumptions.assumeFalse(
+                System.getProperty("os.name", "").toLowerCase().contains("win"),
+                "bin/backup-db.sh 僅適用於 Linux/macOS；Windows 由 backup-db.ps1 與 windows-check 涵蓋");
+    }
 
     @Test
     void validDatabaseCreatesVerifiedBackupWithoutTmpResidue() throws Exception {

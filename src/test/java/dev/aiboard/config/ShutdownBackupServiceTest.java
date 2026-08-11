@@ -1,6 +1,7 @@
 package dev.aiboard.config;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -125,7 +126,14 @@ class ShutdownBackupServiceTest {
             // 必然失敗（模擬驗收條件 3：備份目錄不可寫）。
             Path unwritableParent = tempDir.resolve("unwritable-parent");
             Files.createDirectories(unwritableParent);
-            assertThat(unwritableParent.toFile().setWritable(false)).isTrue();
+            // 這個情境需要「目錄真的變成不可寫」。Windows 的 NTFS 唯讀屬性不會
+            // 阻止在目錄裡建立項目（setWritable 回傳 false），以 root 執行時
+            // POSIX 權限同樣擋不住。兩種情況下這個測試都失去了它要驗的前提，
+            // 應該略過而不是拿一個沒生效的設定去斷言。
+            Assumptions.assumeTrue(unwritableParent.toFile().setWritable(false),
+                    "此環境無法將目錄設為不可寫（Windows 唯讀屬性或以 root 執行），略過");
+            Assumptions.assumeFalse(Files.isWritable(unwritableParent),
+                    "目錄雖標記為唯讀但仍可寫入，無法建立此測試的前提，略過");
             backupDir = unwritableParent.resolve("backups");
 
             String dbUrl = "jdbc:h2:file:" + dbDir.resolve("board") + ";DB_CLOSE_ON_EXIT=FALSE";

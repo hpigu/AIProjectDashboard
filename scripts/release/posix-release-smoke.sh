@@ -219,7 +219,17 @@ pass 'checksum mismatch is rejected before installation'
 
 (cd / && env HOME="$isolated_home" "$INSTALLER" --jar "$current_jar" --checksums "$current_checksums" \
   --java "$java_bin" --home "$lifecycle_root")
-run_board "$lifecycle_root" start
+# 啟動失敗時 bin/board 只印出「去看 log」就 exit，而這些 log 留在拋棄式的隔離
+# HOME 裡，CI 上沒有人能事後打開它們。失敗當下就把它們倒出來，否則遠端只會看到
+# 一行「行程已提前結束」，完全無法診斷。
+dump_board_logs() {
+  for log_file in "$lifecycle_root/logs/smoke-board.console.log" "$lifecycle_root/logs/smoke-board.log"; do
+    [ -f "$log_file" ] || continue
+    printf '[posix-release-smoke][診斷] ===== %s =====\n' "$log_file" >&2
+    tail -n 60 "$log_file" >&2 || true
+  done
+}
+run_board "$lifecycle_root" start || { dump_board_logs; die 'real lifecycle start failed'; }
 assert_running "$lifecycle_root"
 run_board "$lifecycle_root" stop
 assert_stopped "$lifecycle_root"
