@@ -1,100 +1,262 @@
 name: Release
 
-# 專案原本沒有任何 release：git tag 是空的，也沒有預編 jar，任何人想用都得
-# 自己備妥 JDK 21 並現場組裝（首次啟動會多花數十秒到數分鐘，且需要網路抓
-# Maven 依賴）。這個 workflow 讓 vX.Y.Z 的 tag 直接產出可下載的 jar。
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: '要發布的 tag（例如 v3.0.0），需已存在'
+        description: '要發布的既有 stable tag（例如 v3.1.1）'
         required: true
+        type: string
 
+# Build jobs never receive write credentials. Only the final job needs to create and
+# publish a GitHub Release after all four independently validated artifacts arrive.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: 組裝並發布
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    env:
-      BOARD_PORT: '8081'
-      BOARD_DB_URL: 'jdbc:h2:file:./data/ci;DB_CLOSE_ON_EXIT=FALSE'
-
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - name: 設定 JDK 21
-        uses: actions/setup-java@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
-
-      # 擋掉「tag 打在錯的 commit 上」——實際發生過：v3.1.0 打在還沒合併版號變更的
-      # main 上，release 於是產出一個名為 ai-project-board-backend-3.0.0.jar 的檔案
-      # 掛在 v3.1.0 底下，而且整個流程一路綠燈沒有任何人被告知。
-      #
-      # 放在測試之前：這一項失敗代表整個 release 從一開始就不該進行，沒必要先花
-      # 幾分鐘跑完測試再來發現。
-      - name: 確認 tag 與 pom.xml 版號一致
+      - name: Verify stable tag, version, and thin plugin metadata
         env:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          pom_version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
-          if [ "v${pom_version}" != "${TAG}" ]; then
-            echo "::error::tag ${TAG} 與 pom.xml 的版本 ${pom_version} 不一致。" >&2
-            echo "多半是 tag 打在還沒合併版號變更的 commit 上。若照舊發布，會產出一個" >&2
-            echo "名稱與 tag 對不上的 jar，下載的人無從得知手上的是哪一版。" >&2
-            echo "處理方式：先把含版號變更的分支合併進 main，刪掉這個 tag 後重打。" >&2
-            exit 1
-          fi
-          echo "tag ${TAG} 與 pom.xml 版本 ${pom_version} 一致。"
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::${TAG} is not a stable vX.Y.Z tag"; exit 1; }
+          [ "v${version}" = "$TAG" ] || { echo "::error::tag ${TAG} does not match pom.xml version ${version}"; exit 1; }
+          ./scripts/check-versions.sh
+          ./scripts/check-plugin-parity.sh
+          grep -Fq '"source": "./plugin"' .claude-plugin/marketplace.json || { echo '::error::Claude marketplace no longer points at ./plugin'; exit 1; }
+          grep -Fq '"path": "./plugins/ai-project-board"' .agents/plugins/marketplace.json || { echo '::error::Codex marketplace no longer points at ./plugins/ai-project-board'; exit 1; }
 
-      # 發布前一定要跑測試：release 是唯一會被陌生人直接下載執行的產物，
-      # 不能因為「tag 推上去了」就跳過驗證。
-      - name: 執行測試
-        run: ./mvnw -B test
-
-      - name: 組裝 jar
-        run: ./mvnw -B -DskipTests package
-
-      - name: 產生 checksum
-        id: artifacts
+  linux-x64:
+    name: Linux x64 build and self-validate
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BOARD_PORT: '18081'
+      BOARD_DB_URL: 'jdbc:h2:file:./data/release-linux;DB_CLOSE_ON_EXIT=FALSE'
+      BOARD_LOG_FILE: './logs/release-linux.log'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Test and package
         run: |
           set -euo pipefail
-          jar_path="$(find target -maxdepth 1 -name '*.jar' ! -name '*.original' | head -n1)"
-          if [ -z "${jar_path}" ]; then
-            echo "找不到組裝好的 jar" >&2
-            exit 1
-          fi
-          sha256sum "${jar_path}" | awk -v name="$(basename "${jar_path}")" \
-            '{print $1 "  " name}' > "${jar_path}.sha256"
-          echo "jar_path=${jar_path}" >> "$GITHUB_OUTPUT"
+          ./mvnw -B test
+          ./mvnw -B -DskipTests package
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          mkdir release-assets
+          cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-linux-x64-${version}.jar"
+          ./scripts/release/release-assets.sh validate-platform --version "$version" --platform linux-x64 --directory release-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x64
+          path: release-assets/ai-project-board-backend-linux-x64-*.jar
+          if-no-files-found: error
 
-      - name: 建立 GitHub Release
+  macos-arm64:
+    name: macOS arm64 build and self-validate
+    needs: preflight
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      BOARD_PORT: '18082'
+      BOARD_DB_URL: 'jdbc:h2:file:./data/release-macos-arm64;DB_CLOSE_ON_EXIT=FALSE'
+      BOARD_LOG_FILE: './logs/release-macos-arm64.log'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Gate native runner architecture
+        run: test "$(uname -m)" = arm64
+      - name: Test and package
+        run: |
+          set -euo pipefail
+          ./mvnw -B test
+          ./mvnw -B -DskipTests package
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          mkdir release-assets
+          cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-macos-arm64-${version}.jar"
+          ./scripts/release/release-assets.sh validate-platform --version "$version" --platform macos-arm64 --directory release-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-arm64
+          path: release-assets/ai-project-board-backend-macos-arm64-*.jar
+          if-no-files-found: error
+
+  macos-x64:
+    name: macOS x64 build and self-validate
+    needs: preflight
+    runs-on: macos-13
+    timeout-minutes: 30
+    env:
+      BOARD_PORT: '18083'
+      BOARD_DB_URL: 'jdbc:h2:file:./data/release-macos-x64;DB_CLOSE_ON_EXIT=FALSE'
+      BOARD_LOG_FILE: './logs/release-macos-x64.log'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Gate native runner architecture
+        run: test "$(uname -m)" = x86_64
+      - name: Test and package
+        run: |
+          set -euo pipefail
+          ./mvnw -B test
+          ./mvnw -B -DskipTests package
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          mkdir release-assets
+          cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-macos-x64-${version}.jar"
+          ./scripts/release/release-assets.sh validate-platform --version "$version" --platform macos-x64 --directory release-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-x64
+          path: release-assets/ai-project-board-backend-macos-x64-*.jar
+          if-no-files-found: error
+
+  windows-x64:
+    name: Windows x64 build and self-validate
+    needs: preflight
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      BOARD_PORT: '18084'
+      BOARD_DB_URL: 'jdbc:h2:file:./data/release-windows;DB_CLOSE_ON_EXIT=FALSE'
+      BOARD_LOG_FILE: './logs/release-windows.log'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Test, package, and Windows jlink smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw "Windows x64 runner required; got $env:PROCESSOR_ARCHITECTURE" }
+          .\mvnw.cmd -B test
+          .\mvnw.cmd -B -DskipTests package
+          [xml]$pom = Get-Content pom.xml
+          $version = $pom.project.version
+          $jar = "target\ai-project-board-backend-$version.jar"
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\package-windows-x64.ps1 -ServerJar $jar -JdkHome $env:JAVA_HOME -Version $version -OutputDirectory target\release
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\package-fixture.ps1 -ServerJar $jar -Version $version
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\release-check.ps1 -ReleaseZip "target\release\ai-project-board-backend-windows-x64-$version.zip" -Smoke
+          New-Item -ItemType Directory -Path release-assets | Out-Null
+          Copy-Item "target\release\ai-project-board-backend-windows-x64-$version.zip" release-assets
+          bash scripts/release/release-assets.sh validate-platform --version $version --platform windows-x64 --directory release-assets
+          if ($LASTEXITCODE -ne 0) { throw 'shared release asset validation failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64
+          path: release-assets/ai-project-board-backend-windows-x64-*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Assemble and publish complete release
+    needs: [linux-x64, macos-arm64, macos-x64, windows-x64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Assemble and validate deterministic checksums
+        id: release
+        run: |
+          set -euo pipefail
+          version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          ./scripts/release/release-assets.sh assemble --version "$version" --directory release-assets
+          ./scripts/release/release-assets.sh validate --version "$version" --directory release-assets
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Refuse to overwrite an existing release, including draft
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
-          JAR_PATH: ${{ steps.artifacts.outputs.jar_path }}
-        # 用內建的 gh CLI 與 GITHUB_TOKEN，不引入第三方 action：release 是
-        # 供人下載執行的產物，這條路徑上的依賴愈少愈好。
         run: |
           set -euo pipefail
-          gh release create "${TAG}" \
-            "${JAR_PATH}" "${JAR_PATH}.sha256" \
-            --title "${TAG}" \
-            --generate-notes \
-            --notes "執行方式：JDK 21 環境下 \`java -jar $(basename "${JAR_PATH}")\`，
-            或 clone repo 後執行 \`bin/board start\`（會自動找 jar、檢查埠號與鎖檔、
-            啟動前備份）。下載後可用附帶的 .sha256 驗證檔案完整性。
-
-            預設只監聽 127.0.0.1，且 /mcp 沒有 server-side 認證，不要在未自行
-            加上認證層的情況下對外暴露。"
+          status="$(curl --silent --show-error --output /tmp/release.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
+          case "$status" in
+            404) ;;
+            200) echo "::error::release ${TAG} already exists (including drafts); refusing to overwrite, delete, or patch it"; exit 1 ;;
+            *) echo "::error::could not safely determine whether release ${TAG} already exists (GitHub API HTTP ${status})"; exit 1 ;;
+          esac
+      - name: Create draft and upload the five validated assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" --draft --title "$TAG" \
+            --notes "Stable server release for tag ${TAG}, built from ${GITHUB_SHA}. Download the platform-specific server artifact and verify it against ai-project-board-backend-${VERSION}-SHA256SUMS.txt before installation. The included Claude and Codex plugins remain thin clients."
+          gh release upload "$TAG" \
+            "release-assets/ai-project-board-backend-linux-x64-${VERSION}.jar" \
+            "release-assets/ai-project-board-backend-macos-arm64-${VERSION}.jar" \
+            "release-assets/ai-project-board-backend-macos-x64-${VERSION}.jar" \
+            "release-assets/ai-project-board-backend-windows-x64-${VERSION}.zip" \
+            "release-assets/ai-project-board-backend-${VERSION}-SHA256SUMS.txt"
+      - name: Re-verify draft assets before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected="$(printf '%s\n' \
+            "ai-project-board-backend-linux-x64-${VERSION}.jar" \
+            "ai-project-board-backend-macos-arm64-${VERSION}.jar" \
+            "ai-project-board-backend-macos-x64-${VERSION}.jar" \
+            "ai-project-board-backend-windows-x64-${VERSION}.zip" \
+            "ai-project-board-backend-${VERSION}-SHA256SUMS.txt" | LC_ALL=C sort)"
+          actual="$(gh release view "$TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          [ "$actual" = "$expected" ] || { echo '::error::draft asset list is incomplete or contains unexpected files'; exit 1; }
+          gh release edit "$TAG" --draft=false
