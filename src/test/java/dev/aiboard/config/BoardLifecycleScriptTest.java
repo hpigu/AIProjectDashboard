@@ -1,5 +1,7 @@
 package dev.aiboard.config;
 
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -35,6 +37,17 @@ class BoardLifecycleScriptTest {
     Path tempDir;
 
     private final Path script = Path.of("bin/board").toAbsolutePath().normalize();
+
+    // 見 StartupBackupScriptTest.requirePosixShellHost：Windows 上的 `bash` 會
+    // 落到未安裝 distribution 的 WSL，回傳的是安裝指引而不是腳本輸出。這裡另外
+    // 還用到 `sleep` 這類 POSIX 工具。Windows 的生命週期入口是 bin/board.ps1，
+    // 由 scripts/windows-check/check.ps1 涵蓋。
+    @BeforeEach
+    void requirePosixShellHost() {
+        Assumptions.assumeFalse(
+                System.getProperty("os.name", "").toLowerCase().contains("win"),
+                "bin/board 僅適用於 Linux/macOS；Windows 由 board.ps1 與 windows-check 涵蓋");
+    }
 
     @Test
     void statusReportsNotRunningWithDedicatedExitCode() throws Exception {

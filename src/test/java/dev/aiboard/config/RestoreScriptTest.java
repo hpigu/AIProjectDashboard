@@ -1,6 +1,7 @@
 package dev.aiboard.config;
 
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -33,6 +34,16 @@ class RestoreScriptTest {
     Path tempDir;
 
     private final Path script = Path.of("bin/restore-db.sh").toAbsolutePath().normalize();
+
+    // 見 StartupBackupScriptTest.requirePosixShellHost：Windows 上的 `bash` 會
+    // 落到未安裝 distribution 的 WSL，回傳的是安裝指引而不是腳本輸出。
+    // Windows 的還原路徑由 bin/restore-db.ps1 與 windows-check 涵蓋。
+    @BeforeEach
+    void requirePosixShellHost() {
+        Assumptions.assumeFalse(
+                System.getProperty("os.name", "").toLowerCase().contains("win"),
+                "bin/restore-db.sh 僅適用於 Linux/macOS；Windows 由 restore-db.ps1 與 windows-check 涵蓋");
+    }
 
     @Test
     void restoresStartupBackupAndPreservesExistingDatabase() throws Exception {
