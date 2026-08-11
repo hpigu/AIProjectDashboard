@@ -171,21 +171,54 @@ function Protect-BoardPath {
     }
 }
 
-# 建立目錄（若不存在）並套用僅限目前使用者的 ACL。回傳 $true 成功／$false 失敗
-# （新建路徑套用 ACL 失敗時）；呼叫端應在 $false 時中止對應流程。
+# 建立目錄（若不存在）並套用僅限目前使用者的 ACL。沿路每一層由本次呼叫新建的
+# 祖先都必須由外到內逐層收斂，不能只保護最內層：例如一次建立
+# %USERPROFILE%\.ai-project-board\data 時，外層若仍繼承寬鬆 ACL，同機其他使用者
+# 依然可能列出敏感路徑。語意與 bash 的 board_secure_dir 及 Java 的
+# SensitiveDirectories.ensureSecureDirectory 對稱。
+#
+# 回傳 $true 成功／$false 失敗（任一新建祖先套用 ACL 失敗時）；呼叫端應在
+# $false 時中止對應流程。既有目錄仍只做盡力收斂，失敗警告但不阻擋。
 function New-BoardSecureDirectory {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $wasNew = -not (Test-Path $Path)
     try {
-        New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
+        $fullPath = [System.IO.Path]::GetFullPath($Path)
     } catch {
-        Write-Host "[board-env][錯誤] 無法建立目錄：$Path ($($_.Exception.Message))"
+        Write-Host "[board-env][錯誤] 無法解析目錄路徑：$Path ($($_.Exception.Message))"
+        return $false
+    }
+
+    # 在 New-Item -Force 一次建立整條路徑前，先保存所有缺失層級。List.Insert(0,...)
+    # 讓後續順序固定為外層到內層；若中途失敗，尚未放入資料前就 fail closed。
+    $missingAncestors = New-Object 'System.Collections.Generic.List[string]'
+    $cursor = $fullPath
+    while (-not (Test-Path -LiteralPath $cursor -PathType Container)) {
+        if (Test-Path -LiteralPath $cursor) {
+            Write-Host "[board-env][錯誤] 目錄路徑已被非目錄項目佔用：$cursor"
+            return $false
+        }
+        $missingAncestors.Insert(0, $cursor)
+        $parent = Split-Path -Parent $cursor
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $cursor) { break }
+        $cursor = $parent
+    }
+
+    try {
+        New-Item -ItemType Directory -Path $fullPath -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "[board-env][錯誤] 無法建立目錄：$fullPath ($($_.Exception.Message))"
         return $false
     }
 
     try {
-        Protect-BoardPath -Path $Path -NewlyCreated $wasNew
+        if ($missingAncestors.Count -eq 0) {
+            Protect-BoardPath -Path $fullPath -NewlyCreated $false
+        } else {
+            foreach ($createdPath in $missingAncestors) {
+                Protect-BoardPath -Path $createdPath -NewlyCreated $true
+            }
+        }
         return $true
     } catch {
         Write-Host "[board-env][錯誤] $($_.Exception.Message)"
