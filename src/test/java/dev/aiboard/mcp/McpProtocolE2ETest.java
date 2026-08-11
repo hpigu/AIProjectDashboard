@@ -1,12 +1,13 @@
 package dev.aiboard.mcp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.resttestclient.TestRestTemplate;
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -41,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 名為 {@code projectName}（不是直覺的 {@code projectRef}）；MCP {@code serverInfo.version}
  * 曾寫死在 {@code application.yml}，跳版後仍回報舊版號而沒有任何測試察覺。
  */
+@AutoConfigureTestRestTemplate
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.datasource.url=jdbc:h2:mem:mcp-protocol-e2e;DB_CLOSE_DELAY=-1",
         "spring.jpa.hibernate.ddl-auto=validate",
@@ -309,7 +311,7 @@ class McpProtocolE2ETest {
 
     private List<String> propertyNames(JsonNode tool) {
         List<String> names = new ArrayList<>();
-        tool.path("inputSchema").path("properties").fieldNames().forEachRemaining(names::add);
+        names.addAll(tool.path("inputSchema").path("properties").propertyNames());
         return names;
     }
 
