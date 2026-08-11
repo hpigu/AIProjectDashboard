@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:archive-concurrency;DB_CLOSE_DELAY=-1",
         "spring.jpa.hibernate.ddl-auto=validate",
-        "logging.file.name=/private/tmp/agentdashboard-task-125-archive-concurrency.log"
+        "logging.file.name=/tmp/ai-project-board-archive-concurrency-test.log"
 })
 class ProjectArchiveConcurrencyTest {
 
