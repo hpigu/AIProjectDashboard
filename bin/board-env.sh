@@ -61,6 +61,112 @@ board_db_file_path() {
 }
 
 # ---------------------------------------------------------------------------
+# 遮罩 BOARD_DB_URL 中可能內嵌的連線憑證，供任何要印到 console／log 的地方使用。
+#
+# H2 的 JDBC URL 語法允許把帳密當成分號分隔的參數內嵌在 URL 裡（例如
+# jdbc:h2:file:./data/board;USER=sa;PASSWORD=secret），而 BOARD_DB_URL 整串
+# 都來自使用者可控的環境變數。啟動、status 等指令原本直接把整串 URL 印到
+# console／BOARD_LOG_FILE，一旦使用者這樣設定，密碼就會明文留在終端機捲動
+# 記錄與日誌檔裡。這裡只遮罩 USER/PASSWORD 兩個參數的值，其餘部分（路徑、
+# DB_CLOSE_ON_EXIT 等非敏感設定）維持可見，仍足以除錯。
+# ---------------------------------------------------------------------------
+board_mask_db_url() {
+  printf '%s' "$1" | sed -E \
+    -e 's/([Uu][Ss][Ee][Rr]=)[^;]*/\1***/g' \
+    -e 's/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]=)[^;]*/\1***/g'
+}
+
+# 不依賴呼叫端是否已定義 err()：board-env.sh 會被 bin/backup-db.sh 獨立執行時
+# 直接 source（此時呼叫端的 err() 尚未定義），因此這裡自帶一份最小輸出函式，
+# 不覆蓋呼叫端已定義的同名函式（bin/board、bin/restore-db.sh 都會先定義好
+# 自己的 err() 才 source 本檔，沿用它們的前綴，不被這裡蓋掉）。
+if ! declare -f err >/dev/null 2>&1; then
+  err() { printf '[board-env][錯誤] %s\n' "$*" >&2; }
+fi
+
+# ---------------------------------------------------------------------------
+# 建立目錄（若不存在）並收斂為僅目前使用者可讀寫執行（0700）。
+#
+# 對稱於 Java 側的 dev.aiboard.config.SensitiveDirectories：新建目錄一律
+# fail closed（chmod 失敗即整個函式失敗，呼叫端必須中止，因為此時目錄裡還
+# 沒有任何使用者資料，放行只會留下一個從一開始就權限過寬的目錄）；已存在的
+# 目錄則盡力修正過寬權限，chmod 失敗只印警告並放行，不阻擋腳本繼續執行、
+# 也不刪除或搬動任何既有資料。
+#
+# 這裡管的是 shell 腳本自己會建立的路徑（PID 目錄、日誌目錄、啟動前備份目錄、
+# 資料庫目錄），與 Java 行程啟動後由 EnvironmentPostProcessor／
+# H2SnapshotService 收斂的是同一批路徑、同一套語意，只是腳本先於 JVM 執行時
+# 先做一次，避免行程啟動前的短暫窗口仍是預設 umask。
+#
+# 沿路每一層「本次呼叫才新建」的父目錄都要收斂，不是只顧最內層：全新環境
+# 首次啟動時 ~/.ai-project-board 與 ~/.ai-project-board/data 可能一次都不
+# 存在，`mkdir -p` 會一次建立兩層，若只 chmod 最內層，外層仍是預設 umask，
+# 同機其他使用者依然能列出裡面有哪些檔案。與 Java 側
+# SensitiveDirectories.ensureSecureDirectory 的鏈式收斂邏輯對稱。
+# ---------------------------------------------------------------------------
+board_secure_dir() {
+  local dir="$1"
+
+  # 先找出「這次呼叫之前不存在、待會會被 mkdir -p 一併建立」的父目錄鏈，
+  # 由外往內收集，才能在建立後依序收斂每一層。
+  local missing_ancestors="" cursor
+  cursor="$(dirname "$dir")"
+  while [ "$cursor" != "/" ] && [ ! -d "$cursor" ]; do
+    missing_ancestors="$cursor
+$missing_ancestors"
+    cursor="$(dirname "$cursor")"
+  done
+
+  local dir_was_new=0
+  [ -d "$dir" ] || dir_was_new=1
+
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    err "無法建立目錄：$dir"
+    return 1
+  fi
+
+  local ancestor
+  if [ -n "$missing_ancestors" ]; then
+    while IFS= read -r ancestor; do
+      [ -n "$ancestor" ] || continue
+      if ! chmod 700 "$ancestor" 2>/dev/null; then
+        err "無法將新建目錄收斂為僅目前使用者可存取（0700），為避免留下權限過寬的敏感目錄，已中止：$ancestor"
+        return 1
+      fi
+    done <<EOF
+$missing_ancestors
+EOF
+  fi
+
+  if ! chmod 700 "$dir" 2>/dev/null; then
+    if [ "$dir_was_new" -eq 1 ]; then
+      err "無法將新建目錄收斂為僅目前使用者可存取（0700），為避免留下權限過寬的敏感目錄，已中止：$dir"
+      return 1
+    fi
+    err "警告：無法修正既有目錄的權限（不影響服務運作、未變更任何資料）：$dir"
+  fi
+
+  return 0
+}
+
+# 收斂既有檔案為僅目前使用者可讀寫（0600）。與 board_secure_dir 相同的
+# fail-closed／安全放行語意，由呼叫端傳入 $2=1 表示該檔案是本次新建。
+board_secure_file() {
+  local file="$1"
+  local newly_created="${2:-0}"
+
+  if ! chmod 600 "$file" 2>/dev/null; then
+    if [ "$newly_created" -eq 1 ]; then
+      err "無法將新建檔案收斂為僅目前使用者可讀寫（0600），為避免留下權限過寬的敏感檔案，已中止：$file"
+      return 1
+    fi
+    err "警告：無法修正既有檔案的權限（不影響服務運作、未變更任何資料）：$file"
+  fi
+
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # 取得檔案的 mtime（epoch 秒）。
 #
 # 不可以寫成 `stat -f '%m' "$f" || stat -c '%Y' "$f"`：那是本專案原本的寫法，

@@ -71,7 +71,7 @@ if [ -z "$DB_TARGET" ]; then
 fi
 
 if [ -z "$DB_TARGET" ]; then
-  err "無法從 BOARD_DB_URL 取得 H2 檔案路徑（目前為：${BOARD_DB_URL}）。"
+  err "無法從 BOARD_DB_URL 取得 H2 檔案路徑（目前為：$(board_mask_db_url "$BOARD_DB_URL")）。"
   err "非 file 模式（mem:／tcp:）不適用本腳本，或請用 --db 明確指定。"
   exit 2
 fi
@@ -223,7 +223,7 @@ fi
 # ---------------------------------------------------------------------------
 # 還原本體：先產生 .tmp、驗證通過後才動現有資料庫
 # ---------------------------------------------------------------------------
-mkdir -p "$(dirname "$DB_MV_FILE")" || { err "無法建立資料庫目錄"; exit 1; }
+board_secure_dir "$(dirname "$DB_MV_FILE")" || exit 1
 
 TMP_RESTORE="${DB_MV_FILE}.restore.tmp"
 WORK_DIR=""
@@ -236,6 +236,9 @@ trap cleanup EXIT
 case "$SOURCE_BACKUP" in
   *.zip)
     WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/board-restore.XXXXXX")" || { err "無法建立暫存目錄"; exit 1; }
+    # mktemp -d 的預設權限（0700）已足夠，這裡明確收斂一次，不依賴各平台
+    # mktemp 實作細節或使用者 umask 剛好正確；解壓出的 .mv.db 內含完整看板資料。
+    board_secure_dir "$WORK_DIR" || exit 1
     log "解壓一致性備份（zip）……"
     extract_zip "$SOURCE_BACKUP" "$WORK_DIR" || exit 1
 
@@ -253,6 +256,7 @@ case "$SOURCE_BACKUP" in
 esac
 
 verify_mv_db "$TMP_RESTORE" || exit 1
+board_secure_file "$TMP_RESTORE" 1 || exit 1
 
 # 現有資料庫改名保留。這一步失敗就直接中止，絕不強行覆蓋。
 if [ -e "$DB_MV_FILE" ]; then

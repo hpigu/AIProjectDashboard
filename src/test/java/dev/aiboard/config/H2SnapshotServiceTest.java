@@ -1,5 +1,6 @@
 package dev.aiboard.config;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -9,6 +10,7 @@ import javax.sql.DataSource;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.time.Instant;
@@ -129,6 +131,23 @@ class H2SnapshotServiceTest {
         assertThat(listNames("board-shutdown-20240101T000000Z-UTC.zip.tmp"))
                 .as("別的 phase 的殘留 tmp 不該被碰")
                 .hasSize(1);
+    }
+
+    @Test
+    void createdBackupDirectoryAndFileAreRestrictedToOwnerOnly() throws Exception {
+        Assumptions.assumeTrue(
+                Files.getFileAttributeView(backupDir, PosixFileAttributeView.class) != null,
+                "此檔案系統不支援 POSIX 權限，略過（#142）");
+
+        Optional<Path> created = newService(30, 7).createSnapshot(ScheduledBackupService.PHASE, "[test]");
+
+        assertThat(created).isPresent();
+        assertThat(Files.getPosixFilePermissions(backupDir))
+                .as("備份目錄僅限目前使用者可存取")
+                .isEqualTo(LocalFilePermissionHardener.DIRECTORY_PERMISSIONS);
+        assertThat(Files.getPosixFilePermissions(created.get()))
+                .as("備份檔本身僅限目前使用者可讀寫")
+                .isEqualTo(LocalFilePermissionHardener.FILE_PERMISSIONS);
     }
 
     @Test

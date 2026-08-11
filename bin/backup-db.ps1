@@ -121,12 +121,8 @@ function Invoke-BoardStartupBackup {
         return $true
     }
 
-    try {
-        if (-not (Test-Path $BackupDir)) {
-            New-Item -ItemType Directory -Path $BackupDir -Force -ErrorAction Stop | Out-Null
-        }
-    } catch {
-        Write-BackupErr "無法建立備份目錄：$BackupDir"
+    if (-not (New-BoardSecureDirectory -Path $BackupDir)) {
+        Write-BackupErr "無法建立或收斂備份目錄權限：$BackupDir"
         return $false
     }
 
@@ -160,6 +156,14 @@ function Invoke-BoardStartupBackup {
 
     if (-not (Test-BoardH2File -Path $tmpPath)) {
         Write-BackupErr "備份檔案缺少 H2 MVStore 檔頭（H:2），可能已損壞：$tmpPath"
+        Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    try {
+        Protect-BoardPath -Path $tmpPath -NewlyCreated $true
+    } catch {
+        Write-BackupErr $_.Exception.Message
         Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
         return $false
     }

@@ -274,15 +274,27 @@ cmd_start() {
 
   # -------------------------------------------------------------------------
   # 2. 環境變數與絕對路徑資料庫（預設值來自已 source 的 board-env.sh）
+  #
+  #    目錄依實際解析出的 BOARD_DB_URL（而非固定的預設路徑）建立並收斂為僅
+  #    目前使用者可存取（0700）；新建目錄收斂失敗會中止啟動（fail closed），
+  #    因為此時目錄裡還沒有任何使用者資料。JVM 啟動後
+  #    SensitiveDirectoryEnvironmentPostProcessor 會在 DataSource 初始化前
+  #    再次確認同一目錄的權限，這裡先做一次是為了在資料庫檔案於此目錄下
+  #    誕生之前，目錄本身就已經是嚴格權限，不留任何窗口。
   # -------------------------------------------------------------------------
-  local DEFAULT_DB_DIR="$BOARD_DEFAULT_DB_DIR"
+  local DB_DIR_TO_SECURE
+  DB_DIR_TO_SECURE="$(dirname "$(board_db_file_path)")"
   [ -n "${BOARD_DB_USER:-}" ] && export BOARD_DB_USER
   [ -n "${BOARD_DB_PASSWORD:-}" ] && export BOARD_DB_PASSWORD
 
-  mkdir -p "$DEFAULT_DB_DIR" 2>/dev/null || true
+  if [ -n "$DB_DIR_TO_SECURE" ] && [ "$DB_DIR_TO_SECURE" != "." ]; then
+    if ! board_secure_dir "$DB_DIR_TO_SECURE"; then
+      exit 1
+    fi
+  fi
 
   log "BOARD_PORT=${BOARD_PORT}"
-  log "BOARD_DB_URL=${BOARD_DB_URL}"
+  log "BOARD_DB_URL=$(board_mask_db_url "$BOARD_DB_URL")"
   log "BOARD_LOG_FILE=${BOARD_LOG_FILE}"
 
   # -------------------------------------------------------------------------
@@ -299,9 +311,11 @@ cmd_start() {
         --max-time 3 "http://127.0.0.1:${BOARD_PORT}/api/projects" 2>/dev/null | grep -q '^2'; then
       log "偵測到看板已在 :${BOARD_PORT} 正常運作（PID ${PORT_PID}），不重複啟動。"
       # 補寫 PID 檔：看板可能是舊版腳本或手動 java -jar 起的，補上之後
-      # `bin/board stop` 才停得掉，不必叫使用者自己 ps | grep。
-      mkdir -p "$(dirname "$BOARD_PID_FILE")" 2>/dev/null || true
+      # `bin/board stop` 才停得掉，不必叫使用者自己 ps | grep。此路徑是盡力而為
+      # 的補救（看板其實已在正常運作），權限收斂失敗不阻擋這裡繼續，僅記錄。
+      board_secure_dir "$(dirname "$BOARD_PID_FILE")" || true
       printf '%s\n' "$PORT_PID" > "$BOARD_PID_FILE" 2>/dev/null || true
+      board_secure_file "$BOARD_PID_FILE" 1 || true
       exit 0
     else
       err "埠號 ${BOARD_PORT} 被其他行程佔用（PID ${PORT_PID}，非本看板服務）。"
@@ -375,8 +389,8 @@ cmd_start() {
   fi
 
   log "啟動 jar：${JAR_PATH}"
-  mkdir -p "$(dirname "$BOARD_LOG_FILE")"
-  mkdir -p "$(dirname "$BOARD_PID_FILE")"
+  board_secure_dir "$(dirname "$BOARD_LOG_FILE")" || exit 1
+  board_secure_dir "$(dirname "$BOARD_PID_FILE")" || exit 1
 
   # -------------------------------------------------------------------------
   # 7. 背景啟動
@@ -393,10 +407,16 @@ cmd_start() {
   # 使用者會完全看不到原因。
   # -------------------------------------------------------------------------
   local APP_PID
+  local CONSOLE_LOG_IS_NEW=0
+  [ -e "$BOARD_CONSOLE_LOG" ] || CONSOLE_LOG_IS_NEW=1
   nohup "$JAVA_BIN" -jar "$JAR_PATH" >> "$BOARD_CONSOLE_LOG" 2>&1 &
   APP_PID=$!
   disown "$APP_PID" 2>/dev/null || true
+  # console log 可能含 JVM 參數錯誤等診斷資訊，收斂為僅目前使用者可讀寫；
+  # 既有檔案（重啟後續寫）收斂失敗不阻擋啟動，只記錄警告。
+  board_secure_file "$BOARD_CONSOLE_LOG" "$CONSOLE_LOG_IS_NEW" || true
   printf '%s\n' "$APP_PID" > "$BOARD_PID_FILE"
+  board_secure_file "$BOARD_PID_FILE" 1 || exit 1
   log "已啟動子行程 PID=${APP_PID}（PID 檔：${BOARD_PID_FILE}），等待服務就緒……"
 
   # -------------------------------------------------------------------------
@@ -530,7 +550,7 @@ cmd_status() {
 
   log "PID 檔：${BOARD_PID_FILE}$([ -f "$BOARD_PID_FILE" ] || printf '（不存在）')"
   log "埠號：${BOARD_PORT}"
-  log "資料庫：${BOARD_DB_URL}"
+  log "資料庫：$(board_mask_db_url "$BOARD_DB_URL")"
   log "日誌：${BOARD_LOG_FILE}"
 
   if board_http_ready 3; then
