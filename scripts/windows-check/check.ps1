@@ -65,6 +65,7 @@ $scriptFiles = @(
     (Join-Path $PSScriptRoot 'check.ps1'),
     (Join-Path $PSScriptRoot 'release-check.ps1'),
     (Join-Path $PSScriptRoot 'package-fixture.ps1'),
+    (Join-Path $PSScriptRoot 'update-fixture.ps1'),
     (Join-Path $RepoRoot 'scripts\release\package-windows-x64.ps1')
 )
 
