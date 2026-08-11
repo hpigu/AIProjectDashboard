@@ -215,7 +215,12 @@ so the UI works fully offline).
 - The SSE registry is a single in-process singleton; no horizontal scaling
 - Role instructions live in the H2 database, so they do not travel with the
   plugin — a new machine reseeds defaults and loses your `upsert_role` edits
-- UI strings and MCP tool descriptions are Traditional Chinese only; no i18n
+- The web UI has a **zh-TW/English switcher** (top-right language button; it
+  remembers your choice and detects browser language, see
+  `src/main/resources/static/i18n.js`), but **this document, MCP tool
+  descriptions, and the board role instructions (`RoleSeeder`) are Traditional
+  Chinese only**, and most backend error messages are Chinese too — i18n
+  coverage is partial, not complete
 
 ## License
 
