@@ -152,7 +152,7 @@ if "$root/bin/board" status >/dev/null 2>&1; then was_running=1
 else status_code=$?; [ "$status_code" = 3 ] || { rm -rf -- "$stage"; die 'cannot establish current readiness; refusing update'; }; fi
 pid_before="$(sed -n '1p' "$root/board.pid" 2>/dev/null || true)"
 snapshot="$root/backups/update-${current_version}-to-${requested_version}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-rollback_needed=0; published=0; activated=0; snapshot_ready=0
+activated=0; snapshot_ready=0
 
 restore_old() {
   reason="$1"; err "update failed at ${reason}; beginning rollback"
@@ -224,7 +224,6 @@ printf 'current=%s\ntarget=%s\npid_before=%s\nactivation=%s\n' "$current_version
 snapshot_ready=1
 
 if fail_at publish || ! mv "$stage" "$root/releases/$requested_version"; then restore_old publish || true; die 'runtime publish failed'; fi
-published=1
 if fail_at activate || ! ln -s "releases/$requested_version" "$root/.current.new.$$" || ! replace_activation_link "$root/.current.new.$$" "$root/current"; then restore_old activate || true; die 'activation pointer switch failed'; fi
 activated=1
 

@@ -4,8 +4,6 @@
 
 set -eu
 
-PROGRAM="${0##*/}"
-
 log() { printf '[install] %s\n' "$*"; }
 err() { printf '[install][error] %s\n' "$*" >&2; }
 die() { err "$*"; exit 1; }
