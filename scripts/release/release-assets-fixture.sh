@@ -46,4 +46,41 @@ single="$work/single"; mkdir "$single"; cp "$ok/ai-project-board-backend-linux-x
 "$VALIDATOR" validate-platform --version "$version" --platform linux-x64 --directory "$single"
 pass 'platform self-validation accepts only its contract artifact'
 
+workflow="${ROOT}/.github/workflows/release.yml"
+assert_workflow_contains() {
+  local needle="$1" description="$2"
+  grep -Fq -- "$needle" "$workflow" || fail "$description"
+  pass "$description"
+}
+assert_workflow_absent() {
+  local needle="$1" description="$2"
+  if grep -Fq -- "$needle" "$workflow"; then fail "$description"; fi
+  pass "$description"
+}
+assert_workflow_count() {
+  local needle="$1" expected="$2" description="$3" actual
+  actual="$(grep -Fc -- "$needle" "$workflow" || true)"
+  [ "$actual" = "$expected" ] || fail "$description (expected ${expected}, got ${actual})"
+  pass "$description"
+}
+
+echo '=== workflow static release gates ==='
+assert_workflow_contains 'runs-on: macos-15' 'macOS arm64 uses the current macos-15 runner label'
+assert_workflow_contains 'runs-on: macos-15-intel' 'macOS x64 uses the current macos-15-intel runner label'
+assert_workflow_absent 'runs-on: macos-14' 'deprecated macos-14 runner label is absent'
+assert_workflow_absent 'runs-on: macos-13' 'obsolete macos-13 runner label is absent'
+assert_workflow_contains 'run: test "$(uname -m)" = arm64' 'macOS arm64 job fails closed on wrong architecture'
+assert_workflow_contains 'run: test "$(uname -m)" = x86_64' 'macOS x64 job fails closed on wrong architecture'
+assert_workflow_contains 'tag: ${{ steps.release_ref.outputs.tag }}' 'preflight exports canonical tag'
+assert_workflow_contains 'version: ${{ steps.release_ref.outputs.version }}' 'preflight exports canonical version'
+assert_workflow_contains 'commit: ${{ steps.release_ref.outputs.commit }}' 'preflight exports canonical peeled commit'
+assert_workflow_contains 'git rev-parse --verify "refs/tags/${tag}^{commit}"' 'preflight verifies the tag peeled commit'
+assert_workflow_contains '[ "$head_commit" = "$tag_commit" ]' 'preflight rejects a checkout that differs from the tag commit'
+assert_workflow_count 'ref: ${{ needs.preflight.outputs.tag }}' 5 'all four builders and publish checkout the preflight tag'
+assert_workflow_contains 'needs: [preflight, linux-x64, macos-arm64, macos-x64, windows-x64]' 'publish directly depends on preflight and all platform builds'
+assert_workflow_contains 'COMMIT: ${{ needs.preflight.outputs.commit }}' 'release notes receive the preflight commit'
+assert_workflow_contains 'built from ${COMMIT}' 'release notes trace the preflight commit'
+assert_workflow_absent '${GITHUB_SHA}' 'release notes do not use dispatch-dependent GITHUB_SHA'
+assert_workflow_contains 'gh release create "$TAG" --verify-tag --draft' 'draft creation verifies the tag still exists'
+
 echo 'All release asset fixtures passed.'
