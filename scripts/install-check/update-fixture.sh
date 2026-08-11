@@ -54,3 +54,22 @@ PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$
 [ "$(readlink "$root/current")" = releases/3.1.2 ] || { echo '[FAIL] stopped-state fixture did not activate target' >&2; exit 1; }
 [ ! -f "$root/running" ] || { echo '[FAIL] originally stopped service was left running after target validation' >&2; exit 1; }
 echo '[PASS] originally stopped service verifies target then remains stopped'
+
+# A rollback pointer failure is a hard fail-closed condition: the updater may restore the
+# verifiable DB copy, but it must not start either target or old runtime or print success.
+ln -s releases/3.1.1 "$root/.current.fixture"
+mv -h "$root/.current.fixture" "$root/current" 2>/dev/null || mv -T "$root/.current.fixture" "$root/current"
+rm -rf -- "$root/releases/3.1.2"
+: > "$root/running"
+if output="$(PATH="$work/bin:$PATH" BOARD_INSTALLED_HOME="$root" BOARD_DB_URL="jdbc:h2:file:$root/data/board;DB_CLOSE_ON_EXIT=FALSE" \
+  BOARD_PORT=18998 BOARD_UPDATE_FAIL_AT=readiness,rollback_activate "$REPO_ROOT/bin/board-update.sh" --version 3.1.2 --jar "$target" --checksums "$checksums" 2>&1)"; then
+  echo '[FAIL] rollback activation injection unexpectedly succeeded' >&2; exit 1
+fi
+[ ! -f "$root/running" ] || { echo '[FAIL] pointer-restore failure started a runtime' >&2; exit 1; }
+[ "$(shasum -a 256 "$root/data/board.mv.db" | awk '{print $1}')" = "$before_hash" ] || { echo '[FAIL] pointer-restore failure did not preserve old live DB' >&2; exit 1; }
+snapshot="$(find "$root/backups" -type d -name 'update-3.1.1-to-3.1.2-*' | tail -n1)"
+[ -f "$snapshot/board.mv.db" ] && [ -f "$snapshot/manifest.sha256" ] || { echo '[FAIL] pointer-restore fixture lost its snapshot' >&2; exit 1; }
+[ "$(shasum -a 256 "$snapshot/board.mv.db" | awk '{print $1}')" = "$before_hash" ] || { echo '[FAIL] pointer-restore fixture changed snapshot hash' >&2; exit 1; }
+printf '%s' "$output" | grep -F 'manual activation recovery' >/dev/null || { echo '[FAIL] hard rollback failure omitted manual recovery path' >&2; exit 1; }
+if printf '%s' "$output" | grep -F 'rolled back to' >/dev/null; then echo '[FAIL] hard rollback failure claimed success' >&2; exit 1; fi
+echo '[PASS] rollback pointer failure stays stopped and retains manual-recovery evidence'

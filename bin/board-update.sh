@@ -48,7 +48,9 @@ platform() {
     *) return 1 ;;
   esac
 }
-fail_at() { [ "${BOARD_UPDATE_FAIL_AT:-}" = "$1" ]; }
+# Test-only fault injection accepts one step or a comma-separated set (for example
+# readiness,rollback_activate) so rollback failure can be exercised independently.
+fail_at() { case ",${BOARD_UPDATE_FAIL_AT:-}," in *,"$1",*) return 0 ;; *) return 1 ;; esac; }
 # BSD mv follows a destination symlink-to-directory unless -h is supplied; GNU mv instead
 # provides -T.  Either variant is an atomic same-filesystem rename of the symlink itself.
 replace_activation_link() {
@@ -154,10 +156,15 @@ rollback_needed=0; published=0; activated=0; snapshot_ready=0
 
 restore_old() {
   reason="$1"; err "update failed at ${reason}; beginning rollback"
+  rollback_failed=0
   # No new service may be using an H2 schema while its snapshot is restored.
   "$root/bin/board" stop >/dev/null 2>&1 || true
   if [ "$activated" -eq 1 ]; then
-    ln -s "$old_link" "$root/.current.rollback.$$" && replace_activation_link "$root/.current.rollback.$$" "$root/current" || err 'rollback could not restore current pointer'
+    if fail_at rollback_activate || ! ln -s "$old_link" "$root/.current.rollback.$$" \
+      || ! replace_activation_link "$root/.current.rollback.$$" "$root/current"; then
+      err 'rollback could not restore current pointer; no runtime will be started'
+      rollback_failed=1
+    fi
   fi
   if [ "$snapshot_ready" -eq 1 ] && [ -f "$snapshot/manifest.sha256" ]; then
     db_base="$(printf '%s' "${BOARD_DB_URL:-}" | sed -n 's#^jdbc:h2:file:##p' | cut -d';' -f1)"
@@ -178,8 +185,15 @@ restore_old() {
     if [ -z "$db_base" ] || ! restore_snapshot_file board.mv.db "${db_base}.mv.db" \
       || ! restore_snapshot_file board.trace.db "${db_base}.trace.db"; then
       err "rollback could not restore verified database snapshot; source is retained at $snapshot (manual recovery: copy its board.mv.db to ${db_base:-<BOARD_DB_URL file path>}.mv.db while stopped)"
-      return 1
+      rollback_failed=1
     fi
+  fi
+  if [ "$rollback_failed" -ne 0 ]; then
+    current_now="$(readlink "$root/current" 2>/dev/null || printf '<unreadable>')"
+    err "rollback incomplete; service remains stopped. diagnostics: snapshot=$snapshot stage=$stage release=$root/releases/$requested_version current=$current_now old_link=$old_link"
+    err "manual activation recovery (while stopped): ln -s '$old_link' '$root/.current.manual' && { mv -h '$root/.current.manual' '$root/current' 2>/dev/null || mv -T '$root/.current.manual' '$root/current'; }"
+    err "manual DB recovery (while stopped, after activation): cp '$snapshot/board.mv.db' '${db_base:-<BOARD_DB_URL file path>}.mv.db'"
+    return 1
   fi
   if [ "$was_running" -eq 1 ]; then
     "$root/bin/board" start >/dev/null 2>&1 || { err "rollback start failed; inspect $snapshot and $stage manually"; return 1; }
