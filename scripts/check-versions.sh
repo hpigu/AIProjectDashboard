@@ -85,9 +85,14 @@ done
 # README 的安裝指令裡寫著完整 jar 檔名（`java -jar target/...-3.1.0.jar`）。
 # 那是陌生人照抄的第一行指令：版號沒跟上，他複製貼上後看到的是「檔案不存在」，
 # 而 manifest 全對、CI 全綠。這裡把檔名裡的版號也一起比對。
-readme_refs="$(grep -o 'ai-project-board-backend-[0-9][0-9A-Za-z.-]*\.jar' README.md | sort -u || true)"
+#
+# 只鎖定 `java -jar` 那一行：README 裡還會提到「舊 release tag 底下實際的
+# asset 檔名」這類歷史事實敘述，那些檔名本來就該維持發布當時的舊版號，若和
+# 整份文件裡所有同樣式的引用一起比對，會把正確的歷史敘述誤判成沒跟上版號。
+readme_refs="$(grep -o 'java -jar target/ai-project-board-backend-[0-9][0-9A-Za-z.-]*\.jar' README.md \
+  | grep -o 'ai-project-board-backend-[0-9][0-9A-Za-z.-]*\.jar' | sort -u || true)"
 if [ -z "$readme_refs" ]; then
-  echo "::error::README.md 裡找不到任何 ai-project-board-backend-<版號>.jar 的引用。" >&2
+  echo "::error::README.md 裡找不到 java -jar 安裝指令引用的 ai-project-board-backend-<版號>.jar。" >&2
   echo "安裝指令若改寫成別的形式，請一併更新本腳本，否則這道檢查等於沒作用。" >&2
   failures=$((failures + 1))
 fi
