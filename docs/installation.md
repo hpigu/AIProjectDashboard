@@ -115,12 +115,38 @@ rm ~/.claude/agents/{backend-dev,frontend-dev,qa,infra,docs}.md   # 視實際存
 
 repo 內的 Codex plugin 由以下兩層組成：
 
-- `.codex-plugin/`：plugin manifest、`.mcp.json`、六個角色薄殼與
+- `plugins/ai-project-board/`：plugin manifest、`.mcp.json`、六個角色薄殼與
   `skills/claim-tasks/`
-- `.agents/plugins/marketplace.json`：把上述目錄登錄為本機可安裝的
+- `.agents/plugins/marketplace.json`：把上述目錄登錄為 repo/Git marketplace 可安裝的
   **AI Project Board** plugin
 
-在 Codex 開啟本 repo 後，從 plugin marketplace 安裝 **AI Project Board**。
+從 GitHub 的 `main` branch 加入 marketplace 並安裝：
+
+```bash
+codex plugin marketplace add hpigu/AIProjectDashboard --ref main
+codex plugin add ai-project-board@ai-board
+```
+
+日後發布新版後，更新 marketplace snapshot 並重新安裝：
+
+```bash
+codex plugin marketplace upgrade ai-board
+codex plugin add ai-project-board@ai-board
+```
+
+如果 `codex plugin marketplace list` 顯示既有 `ai-board` 指向本機 clone，Git source
+尚未推送完成前先保留原設定。發布到遠端 `main` 後，經使用者確認再切換：
+
+```bash
+codex plugin marketplace remove ai-board
+codex plugin marketplace add hpigu/AIProjectDashboard --ref main
+codex plugin add ai-project-board@ai-board
+```
+
+`marketplace remove` 只移除 marketplace source 設定，和解除安裝 plugin 的
+`codex plugin remove` 是不同操作。切換後需開新 task 驗證新版 skill 與 MCP。
+
+在 Codex 開啟本 repo 後，也能從 repo marketplace 安裝 **AI Project Board**。
 安裝時若提示啟用 `board` connector，需確認一次；它會連到
 `http://127.0.0.1:8080/mcp`。安裝或更新後重開 task，使角色與 skill 清單重新
 載入。只在 `~/.codex/config.toml` 手動設定 MCP 也能使用看板工具，但不會帶入

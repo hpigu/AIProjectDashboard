@@ -127,7 +127,7 @@ Mono 的 `@assignee`。
   後呼叫 `upsert_role`，改
   `RoleSeeder` 裡的常數只影響「還沒有該角色的全新看板」。
 
-`plugin/agents/*.md`、`.codex-plugin/agents/*.md`（或 Claude 手動安裝時的
+`plugin/agents/*.md`、`plugins/ai-project-board/agents/*.md`（或 Claude 手動安裝時的
 `~/.claude/agents/*.md`）這層是 client 專用的**薄殼**：
 先呼叫 `get_role` 取得看板上的最新指引並照做；只有在 `get_role` 失敗或看板
 未啟動時，才退回檔案內建的最小 fallback 規則（讀 repo 的

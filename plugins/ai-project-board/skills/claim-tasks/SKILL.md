@@ -87,18 +87,21 @@ agent 不修改檔案，立即回報；leader 重新盤點，不把錯誤任務�
 
 ## 4. 建立 task 工作區並派工
 
-Leader 從最新 `dev` 建立 task branch/worktree，再啟動對應角色 agent：
+Leader 從最新 `dev` 建立 task branch/worktree，再依下表啟動對應角色 agent。模型與
+推理強度必須在 `spawn_agent` 明確指定，不得讓 worker 繼承 leader 的高成本設定：
 
-| category | agent |
-|---|---|
-| BACKEND | `backend-dev` |
-| FRONTEND | `frontend-dev` |
-| TEST | `qa` |
-| INFRA | `infra` |
-| DOC | `docs` |
+| category | agent | model | reasoning_effort |
+|---|---|---|---|
+| BACKEND | `backend-dev` | `gpt-5.6-terra` | `high` |
+| FRONTEND | `frontend-dev` | `gpt-5.6-terra` | `medium` |
+| TEST | `qa` | `gpt-5.6-terra` | `high` |
+| INFRA | `infra` | `gpt-5.6-terra` | `high` |
+| DOC | `docs` | `gpt-5.6-luna` | `medium` |
 
-Codex 使用 `spawn_agent` 啟動一次性 agent；若環境不能直接指定 plugin 角色，就在
-初始訊息中要求讀取 `.codex-plugin/agents/<role>.md` 並呼叫 `get_role`。使用
+Codex 使用 `spawn_agent` 啟動一次性 agent，並設定 `fork_turns="none"`：派工訊息本身
+必須帶齊工作所需上下文，避免複製 leader 的完整歷史與推理成本。若環境不能直接指定 plugin 角色，就在
+初始訊息中要求讀取本 plugin bundle 的 `agents/<role>.md` 並呼叫 `get_role`；在
+本 repo 開發時，這些薄殼位於 `plugins/ai-project-board/agents/`。使用
 `wait_agent` 收尾，必要時以 `followup_task` 讓原 agent 在原 branch 做一次返工。
 若 subagent 工具不可用，回報能力限制並停止該 worker 派工；不得由 leader 冒充角色。
 平台容量低時循序派工，但角色鎖與一 agent 一 task 不變。
@@ -106,6 +109,12 @@ Codex 使用 `spawn_agent` 啟動一次性 agent；若環境不能直接指定 p
 派工訊息必須包含：
 
 - `projectName`、預期 task id、branch/worktree 路徑與最新 `dev` 基準。
+- 任務目標與必要背景；只提供完成本 task 需要的上下文，不貼整段無關對話。
+- 允許修改的檔案／模組，以及明確禁止修改的範圍。
+- leader 已決定的架構、資料格式、相容策略與其他不可由 worker 重新設計的事項。
+- 可觀察、可驗證的逐項驗收條件。
+- 必須執行的測試／檢查指令，以及開發埠號、資料庫等隔離設定。
+- 遇到需求歧義、需跨角色或超出範圍時的停止／BLOCKED 條件；不得自行猜測或擴張。
 - 只認領並處理一件；不得自行認領下一件。
 - 先呼叫 `get_role` 並遵守 repo 指引與角色邊界。
 - 驗證、commit、回報 changed files／commit／測試結果／完成摘要。
@@ -172,7 +181,9 @@ Leader 只直接處理描述明確指定給 leader、範圍清楚且已獲目前
 ## 9. 整批 reviewer 與 main 合併
 
 只有 manifest 內全部 task 都 DONE、沒有 unresolved BLOCKED，才叫既有 `reviewer`
-唯讀審查完整 `git diff main...dev`。提供 manifest、驗收條件、commit 清單與測試結果。
+唯讀審查完整 `git diff main...dev`。Reviewer 使用 `gpt-5.6-sol`、`high`，並以
+`fork_turns="none"` 啟動；派工訊息提供 manifest、驗收條件、commit 清單、測試結果、
+完整 diff 範圍與 repo 規則，不讓它繼承 leader 的完整對話。
 純 DOC 也不跳過。
 
 Reviewer 只分「必須修／建議」並回報 leader；不得改檔、建 task 或合併。Leader 判斷

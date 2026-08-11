@@ -153,15 +153,41 @@ claude plugin install ai-project-board@ai-board
 
 ### Codex
 
-repo 也包含 Codex plugin：`.codex-plugin/` 放角色薄殼、`claim-tasks` skill 與
-MCP 宣告，`.agents/plugins/marketplace.json` 則是本機 marketplace 入口。在
-Codex 開啟這個 repo 後，可從 plugin marketplace 安裝 **AI Project Board**；
-安裝時若提示啟用 `board` connector，需再確認一次，讓它連到本機
+repo 也包含 Codex plugin：`plugins/ai-project-board/` 放角色薄殼、`claim-tasks`
+skill 與 MCP 宣告，`.agents/plugins/marketplace.json` 則是 repo marketplace 入口。
+GitHub 版本可用下列指令加入並安裝：
+
+```bash
+codex plugin marketplace add hpigu/AIProjectDashboard --ref main
+codex plugin add ai-project-board@ai-board
+```
+
+發布新版後，先刷新 Git marketplace snapshot，再重新安裝 plugin：
+
+```bash
+codex plugin marketplace upgrade ai-board
+codex plugin add ai-project-board@ai-board
+```
+
+若 `codex plugin marketplace list` 已顯示 `ai-board` 指向本機 clone，請勿直接加入
+同名 Git source。等新版推到遠端 `main` 後，先明確確認要切換來源，再執行：
+
+```bash
+codex plugin marketplace remove ai-board
+codex plugin marketplace add hpigu/AIProjectDashboard --ref main
+codex plugin add ai-project-board@ai-board
+```
+
+第一行只移除 marketplace source 設定；它不是 `codex plugin remove`，不會主動執行
+plugin 解除安裝。切換完成後開新 task，確認載入的是 Git marketplace 的版本。
+
+本機開發時，在 Codex 開啟這個 repo 也能直接看到同一份 marketplace。安裝
+**AI Project Board** 時若提示啟用 `board` connector，需再確認一次，讓它連到本機
 `http://127.0.0.1:8080/mcp`。安裝或更新後重開 task，讓角色與 skill 清單重新載入。
 
 如果不使用 plugin，仍可用下方 `~/.codex/config.toml` 手動接線；差別是只會得到
-MCP 工具，不會自動取得 `.codex-plugin/agents/` 的角色薄殼與 leader skill。完整
-安裝方式與檔案對照見 [docs/installation.md](docs/installation.md)。
+MCP 工具，不會自動取得 `plugins/ai-project-board/agents/` 的角色薄殼與 leader
+skill。完整安裝方式與檔案對照見 [docs/installation.md](docs/installation.md)。
 
 ## 接線
 
@@ -372,7 +398,7 @@ Claude Code 這層薄殼有兩種取得方式：
   若你是自己在 `~/.claude.json` 或專案 `.mcp.json` 註冊 board（不經 plugin），
   就沒有 `plugin_` 前綴，應改寫成 `mcp__board__*`。
 
-- Codex：安裝本 repo 的 Codex plugin，使用 `.codex-plugin/agents/*.md` 中的
+- Codex：安裝本 repo 的 Codex plugin，使用 `plugins/ai-project-board/agents/*.md` 中的
   六個獨立角色薄殼。不使用 plugin 時仍可手動接 MCP，但不建議在
   `~/.codex/AGENTS.md` 再維護一份完整角色規則，以免與看板及 plugin 漂移。
 
@@ -428,11 +454,12 @@ bin/
 ├── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、啟動前備份、自動組裝）
 └── backup-db.sh    # 啟動前冷備份與保留策略，由 start-board.sh 呼叫
 plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
-.codex-plugin/      # Codex plugin 骨架（同上，格式依 Codex 慣例）
+plugins/
+└── ai-project-board/   # Codex plugin（manifest、agents、skill、.mcp.json）
 .claude-plugin/
 └── marketplace.json    # Claude Code 的安裝入口，指向 plugin/
 .agents/plugins/
-└── marketplace.json    # Codex 的安裝入口，指向 .codex-plugin/
+└── marketplace.json    # Codex repo/Git marketplace，指向 plugins/ai-project-board/
 docs/
 ├── installation.md            # 完整安裝指南
 ├── dev-isolation.md           # 開發環境隔離基線（埠號／資料庫／日誌／worktree 對照）

@@ -20,7 +20,7 @@
 |---|---|
 | 看板 `role` 表 | 五個 worker 的完整工作指引；專案覆寫優先於通用版 |
 | `RoleSeeder` | 新資料庫的初始角色內容，不覆蓋既有資料 |
-| `plugin/agents`、`.codex-plugin/agents` | client 薄殼與看板失效時的最低 fallback |
+| `plugin/agents`、`plugins/ai-project-board/agents` | client 薄殼與看板失效時的最低 fallback |
 | 兩份 `claim-tasks` skill | leader 排程、Git、驗收、review 與例外流程 |
 | repo `AGENTS.md` | 本專案架構、測試與正式環境限制 |
 
@@ -28,15 +28,20 @@
 
 ## 事件驅動排程
 
-五個 worker category 各有一把 live-agent 鎖：
+五個 worker category 各有一把 live-agent 鎖。Leader 派工時直接指定模型與推理強度，
+避免 worker 繼承 leader 的高成本設定：
 
-```text
-BACKEND   → backend-dev
-FRONTEND  → frontend-dev
-TEST      → qa
-INFRA     → infra
-DOC       → docs
-```
+| Category | Agent | Model | Reasoning |
+|---|---|---|---|
+| BACKEND | `backend-dev` | `gpt-5.6-terra` | `high` |
+| FRONTEND | `frontend-dev` | `gpt-5.6-terra` | `medium` |
+| TEST | `qa` | `gpt-5.6-terra` | `high` |
+| INFRA | `infra` | `gpt-5.6-terra` | `high` |
+| DOC | `docs` | `gpt-5.6-luna` | `medium` |
+
+Codex worker 使用 `fork_turns="none"`；Leader 必須在派工訊息中提供目標、必要背景、
+允許與禁止修改範圍、既定技術決策、逐項驗收條件、驗證指令、隔離設定、BLOCKED
+條件與交付格式。這讓 worker 執行已切割的單一任務，而不是重新猜測產品或架構決策。
 
 Leader 在開工、agent 結束、task 轉態或使用者回答後重新盤點。每個空閒 category
 只看依看板順序第一筆前置皆 DONE 的 task；平台容量不足時，再比較這些第一候選的
@@ -105,8 +110,10 @@ MCP server 沒有 caller identity，因此上述白名單只是 Claude/Codex 的
 使用者核准的修正、必要前置與 reviewer 必修都留在同一批；執行途中出現的不相關
 task 不自動加入。
 
-只有 manifest 全部 DONE 且沒有 unresolved BLOCKED 時，才呼叫既有 reviewer
-唯讀審查完整 `main...dev`。Reviewer 只分「必須修／建議」並通報 leader，不改檔、
+只有 manifest 全部 DONE 且沒有 unresolved BLOCKED 時，才以 `gpt-5.6-sol`、`high`
+和 `fork_turns="none"` 呼叫既有 reviewer，唯讀審查完整 `main...dev`。Leader 在派工
+訊息提供 manifest、驗收條件、commit 清單、測試結果、diff 範圍與 repo 規則。
+Reviewer 只分「必須修／建議」並通報 leader，不改檔、
 不建 task、不合併。Leader 決定必修的 category、相依與分派；範圍或需求不明就問
 使用者。建議只彙整。
 
