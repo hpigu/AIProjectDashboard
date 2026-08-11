@@ -84,6 +84,7 @@ assert_workflow_absent '${GITHUB_SHA}' 'release notes do not use dispatch-depend
 assert_workflow_contains 'gh release create "$TAG" --verify-tag --draft' 'draft creation verifies the tag still exists'
 assert_workflow_count './scripts/release/posix-release-smoke.sh --version "$version" --platform' 3 'all three POSIX builders run the shared real-artifact smoke'
 assert_workflow_count 'Gate portable install and update with the real release JAR' 3 'all three POSIX smoke gates run before artifact upload'
+assert_workflow_count 'scripts\windows-check\update-fixture.ps1' 1 'Windows updater rollback fixture is a required release gate'
 assert_workflow_count 'actions/upload-artifact@v4' 4 'platform artifacts upload only through the four required build jobs'
 
 awk '
@@ -107,5 +108,14 @@ awk '
   }
 ' "$workflow" || fail 'each POSIX smoke gate precedes its upload step'
 pass 'each POSIX smoke gate precedes its upload step'
+
+awk '
+  /^  windows-x64:$/ { job=1; next }
+  /^  [a-z0-9-]+:$/ && job { job=0 }
+  job && /scripts\\windows-check\\update-fixture\.ps1/ { fixture=NR }
+  job && /actions\/upload-artifact@v4/ { upload=NR }
+  END { if (!fixture || !upload || fixture >= upload) exit 1 }
+' "$workflow" || fail 'Windows updater rollback fixture precedes artifact upload'
+pass 'Windows updater rollback fixture precedes artifact upload'
 
 echo 'All release asset fixtures passed.'

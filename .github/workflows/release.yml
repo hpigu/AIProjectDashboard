@@ -207,6 +207,19 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\package-windows-x64.ps1 -ServerJar $jar -JdkHome $env:JAVA_HOME -Version $version -OutputDirectory target\release
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\package-fixture.ps1 -ServerJar $jar -Version $version
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\release-check.ps1 -ReleaseZip "target\release\ai-project-board-backend-windows-x64-$version.zip" -Smoke
+      - name: Gate Windows updater rollback with the real jlink ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$pom = Get-Content pom.xml
+          $version = $pom.project.version
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\update-fixture.ps1 -ReleaseZip "target\release\ai-project-board-backend-windows-x64-$version.zip" -Version $version
+      - name: Validate shared Windows release asset contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$pom = Get-Content pom.xml
+          $version = $pom.project.version
           New-Item -ItemType Directory -Path release-assets | Out-Null
           Copy-Item "target\release\ai-project-board-backend-windows-x64-$version.zip" release-assets
           bash scripts/release/release-assets.sh validate-platform --version $version --platform windows-x64 --directory release-assets

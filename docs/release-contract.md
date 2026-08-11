@@ -155,6 +155,8 @@ GitHub 的「最新 release」排序結果作為版本選擇依據。安裝與�
     -ServerJar target\ai-project-board-backend-V.jar -Version V
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\release-check.ps1 `
     -ReleaseZip target\release\ai-project-board-backend-windows-x64-V.zip -Smoke
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\update-fixture.ps1 `
+    -ReleaseZip target\release\ai-project-board-backend-windows-x64-V.zip -Version V
   ```
 
   打包器只接受 Windows x64 的完整 JDK 21，使用明示且版本控制的 module allowlist
@@ -163,6 +165,14 @@ GitHub 的「最新 release」排序結果作為版本選擇依據。安裝與�
   發佈 ZIP。任何輸入／JDK／驗證失敗都不會覆寫或留下看似可用的最終 artifact。
   `release-check.ps1 -Smoke` 是 Windows 真機的 start/status/stop gate；非 Windows
   開發機不得把 parser 或 ZIP 結構檢查宣稱為此 smoke 的替代。
+  `update-fixture.ps1` 使用同一次 workflow 產生的真實 jlink ZIP，在隔離且含空白／
+  非 ASCII 的 `USERPROFILE`、資料庫、日誌、PID 與專用 loopback ports 上驗證 checksum
+  拒絕，以及 `publish`、`activate`、`start`、`readiness` 中斷後的 rollback。它同時
+  驗證原 running／stopped 狀態、舊 versioned root、可核對 hash 的 DB snapshot，
+  並以 `rollback_activate` fault 證明 rollback 自身失敗時維持 stopped、保留舊 root
+  與可直接執行的 manual recovery 路徑。此 gate 必須在 Windows artifact upload 前
+  通過；每個專用 port 在案例前後都必須為空，清理只能 force 該案例 PID 檔中的
+  exact PID，不以 port 上的未知 listener、process name 或 command line 比對終止。
 - 本 repo 已有 `v3.1.0` 與現行 Maven release JAR/checksum 流程；那些歷史 asset 不會
   因本文被追溯改名，也不因此被重新定義為四平台 release。
 - 不修改或移除既有 Claude/Codex marketplace。後續工作只能讓兩個既有 marketplace
