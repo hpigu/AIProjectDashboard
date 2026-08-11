@@ -32,7 +32,13 @@ class OperationalSafetyConfigurationTest {
     void startupBackupRunsBeforeJarAndAbortsOnFailure() throws Exception {
         String script = Files.readString(Path.of("bin/board"));
         int backup = script.indexOf("backup_database \"${DB_FILE_PATH}.mv.db\"");
-        int launch = script.indexOf("\"$JAVA_BIN\" -jar \"$JAR_PATH\"");
+        // 從 nohup 錨定：$JAVA_BIN 在前面的 JDK 偵測就出現過（log 裡的
+        // -version），只認 "$JAVA_BIN" 會匹配到那裡而不是真正的啟動點。nohup
+        // 是背景啟動唯一的入口，用它當起點才對得上這個測試要守的順序。
+        // 中間以非貪婪的 [\s\S]*? 允許任意 JVM 參數與反斜線續行：這裡要守的是
+        // 「備份發生在啟動之前」，不是啟動指令的確切拼法。綁死整串字面值時，
+        // 任何新增旗標都會讓比對落空，而失敗訊息看不出真正原因。
+        int launch = indexOfPattern(script, "nohup \"\\$JAVA_BIN\"[\\s\\S]*?-jar \"\\$JAR_PATH\"");
 
         assertThat(backup).isGreaterThan(0).isLessThan(launch);
         assertThat(script.substring(backup - 20, launch))
@@ -75,5 +81,11 @@ class OperationalSafetyConfigurationTest {
         assertThat(index).doesNotContain("unpkg.com", "cdn.jsdelivr.net", "fonts.googleapis.com");
         assertThat(Files.isRegularFile(staticRoot.resolve("vendor/vue/vue.global.prod.js"))).isTrue();
         assertThat(Files.isRegularFile(staticRoot.resolve("vendor/fonts/archivo-700.woff2"))).isTrue();
+    }
+
+    /** 回傳第一個符合 regex 的位置，找不到時回傳 -1，語意與 String.indexOf 一致。 */
+    private static int indexOfPattern(String haystack, String regex) {
+        var matcher = Pattern.compile(regex).matcher(haystack);
+        return matcher.find() ? matcher.start() : -1;
     }
 }
