@@ -138,16 +138,26 @@ case "$jar" in
   *)  jar_abs="$PWD/$jar" ;;
 esac
 [ -f "$jar_abs" ] || die "target JAR path could not be resolved: $jar"
+# MANIFEST 依規格每行上限 72 位元組，超過就折行，續行以一個空格開頭。
+# Main-Class 這一行本身已達 63 位元組，前面欄位的長度或順序稍有不同（不同
+# JDK／Maven 版本打包出來的 manifest 並不保證逐位元組相同）就可能把它推過
+# 上限而折成兩行，此時「整行完全相符」的比對會失敗，卻報成「這不是 repackage
+# 過的 JAR」。先還原折行再比對，才是照規格讀 manifest。
+manifest_unfolded="$inspect_dir/MANIFEST.unfolded"
 if ! (cd "$inspect_dir" && jar xf "$jar_abs" META-INF/MANIFEST.MF META-INF/build-info.properties) \
-  || ! grep -Eq '^Main-Class: org\.springframework\.boot\.loader\.launch\.JarLauncher\r?$' "$inspect_dir/META-INF/MANIFEST.MF" \
+  || ! { [ -f "$inspect_dir/META-INF/MANIFEST.MF" ] \
+         && tr -d '\r' < "$inspect_dir/META-INF/MANIFEST.MF" \
+            | sed -e ':a' -e '$!N' -e 's/\n //' -e 'ta' -e 'P' -e 'D' > "$manifest_unfolded"; } \
+  || ! grep -Eq '^Main-Class: org\.springframework\.boot\.loader\.launch\.JarLauncher$' "$manifest_unfolded" \
   || ! grep -Eq '^build\.version='"$requested_version"'\r?$' "$inspect_dir/META-INF/build-info.properties"; then
   # 分別點出是哪一項不成立：三個條件擠在同一句 die 裡時，"not a Spring Boot
   # executable release" 對「manifest 對但版號不符」「根本沒解出檔案」一視同仁，
   # 使用者與 CI 都無從判斷該往哪裡查。
   if [ ! -f "$inspect_dir/META-INF/MANIFEST.MF" ]; then
     err "無法從 $jar_abs 取出 META-INF/MANIFEST.MF（JAR 損毀或不是 ZIP 格式）"
-  elif ! grep -Eq '^Main-Class: org\.springframework\.boot\.loader\.launch\.JarLauncher\r?$' "$inspect_dir/META-INF/MANIFEST.MF"; then
+  elif ! grep -Eq '^Main-Class: org\.springframework\.boot\.loader\.launch\.JarLauncher$' "$manifest_unfolded"; then
     err "MANIFEST 的 Main-Class 不是 Spring Boot JarLauncher（這不是 repackage 過的可執行 JAR）"
+    err "實際讀到：$(grep -E '^Main-Class:' "$manifest_unfolded" 2>/dev/null || printf '(沒有 Main-Class 欄位)')"
   elif [ ! -f "$inspect_dir/META-INF/build-info.properties" ]; then
     err 'JAR 內沒有 META-INF/build-info.properties（build 缺少 spring-boot:build-info）'
   else
