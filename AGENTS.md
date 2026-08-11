@@ -91,10 +91,16 @@ leader 在使用者於**目前對話**明確要求對應操作時使用；「完
 jar 在主工作區 `target/`。**任何 agent 都不得佔用或寫入這四者**——使用者的看板
 正在上面運作。
 
-這條規則不是理論上的謹慎，是兩次真實事故換來的：
+這條規則不是理論上的謹慎，是三次真實事故換來的：
 
 1. agent 在主工作區跑 `mvnw clean package`，**刪掉了正在運行的 jar**。
 2. agent 誤連到不同路徑的空資料庫，看板上所有專案「消失」。
+3. agent 在 worktree 用跨離埠號（如 `:8091`）啟動測試 jar，收尾時執行
+   `pkill -f "ai-project-board-backend-3.1.1.jar"` 清理。`pkill -f` 是用
+   **命令列子字串**比對，而正式看板行程的命令列同樣是
+   `java -jar target/ai-project-board-backend-3.1.1.jar`（版本號相同）——
+   結果連正式看板一起殺掉，服務中斷。（事後因 SIGTERM 觸發 graceful
+   shutdown、H2 正常關閉才沒有資料遺失，純屬僥倖，不是這個做法安全。）
 
 啟動應用或跑整合測試時一律帶入：
 
@@ -111,6 +117,25 @@ BOARD_LOG_FILE='./logs/dev-<role>.log' ./mvnw test
 建置產物與資料，不會互相覆蓋。單元／整合測試在原始碼中以 `jdbc:h2:mem:` 硬編碼，
 本來就不會碰到檔案資料庫；`BOARD_DB_URL` 的隔離主要在「實際啟動應用」時生效。
 
+**正式看板與任何 worktree 啟動的測試 jar，命令列幾乎相同**（同一個
+`ai-project-board-backend-<version>.jar`），不能靠名稱、jar 檔名或版本號區分
+「這是我的」還是「這是正式的」，只能靠 PID 或埠號區分。清理自己啟動的行程時：
+
+- 啟動當下就記下確切 PID，之後只用這個 PID 收尾：
+
+  ```bash
+  BOARD_PORT=8091 ./mvnw ... & echo $! > /tmp/<role>.pid
+  # 清理時
+  kill "$(cat /tmp/<role>.pid)"
+  ```
+
+- 或不確定 PID 時，用自己實際綁定的埠號反查，絕不用行程名稱：
+
+  ```bash
+  lsof -nP -iTCP:8091 -sTCP:LISTEN
+  kill <上面查到的 PID>
+  ```
+
 ### 硬性禁止
 
 - 不得 kill 正式看板的 PID
@@ -118,6 +143,10 @@ BOARD_LOG_FILE='./logs/dev-<role>.log' ./mvnw test
 - 不得讀寫 `<repo>/data/board*`
 - 不得寫入正式 `logs/board.log`
 - **不得在主工作區執行 `mvnw clean` 或 `mvnw package`**（正在運行的 jar 就在那裡）
+- **不得用 `pkill -f`、`killall`、`kill $(pgrep -f ...)` 等以名稱／命令列子字串
+  比對的方式終止任何 `ai-project-board` 相關行程**——正式看板與測試 jar 的
+  命令列幾乎相同，子字串比對會誤傷正式行程；一律改用上面「確切 PID」或
+  「自己的埠號查出的 PID」收尾
 
 ## 前端與測試
 

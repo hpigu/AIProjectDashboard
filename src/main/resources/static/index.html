@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant-TW">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,8 +14,19 @@
     <div class="rail" :class="railFlashClass"></div>
     <div class="app-shell">
       <header class="app-header">
-        <h1 class="app-title">AI PROJECT BOARD</h1>
+        <h1 class="app-title">{{ t('app.title') }}</h1>
         <div class="header-tools">
+          <div class="lang-switch" role="group" :aria-label="t('lang.label')">
+            <button
+              v-for="code in supportedLocales"
+              :key="code"
+              type="button"
+              class="lang-option"
+              :class="{ selected: locale === code }"
+              :aria-pressed="locale === code ? 'true' : 'false'"
+              @click="setLocale(code)"
+            >{{ t('lang.' + code) }}</button>
+          </div>
           <button
             v-if="notifySupported"
             type="button"
@@ -30,7 +41,7 @@
           </button>
           <div class="conn-status">
             <span class="conn-dot" :class="sseConnected ? 'connected' : 'reconnecting'"></span>
-            <span>{{ sseConnected ? '連線中' : '重新連線中' }}</span>
+            <span>{{ sseConnected ? t('conn.connected') : t('conn.reconnecting') }}</span>
           </div>
         </div>
       </header>
@@ -54,6 +65,7 @@
   </div>
 
   <script src="/vendor/vue/vue.global.prod.js"></script>
+  <script src="/i18n.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

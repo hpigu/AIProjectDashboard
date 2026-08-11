@@ -1,7 +1,11 @@
 # AI Project Board
 
-> 這是一個**中文專案**：看板介面、錯誤訊息與 MCP 工具說明都是繁體中文。
-> English readers: [README.en.md](README.en.md) explains what this is; the UI itself is Chinese.
+> 這份文件、MCP 工具說明與角色指引都是**繁體中文**；Web UI 已支援
+> **繁體中文／English 雙語即時切換**（右上角語言按鈕），但錯誤訊息與 CLI 輸出
+> 目前仍是繁體中文。
+> English readers: [README.en.md](README.en.md) explains what this is; this
+> document, MCP tool descriptions and role instructions are Chinese-only, but
+> the web UI itself has a zh-TW/English switcher.
 
 讓 AI coding agent 一邊工作、一邊把進度寫進看板，你在瀏覽器就能看到所有專案的
 狀態，不用盯著好幾個終端機視窗。
@@ -37,6 +41,12 @@ docs）把前置已完成的工作接走。瀏覽器開著看板即可即時看�
 ---
 
 ## 1. 安裝與啟動
+
+下列是**手動 clone + 現場組裝**這條路徑（今天唯一有真實驗證的安裝方式）；
+另外還規劃了免 JDK 的 macOS／Linux／Windows 安裝器與 `board update` 明確更新
+（見下方「發布狀態」），但**尚未推送過任何 GitHub Release**，本節之外的安裝
+方式目前無法實際下載使用。完整流程見
+[docs/release-install-update-sop.md](docs/release-install-update-sop.md)。
 
 ### 需要什麼
 
@@ -81,6 +91,17 @@ docs）把前置已完成的工作接走。瀏覽器開著看板即可即時看�
 
 第一次打開看板是空的（顯示三步驟引導）——這是正常的。**新增專案與任務只能透過
 MCP 工具寫入，REST 端點是唯讀的，不會有種子資料。**
+
+### 支援平台與發布狀態
+
+| 平台 | CPU 架構 | server 執行方式 | 目前狀態 |
+|---|---|---|---|
+| Windows | x64 | `.\bin\board.ps1 start`（本節）；規劃中的免 JDK ZIP 內含 bundled JDK 21 jlink runtime | 本節路徑（需自備 JDK 21）已可用；免 JDK ZIP 的打包與 CI 自我驗證已完成，**但尚未發布過真實 GitHub Release asset**，Windows Sandbox 乾淨環境的人工驗收也**尚未執行**（見[已知限制](#10-已知限制)） |
+| macOS | arm64、x64 | `./bin/board start`（本節，需自備 JDK 21） | 本節路徑已可用；規劃中的 user-scope 安裝器已完成打包與程式碼層級驗證，同樣**尚未發布過真實 asset** |
+| Linux | x64 | `./bin/board start`（本節，需自備 JDK 21） | 同 macOS |
+
+不支援：Windows／Linux 的 arm64（未規劃、未打包、未測試）；任何雲端或容器化
+部署（未提供、未驗證，見下方「安全性」）。
 
 ---
 
@@ -368,7 +389,24 @@ bin/restore-db.sh latest      # 還原最新一份
 - **角色指引不跟著 plugin 走**：指引存在 H2 資料庫，plugin 只散布程式碼與薄殼。
   新裝的看板會由 `RoleSeeder` 建立初始指引，但你自己用 `upsert_role` 調整過的
   內容不會跟著 plugin 帶走，換機器或重建資料庫要重新灌一次。
-- 介面與訊息都是繁體中文，**沒有 i18n**。
+- **Web UI 已支援 zh-TW／en 雙語即時切換**（右上角語言按鈕，會記住選擇並偵測
+  瀏覽器語言，見 `src/main/resources/static/i18n.js`）；但**本文件、MCP 工具
+  說明與看板角色指引（`RoleSeeder`）仍只有繁體中文**，錯誤訊息也以繁體中文
+  為主，尚未逐一國際化。
+- **免 JDK 安裝器與三平台 GitHub Release 尚未真正發布過**：`install/install.sh`、
+  Windows jlink ZIP、`bin/board update` 與 `.github/workflows/release.yml` 都已
+  完成程式碼與 CI 層級驗證，但目前 repo 尚未推送到遠端，**從未實際觸發過一次
+  release**，因此沒有可下載的真實 asset；今天唯一能用的安裝路徑是本文件第 1
+  節的手動 clone。
+- **Windows Sandbox 乾淨環境的人工驗收尚未執行**：清單已就緒
+  （[docs/windows-sandbox-clean-install-checklist.md](docs/windows-sandbox-clean-install-checklist.md)），
+  Windows 免 JDK 安裝流程目前只在 CI 的 `windows-2022` runner（非乾淨環境）上
+  驗證過。
+- Claude Desktop、Codex Desktop 是否支援本文件涵蓋的安裝指令**未經驗證**，本
+  repo 的 plugin 是為 Claude Code／Codex CLI 撰寫並驗證的。
+
+完整的產品發布缺口盤點與優先序見
+[docs/roadmap.md「未解決的產品發布缺口」](docs/roadmap.md#未解決的產品發布缺口2026-08-11-盤點)。
 
 ---
 
@@ -393,8 +431,15 @@ src/main/resources/
                      # Vue 執行檔與字型皆 vendor 進 static/vendor/，完全離線可用，
                      # 不需連外部 CDN，見 static/vendor/SOURCES.md
 bin/
-├── start-board.sh  # 啟動腳本（JDK 偵測、埠號檢查、H2 鎖檔偵測、啟動前備份、自動組裝）
-└── backup-db.sh    # 啟動前冷備份與保留策略，由 start-board.sh 呼叫
+├── board            # 啟動／停止／重啟／狀態／日誌（JDK 偵測、埠號檢查、H2 鎖檔
+│                     # 偵測、啟動前備份、自動組裝），board.ps1 為 Windows 對應版
+├── board-env.sh／.ps1     # 兩平台共用的預設值、備份命名與保留策略
+├── board-update.sh／.ps1  # 明確執行的 `board update`：下載、checksum 驗證、
+│                          # 停服、備份、切換、失敗自動回滾
+├── backup-db.sh／.ps1     # 啟動前冷備份與保留策略，由 board 呼叫
+└── restore-db.sh／.ps1    # 從三種備份還原
+install/
+└── install.sh        # macOS／Linux user-scope 安裝器（不需 repo checkout、不需 sudo）
 plugin/             # Claude Code plugin 骨架（agents/ 薄殼、claim-tasks skill、.mcp.json）
 plugins/
 └── ai-project-board/   # Codex plugin（manifest、agents、skill、.mcp.json）
@@ -402,15 +447,25 @@ plugins/
 └── marketplace.json    # Claude Code 的安裝入口，指向 plugin/
 .agents/plugins/
 └── marketplace.json    # Codex repo/Git marketplace，指向 plugins/ai-project-board/
+.github/workflows/
+├── ci.yml            # 每次 push／PR：測試、打包、bin/scripts 檢查、Windows PowerShell 檢查
+└── release.yml        # 推 vX.Y.Z tag 或手動觸發：四平台 build + 集中 publish（見下方文件）
 docs/
-├── installation.md            # 完整安裝指南
-├── dev-isolation.md           # 開發環境隔離基線（埠號／資料庫／日誌／worktree 對照）
-└── scope-leader-dispatch.md   # Leader 派工架構、Git 邊界與角色責任分工
+├── installation.md                       # 完整安裝指南
+├── release-contract.md                   # Release asset 契約：檔名、checksum、四平台 CI
+├── release-install-update-sop.md         # marketplace／plugin／server 三層安裝與更新 SOP
+├── operations.md                         # 維運手冊：啟停、備份還原、疑難排解
+├── windows-sandbox-clean-install-checklist.md  # Windows Sandbox 乾淨環境人工驗收清單
+├── mcp-tools.md                          # 完整 MCP 工具與 REST 端點參考
+├── agent-roles.md                        # 角色 agent 與兩階段派工流程
+├── scope-leader-dispatch.md              # Leader 派工架構、Git 邊界與角色責任分工
+├── frontend-regression-checklist.md      # 前端零建置回歸手動檢查清單
+└── roadmap.md                            # 產品化清單與決策紀錄
 ```
 
 ## 技術棧
 
-Spring Boot 3.5.16、Spring AI 1.1.8（MCP server，Streamable HTTP）、Java 21、H2、
+Spring Boot 4.1.0、Spring AI 2.0.0（MCP server，Streamable HTTP）、Java 21、H2、
 Flyway、Vue 3（零建置，執行檔與字型皆 vendor 進 repo，前端完全離線可用）。
 
 ## 更多文件
@@ -420,7 +475,12 @@ Flyway、Vue 3（零建置，執行檔與字型皆 vendor 進 repo，前端完�
 | [docs/mcp-tools.md](docs/mcp-tools.md) | 完整 MCP 工具與 REST 端點參考、狀態機、完成證據、治理規則 |
 | [docs/agent-roles.md](docs/agent-roles.md) | 六個角色、兩階段派工流程、薄殼與看板指引的兩層來源 |
 | [docs/installation.md](docs/installation.md) | 完整安裝指南、資料目錄規劃、plugin 疑難排解 |
+| [docs/release-install-update-sop.md](docs/release-install-update-sop.md) | Claude／Codex 共用的 GitHub 發布、安裝與更新 SOP：marketplace 加入/更新、plugin 安裝、server 首次安裝、`board update`、版本相容矩陣、本機轉 Git marketplace 的影響與回退 |
+| [docs/release-contract.md](docs/release-contract.md) | Release asset 契約：檔名、SHA-256 清單格式、四平台 CI 流程 |
+| [docs/windows-sandbox-clean-install-checklist.md](docs/windows-sandbox-clean-install-checklist.md) | Windows Sandbox 乾淨環境手動 clean install 清單；**尚未實際執行過**，「驗證記錄」一節目前是空的 |
 | [docs/operations.md](docs/operations.md) | 維運手冊：啟停、備份還原演練、開機自動啟動、疑難排解 |
-| [docs/roadmap.md](docs/roadmap.md) | 產品化清單與決策紀錄（想知道「為什麼是這樣」看這份） |
+| [docs/scope-leader-dispatch.md](docs/scope-leader-dispatch.md) | Leader 派工架構、Git 邊界與角色責任分工（人員參考用；可執行規則以 skill 與看板 `role` 表為準） |
+| [docs/frontend-regression-checklist.md](docs/frontend-regression-checklist.md) | 零建置前端的手動回歸檢查清單（尚未進 CI，見 [docs/roadmap.md](docs/roadmap.md) #24） |
+| [docs/roadmap.md](docs/roadmap.md) | 產品化清單與決策紀錄，含目前仍未解決的產品發布缺口（想知道「為什麼是這樣」看這份） |
 | [AGENTS.md](AGENTS.md) | 給 AI agent 的開發規則（架構限制、開發用埠號與資料庫隔離） |
 | [CHANGELOG.md](CHANGELOG.md) | 使用者可見的變更紀錄 |

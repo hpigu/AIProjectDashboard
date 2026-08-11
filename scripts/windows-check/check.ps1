@@ -60,8 +60,13 @@ $scriptFiles = @(
     (Join-Path $BinDir 'board-env.ps1'),
     (Join-Path $BinDir 'backup-db.ps1'),
     (Join-Path $BinDir 'board.ps1'),
+    (Join-Path $BinDir 'board-update.ps1'),
     (Join-Path $BinDir 'restore-db.ps1'),
-    (Join-Path $PSScriptRoot 'check.ps1')
+    (Join-Path $PSScriptRoot 'check.ps1'),
+    (Join-Path $PSScriptRoot 'release-check.ps1'),
+    (Join-Path $PSScriptRoot 'package-fixture.ps1'),
+    (Join-Path $PSScriptRoot 'update-fixture.ps1'),
+    (Join-Path $RepoRoot 'scripts\release\package-windows-x64.ps1')
 )
 
 foreach ($path in $scriptFiles) {
@@ -112,6 +117,54 @@ try {
     Assert-True ((Get-BoardDbFilePath) -eq (Join-Path $dataDir 'board')) 'BOARD_DB_URL 可反推出 H2 檔案路徑'
     Assert-True (-not (Test-BoardHttpReady -TimeoutSec 1)) '未啟動時 Test-BoardHttpReady 為 false'
     Assert-True ((Get-BoardPidFromFile) -eq 0) '沒有 PID 檔時回傳 0'
+
+    Write-Host '=== 2a. BOARD_DB_URL 遮罩（#142：不在 console 印出敏感連線資訊）==='
+    Assert-True ((Get-BoardMaskedDbUrl 'jdbc:h2:file:./data/board;USER=sa;PASSWORD=secret') `
+        -eq 'jdbc:h2:file:./data/board;USER=***;PASSWORD=***') '同時遮罩 USER 與 PASSWORD'
+    Assert-True ((Get-BoardMaskedDbUrl 'jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE') `
+        -eq 'jdbc:h2:file:./data/board;DB_CLOSE_ON_EXIT=FALSE') '沒有內嵌帳密時原樣輸出'
+
+    Write-Host '=== 2b. 敏感目錄／檔案的 ACL 收斂（#142）==='
+    $secureDir = Join-Path $workRoot 'acl-dir-test'
+    Assert-True (New-BoardSecureDirectory -Path $secureDir) '新建目錄套用 ACL 成功'
+    $dirAcl = Get-Acl -Path $secureDir
+    Assert-True $dirAcl.AreAccessRulesProtected '新建目錄已停用 ACL 繼承'
+    $currentUserName = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $dirRules = @($dirAcl.Access | Where-Object { $_.FileSystemRights -match 'FullControl' -and $_.IdentityReference.Value -eq $currentUserName })
+    Assert-True ($dirRules.Count -ge 1) '新建目錄的 ACL 僅含目前使用者的 FullControl 規則'
+    Assert-True ($dirAcl.Access.Count -eq 1) '新建目錄的 ACL 不含其他規則（無群組／Everyone／繼承規則）'
+
+    # 一次建立多層時，不能只保護最內層。外層或中間祖先若保留預設繼承 ACL，
+    # 同機其他使用者仍能沿路列出敏感資料。刻意建立三層全新的鏈，並直接檢查
+    # 中間祖先，而不是只用 leaf 成功推論父目錄也安全。
+    $secureChainRoot = Join-Path $workRoot 'acl-chain-root'
+    $secureIntermediate = Join-Path $secureChainRoot 'middle'
+    $secureLeaf = Join-Path $secureIntermediate 'leaf'
+    Assert-True (New-BoardSecureDirectory -Path $secureLeaf) '多層新建目錄逐層套用 ACL 成功'
+    $rootAcl = Get-Acl -Path $secureChainRoot
+    $intermediateAcl = Get-Acl -Path $secureIntermediate
+    $intermediateRules = @($intermediateAcl.Access | Where-Object {
+        $_.FileSystemRights -match 'FullControl' -and $_.IdentityReference.Value -eq $currentUserName
+    })
+    Assert-True $rootAcl.AreAccessRulesProtected '新建外層祖先已停用 ACL 繼承'
+    Assert-True $intermediateAcl.AreAccessRulesProtected '新建中間祖先已停用 ACL 繼承'
+    Assert-True ($intermediateRules.Count -ge 1) '新建中間祖先含目前使用者的 FullControl 規則'
+    Assert-True ($intermediateAcl.Access.Count -eq 1) '新建中間祖先不含其他 ACL 規則'
+
+    $secureFile = Join-Path $secureDir 'secret.txt'
+    [System.IO.File]::WriteAllText($secureFile, 'sensitive')
+    Protect-BoardPath -Path $secureFile -NewlyCreated $true
+    $fileAcl = Get-Acl -Path $secureFile
+    Assert-True $fileAcl.AreAccessRulesProtected '新建檔案已停用 ACL 繼承'
+    Assert-True ($fileAcl.Access.Count -eq 1) '新建檔案的 ACL 僅含一條規則（目前使用者）'
+
+    # 既有路徑：先人為放寬（還原繼承），確認收斂後又能修正回來，且失敗不拋例外
+    # （既有路徑收斂失敗只能警告、不能中止，語意見 board-env.ps1 的
+    # Protect-BoardPath 註解，這裡驗證的是「成功」路徑；失敗降級行為在 Java 側
+    # LocalFilePermissionHardenerTest 涵蓋，兩邊語意一致）。
+    New-BoardSecureDirectory -Path $secureDir | Out-Null
+    $reAcl = Get-Acl -Path $secureDir
+    Assert-True $reAcl.AreAccessRulesProtected '既有目錄重複收斂後仍維持僅目前使用者可存取'
 
     Write-Host '=== 3. 啟動前備份 ==='
     New-FakeH2File -Path $dbFile -Marker 'original'

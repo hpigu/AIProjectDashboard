@@ -45,15 +45,22 @@ function Get-BoardUserHome {
 # ---------------------------------------------------------------------------
 # 家目錄與資料目錄
 #
-# 資料目錄預設值有兩種情境，與 board-env.sh 完全相同（不可任意更動，否則既有
-# 使用者的看板會「看起來資料不見了」）：
-#   a) 既有使用者：repo 內 <repo>\data\board.mv.db 已存在 → 沿用該路徑。
-#   b) 全新環境：改用 %USERPROFILE%\.ai-project-board\data\board。
+# 資料目錄預設值有三種情境：
+#   a) Windows release ZIP：一律使用 user scope，ZIP 程式目錄可被覆蓋或刪除。
+#   b) 既有 repo 使用者：repo 內 <repo>\data\board.mv.db 已存在 → 沿用該路徑。
+#   c) 全新 repo 環境：改用 %USERPROFILE%\.ai-project-board\data\board。
 #      plugin 目錄可能因更新而遺失內容，H2 檔案不能放在會被覆蓋的路徑下。
 # ---------------------------------------------------------------------------
 $script:BoardHomeDir = Get-BoardEnvValue 'BOARD_HOME_DIR' (Join-Path (Get-BoardUserHome) '.ai-project-board')
 
-if (Test-Path (Join-Path $RepoRoot 'data\board.mv.db')) {
+# Release ZIP 的根目錄同時含 app/ 與 runtime/；只要其中一個存在就視為 release
+# 佈局，讓損壞／不完整的 ZIP 也 fail closed，絕不退回 PATH、target 或 repo data。
+$script:BoardIsBundledRelease = (Test-Path (Join-Path $RepoRoot 'app')) -or `
+    (Test-Path (Join-Path $RepoRoot 'runtime'))
+
+if ($script:BoardIsBundledRelease) {
+    $script:BoardDefaultDbDir = Join-Path $script:BoardHomeDir 'data'
+} elseif (Test-Path (Join-Path $RepoRoot 'data\board.mv.db')) {
     $script:BoardDefaultDbDir = Join-Path $RepoRoot 'data'
 } else {
     $script:BoardDefaultDbDir = Join-Path $script:BoardHomeDir 'data'
@@ -62,8 +69,14 @@ if (Test-Path (Join-Path $RepoRoot 'data\board.mv.db')) {
 $script:BoardPort      = Get-BoardEnvValue 'BOARD_PORT' '8080'
 $script:BoardDbUrl     = Get-BoardEnvValue 'BOARD_DB_URL' `
     ("jdbc:h2:file:" + (Join-Path $script:BoardDefaultDbDir 'board') + ";DB_CLOSE_ON_EXIT=FALSE")
-$script:BoardLogFile   = Get-BoardEnvValue 'BOARD_LOG_FILE' (Join-Path $RepoRoot 'logs\board.log')
+if ($script:BoardIsBundledRelease) {
+    $defaultBoardLogFile = Join-Path $script:BoardHomeDir 'logs\board.log'
+} else {
+    $defaultBoardLogFile = Join-Path $RepoRoot 'logs\board.log'
+}
+$script:BoardLogFile   = Get-BoardEnvValue 'BOARD_LOG_FILE' $defaultBoardLogFile
 $script:BoardBackupDir = Get-BoardEnvValue 'BOARD_BACKUP_DIR' (Join-Path $script:BoardHomeDir 'backups')
+$script:BoardConfigDir = Get-BoardEnvValue 'BOARD_CONFIG_DIR' (Join-Path $script:BoardHomeDir 'config')
 
 # PID 檔放在家目錄而非 repo 內：repo 可能被 plugin 更新覆蓋，且同一份 repo 可能
 # 被多個 worktree 共用，而「正在跑的看板」在一台機器上只有一個。
@@ -74,6 +87,8 @@ $env:BOARD_PORT = $script:BoardPort
 $env:BOARD_DB_URL = $script:BoardDbUrl
 $env:BOARD_LOG_FILE = $script:BoardLogFile
 $env:BOARD_BACKUP_DIR = $script:BoardBackupDir
+$env:BOARD_HOME_DIR = $script:BoardHomeDir
+$env:BOARD_CONFIG_DIR = $script:BoardConfigDir
 
 # ---------------------------------------------------------------------------
 # 由 BOARD_DB_URL 反推 H2 檔案路徑（不含 .mv.db 副檔名）。
@@ -82,6 +97,133 @@ $env:BOARD_BACKUP_DIR = $script:BoardBackupDir
 function Get-BoardDbFilePath {
     if ($script:BoardDbUrl -notmatch '^jdbc:h2:file:([^;]+)') { return '' }
     return $Matches[1]
+}
+
+# ---------------------------------------------------------------------------
+# 遮罩 BOARD_DB_URL 中可能內嵌的連線憑證，供任何要印到 console／log 的地方使用。
+#
+# 對應 bin/board-env.sh 的 board_mask_db_url：H2 的 JDBC URL 允許把帳密當成
+# 分號分隔參數內嵌在 URL 裡（USER=.../PASSWORD=...），而 BOARD_DB_URL 整串來自
+# 使用者可控的環境變數，直接印出可能讓密碼明文留在終端機或日誌檔。
+# ---------------------------------------------------------------------------
+function Get-BoardMaskedDbUrl {
+    param([string]$Url)
+
+    if ([string]::IsNullOrEmpty($Url)) { return $Url }
+    $masked = $Url -replace '(?i)(USER=)[^;]*', '$1***'
+    $masked = $masked -replace '(?i)(PASSWORD=)[^;]*', '$1***'
+    return $masked
+}
+
+# ---------------------------------------------------------------------------
+# 套用「僅目前使用者」的 NTFS ACL：停用繼承、移除既有規則，只留目前使用者的
+# FullControl。對稱於 dev.aiboard.config.LocalFilePermissionHardener 在 JVM
+# 端對 Windows 套用的 AclFileAttributeView，以及 bin/board-env.sh 的
+# board_secure_dir／board_secure_file（POSIX 0700／0600）。
+#
+# 新建路徑（$NewlyCreated=$true）套用失敗會拋例外，呼叫端必須讓它中止啟動——
+# 此時路徑裡還沒有使用者資料，放行只會留下一個從一開始就權限過寬的路徑。
+# 既有路徑套用失敗只印警告並回傳，不刪除或搬動任何資料、不阻擋服務繼續運作。
+#
+# 非 NTFS 磁碟區（例如 FAT32/exFAT，常見於隨身碟或部分虛擬磁碟）不支援
+# Get-Acl/Set-Acl 的物件式 ACL，會在 Get-Acl 或 SetAccessRuleProtection 丟出
+# 例外；這裡統一當成「檔案系統不支援此安全機制」的降級情境處理，而不是失敗，
+# 語意與 Java 端 LocalFilePermissionHardener 對「找不到 AclFileAttributeView」
+# 的處理一致。
+# ---------------------------------------------------------------------------
+function Protect-BoardPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][bool]$NewlyCreated
+    )
+
+    try {
+        $acl = Get-Acl -Path $Path -ErrorAction Stop
+    } catch {
+        Write-Host "[board-env] 檔案系統不支援 NTFS ACL，略過權限收斂（僅本機存取風險仍在，建議改用 NTFS 磁碟區）：$Path"
+        return
+    }
+
+    try {
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $currentUser, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+
+        # 停用繼承並清除既有規則（第二參數 $true = 移除繼承來的規則），
+        # 只留下面明確加入的「目前使用者 FullControl」一條，等同 POSIX 的 0700/0600：
+        # 沒有群組、沒有 Everyone、沒有繼承自父目錄的任何規則。
+        #
+        # 先用 @(...) 把 $acl.Access 具體化成獨立陣列再逐一移除：直接對
+        # $acl.Access 管線呼叫 RemoveAccessRule 是邊列舉邊修改同一個底層集合，
+        # .NET 對此的行為未定義（輕則漏刪，重則丟例外），必須先拷貝一份快照。
+        $acl.SetAccessRuleProtection($true, $false)
+        $existingRules = @($acl.Access)
+        foreach ($existingRule in $existingRules) { $acl.RemoveAccessRule($existingRule) | Out-Null }
+        $acl.AddAccessRule($rule)
+
+        Set-Acl -Path $Path -AclObject $acl -ErrorAction Stop
+        Write-Host "[board-env] 已套用僅限目前使用者的 ACL：$Path"
+    } catch {
+        if ($NewlyCreated) {
+            throw "無法為新建路徑套用僅限目前使用者的 ACL，為避免留下權限過寬的敏感路徑，已中止：$Path ($($_.Exception.Message))"
+        }
+        Write-Host "[board-env][錯誤] 警告：無法修正既有路徑的 ACL（不影響服務運作、未變更任何資料）：$Path ($($_.Exception.Message))"
+    }
+}
+
+# 建立目錄（若不存在）並套用僅限目前使用者的 ACL。沿路每一層由本次呼叫新建的
+# 祖先都必須由外到內逐層收斂，不能只保護最內層：例如一次建立
+# %USERPROFILE%\.ai-project-board\data 時，外層若仍繼承寬鬆 ACL，同機其他使用者
+# 依然可能列出敏感路徑。語意與 bash 的 board_secure_dir 及 Java 的
+# SensitiveDirectories.ensureSecureDirectory 對稱。
+#
+# 回傳 $true 成功／$false 失敗（任一新建祖先套用 ACL 失敗時）；呼叫端應在
+# $false 時中止對應流程。既有目錄仍只做盡力收斂，失敗警告但不阻擋。
+function New-BoardSecureDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        Write-Host "[board-env][錯誤] 無法解析目錄路徑：$Path ($($_.Exception.Message))"
+        return $false
+    }
+
+    # 在 New-Item -Force 一次建立整條路徑前，先保存所有缺失層級。List.Insert(0,...)
+    # 讓後續順序固定為外層到內層；若中途失敗，尚未放入資料前就 fail closed。
+    $missingAncestors = New-Object 'System.Collections.Generic.List[string]'
+    $cursor = $fullPath
+    while (-not (Test-Path -LiteralPath $cursor -PathType Container)) {
+        if (Test-Path -LiteralPath $cursor) {
+            Write-Host "[board-env][錯誤] 目錄路徑已被非目錄項目佔用：$cursor"
+            return $false
+        }
+        $missingAncestors.Insert(0, $cursor)
+        $parent = Split-Path -Parent $cursor
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $cursor) { break }
+        $cursor = $parent
+    }
+
+    try {
+        New-Item -ItemType Directory -Path $fullPath -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "[board-env][錯誤] 無法建立目錄：$fullPath ($($_.Exception.Message))"
+        return $false
+    }
+
+    try {
+        if ($missingAncestors.Count -eq 0) {
+            Protect-BoardPath -Path $fullPath -NewlyCreated $false
+        } else {
+            foreach ($createdPath in $missingAncestors) {
+                Protect-BoardPath -Path $createdPath -NewlyCreated $true
+            }
+        }
+        return $true
+    } catch {
+        Write-Host "[board-env][錯誤] $($_.Exception.Message)"
+        return $false
+    }
 }
 
 # ---------------------------------------------------------------------------

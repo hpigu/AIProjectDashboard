@@ -4,7 +4,151 @@
 執行 jar／接線。兩套 plugin 會帶入 MCP 宣告、角色 agent 與 leader skill；所有
 方式最終連到的都是同一顆 Spring Boot 行程。
 
-## 0. 前置需求
+## Windows x64 stable release ZIP（不需預裝 Java）
+
+從同一個 stable release `vV` 取得
+`ai-project-board-backend-windows-x64-V.zip` 與
+`ai-project-board-backend-V-SHA256SUMS.txt`，先依
+[release contract](release-contract.md#4-sha-256-完整性契約) 驗證 ZIP 的 SHA-256，
+再解壓到使用者可寫的位置（路徑可含空白或非 ASCII 字元）。不要解到 plugin cache，
+也不要從 ZIP 中挑出 JAR 或 runtime 另行搬動。
+
+ZIP 內的唯一服務入口固定是同層 bundled JDK 21 runtime；它**不會**改用
+`JAVA_HOME`、PATH、網路下載或其他 JAR：
+
+```powershell
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 start
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 status
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 stop
+```
+
+預設只監聽 `127.0.0.1:8080`。由於 MCP 沒有 server-side authentication，不能改成
+公開位址；若埠號已被使用，明確設定其他 loopback port，例如：
+
+```powershell
+$env:BOARD_PORT = '8081'
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 start
+```
+
+資料、備份、日誌、PID 與設定預設都在
+`%USERPROFILE%\.ai-project-board`，而不是可被更新／刪除的解壓程式目錄；新建路徑
+會收斂為目前使用者專用 ACL。可用 `BOARD_HOME_DIR` 改成另一個使用者可寫的根目錄。
+若 ZIP 缺少 bundled `runtime\bin\java.exe` 或 `app\ai-project-board-backend-V.jar`，
+launcher 會 fail closed 並要求重新下載，不會退回系統 Java。
+
+## 0. macOS／Linux stable release 安裝（不需 sudo）
+
+Stable release 的 macOS／Linux 安裝器不需要 repo checkout、Maven、`target/` 或
+plugin cache。它只接受使用者明確取得的同版 JDK 21 executable JAR 與集中
+`SHA256SUMS.txt`，或在使用者明確指定 stable `vV` release URL 時下載該兩項；沒有
+背景下載、`latest` 推測或自動更新。
+
+先從同一個 GitHub stable release `vV` 下載**本機平台**的 JAR 與
+`ai-project-board-backend-V-SHA256SUMS.txt`。名稱必須完全符合
+[release contract](release-contract.md)：macOS Apple Silicon 是
+`ai-project-board-backend-macos-arm64-V.jar`、Intel macOS 是
+`...-macos-x64-V.jar`、Linux x64 是 `...-linux-x64-V.jar`。
+
+```bash
+# 在包含這個 installer 的 release source checkout 執行；V 以實際版本取代。
+./install/install.sh \
+  --jar /path/to/ai-project-board-backend-macos-arm64-V.jar \
+  --checksums /path/to/ai-project-board-backend-V-SHA256SUMS.txt
+```
+
+若要由 installer 在**這一次明確操作**下載，必須指定 immutable tag 的 asset URL 與
+版本，不能用 mutable `latest`：
+
+```bash
+./install/install.sh \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/vV" \
+  --version V
+```
+
+預設會安裝在 `~/.ai-project-board`；所有 server release、設定、H2 資料、備份、日誌
+與 PID 都在這個使用者範圍內，並以 0700／0600 權限建立。可用 `--home` 選擇另一個
+使用者可寫的根目錄（CI／測試應一律用隔離暫存目錄，而非改寫 `HOME`）：
+
+```bash
+./install/install.sh --jar /path/to/JAR --checksums /path/to/SHA256SUMS.txt \
+  --home "/private/tmp/my board install"
+```
+
+安裝器會拒絕不支援的平台、非 JDK 21、JDK／平台架構不符、錯誤 artifact basename／
+版本、任何不符合嚴格四行契約的 checksum list，以及 hash 不符。驗證及所有檔案複製
+都在安裝根目錄同一個 parent 的 staging directory 完成；只有成功才原子發佈。失敗時
+既有 release 與資料不會被覆蓋。
+
+安裝後可從任何工作目錄執行絕對路徑入口：
+
+```bash
+~/.ai-project-board/bin/board start
+~/.ai-project-board/bin/board status
+~/.ai-project-board/bin/board stop
+```
+
+該入口固定使用安裝根目錄的絕對 JAR 與資料路徑；仍只監聽預設的
+`127.0.0.1:8080`，因 MCP 沒有 server-side authentication，**不得**改成公開位址。
+若 `:8080` 已在使用，顯式指定另一個 loopback 埠，例如
+`BOARD_PORT=8081 ~/.ai-project-board/bin/board start`。
+
+### 明確更新與回滾
+
+更新不是背景服務，也不會查詢或推測 `latest`。每次都必須由使用者明確指定 immutable
+stable `vV`；可先用 `--check` 驗證 current/target 與 artifact，完全不改動服務：
+
+```bash
+~/.ai-project-board/bin/board update --version V --jar /path/to/ai-project-board-backend-macos-arm64-V.jar \
+  --checksums /path/to/ai-project-board-backend-V-SHA256SUMS.txt --check
+~/.ai-project-board/bin/board update --version V \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/vV"
+```
+
+Windows 的同一語意以 ZIP 作為 offline artifact：
+
+```powershell
+<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 update -Version V `
+  -ReleaseZip C:\path\ai-project-board-backend-windows-x64-V.zip `
+  -Checksums C:\path\ai-project-board-backend-V-SHA256SUMS.txt -Check
+```
+
+更新器會在停止服務前完整下載、嚴格驗證四行 `SHA256SUMS`、platform、JAR/ZIP layout
+與 runtime；再保存原 PID/activation identity 和可驗證的 H2 snapshot manifest。POSIX
+以同檔案系統的 `current` symlink rename 切換 immutable runtime；Windows 以同磁碟區的
+**versioned-root rename transaction**：舊解壓 root 改名保留為 rollback 目錄，目標 ZIP
+的 `ai-project-board-backend-windows-x64-V` root 改名發佈到同 parent。它不是 single-root
+atomic replace；成功後請從更新器印出的新絕對路徑（
+`...\ai-project-board-backend-windows-x64-V\bin\board.ps1`）操作後續 status/stop/update。
+新服務無論原先是否執行都必須通過 readiness 並回報目標
+version/commit，任何 download、checksum、stop、backup、publish、activate、start 或
+readiness 失敗都會復原舊 activation、DB snapshot 與原本的 running/stopped 狀態；原本停止
+時，target 也會先 start→驗證→正常 stop，最後維持停止。舊 runtime、snapshot 和失敗
+staging 保留供診斷；若 rollback 本身失敗，更新器 fail closed
+並印出保留路徑，絕不刪除唯一資料副本或宣稱成功。
+POSIX rollback 以同資料庫檔案系統中的 temporary copy→hash verification→atomic rename
+還原 live DB；snapshot、`manifest.sha256` 與原始 hash 都不會被移走，能在事後重驗或手動
+恢復。
+
+GitHub 不可達時 `--release-url` 在停止服務前失敗；改用已下載的 `--jar/--checksums`
+或 `-ReleaseZip/-Checksums` 即為完全離線的等價操作。更新只處理 server runtime，絕不
+安裝、更新或移除 Claude/Codex marketplace 或全域設定。
+
+### 從既有 repo H2 資料遷移
+
+遷移不是自動偵測；只有你明確指定舊資料目錄才會執行，且只允許建立全新的安裝根目錄：
+
+```bash
+./install/install.sh --jar /path/to/JAR --checksums /path/to/SHA256SUMS.txt \
+  --migrate-from /path/to/old-repo/data
+```
+
+它先把來源 `board.mv.db` 複製到新根目錄的
+`backups/migration-source-V-<UTC>/`，以 `cmp` 與 SHA-256 manifest 驗證，再複製到
+新 `data/`。來源檔永遠不移動或覆寫；任一失敗會捨棄 staging installation，因此原
+repo 與既有安裝仍可直接使用。若需回滾，只要不啟用新的安裝根目錄，繼續使用原 repo；
+新安裝內的 migration backup 也保留了已驗證的原始副本。
+
+## 1. 前置需求
 
 - **JDK 21**（`pom.xml` 的 `java.version` 寫死 21，其他版本編譯不會過）
 - **Maven**：不需要另外安裝，repo 內附 `./mvnw` 會自動下載對應版本

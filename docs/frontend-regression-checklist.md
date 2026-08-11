@@ -80,3 +80,34 @@
   （`FrontendStaticAssetsTest`）
 - app.js 內所有 API 呼叫與 SSE 連線目標皆為 `/api` 開頭的同源相對路徑
   （`FrontendStaticAssetsTest`）
+- i18n 字典（`i18n.js` 的 `dictionaries['zh-TW']`/`dictionaries['en']`）key
+  parity（互不缺漏）、插值 placeholder 集合一致、無空字串、en 字典無殘留未
+  翻譯中文（`lang.zh-TW` 例外）、app.js／index.html 靜態 `t('key')` 呼叫皆
+  指向存在的 key（`I18nDictionaryTest`，見 #145）
+- 手動切換語言後 html lang 即時更新且 reload 後保留、不支援的 stored locale
+  fallback 到 zh-TW、無 stored 偏好時依瀏覽器語言偵測（含 zh-CN 等變體
+  fallback）、實際渲染畫面無 raw key fallback（`⚠key`）、插值正確代入不殘留
+  樣板字面值——以上由 `scripts/frontend-regression/check.mjs` 的 i18n 檢查
+  覆蓋（手動執行，非 CI，見該目錄 README.md，#145）
+
+### i18n（#145）
+
+以下項目需要人判斷「雙語文案讀起來是否正確、有沒有跑版」，`check.mjs` 只能
+確認「有沒有 raw key／console warning」這類機械性錯誤，無法判斷語意或版面：
+
+- [ ] 切換為 English 後，Level 1（專案列表）、Level 2（任務看板/相依圖）、
+      空看板 onboarding 三步驟、任務詳情面板（含 BLOCKED evidence、DONE
+      completion evidence、History）在英文下文案通順、無破版（過長英文單字
+      導致按鈕/badge 撐破版面，中文較短英文較長是常見風險）
+- [ ] BLOCKED 原因（`blockerReason.*`）、通知（`notify.*`）文案中英文皆語意
+      正確，尤其後端傳來的自由格式 `blockedReason` 落在
+      `blockerReason.unknown` 時中英文都可讀
+      （見 `app.js` 的 `formatBlockerReason()`）
+- [ ] 「清除條件」「確認」等操作型按鈕在兩語言下文字長度不同，不影響按鈕
+      可點擊區域與版面對齊
+- [ ] 桌面通知（`Notification` API 實際彈出的視窗，非頁面內文字）標題與內文
+      在 en/zh-TW 下皆正確帶入 `{title}`/`{id}`/`{project}` 等插值（需要瀏覽
+      器實際觸發通知權限與 BLOCKED 事件，`check.mjs` 未涵蓋原生通知彈窗渲染）
+- [ ] aria-label／title 屬性（螢幕閱讀器/滑鼠 hover tooltip）在兩語言下皆為
+      對應語言、語意正確可用（`I18nDictionaryTest` 只驗證 key 存在與 value
+      非空，未驗證螢幕閱讀器實際朗讀效果）

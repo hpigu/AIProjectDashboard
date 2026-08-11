@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,6 +101,52 @@ class BoardLifecycleScriptTest {
     }
 
     @Test
+    void statusMasksEmbeddedCredentialsInDatabaseUrl() throws Exception {
+        // #142：不在 console 印出敏感連線資訊。BOARD_DB_URL 是使用者可控的環境
+        // 變數，H2 允許把帳密當成分號分隔參數內嵌在 URL 裡；status 印出的資料庫
+        // 那一行絕不能讓密碼明文出現在終端機捲動記錄裡。
+        ProcessResult result = run(List.of("status"), Map.of(
+                "BOARD_DB_URL", "jdbc:h2:file:" + tempDir.resolve("data/board")
+                        + ";USER=sa;PASSWORD=super-secret;DB_CLOSE_ON_EXIT=FALSE"));
+
+        assertThat(result.output())
+                .as(result.output())
+                .contains("PASSWORD=***")
+                .doesNotContain("super-secret");
+    }
+
+    @Test
+    void freshDatabaseAndLogDirectoriesAreCreatedOwnerOnly() throws Exception {
+        // status 本身不啟動 JVM，但仍會走到 board-env.sh 載入的路徑解析；這裡改
+        // 直接呼叫 board_secure_dir／board_secure_file 驗證 #142 的核心語意：
+        // 新建路徑收斂為僅目前使用者可存取，且不因為既有資料而被破壞。
+        Path freshDir = tempDir.resolve("fresh-secure-dir");
+        Path freshFile = freshDir.resolve("secret.txt");
+
+        Path binDir = script.getParent();
+        String bashScript = "set -u\n"
+                + "REPO_ROOT='" + binDir.getParent() + "'\n"
+                + "source '" + binDir.resolve("board-env.sh") + "'\n"
+                + "err() { printf '[err] %s\\n' \"$*\" >&2; }\n"
+                + "board_secure_dir '" + freshDir + "' || exit 1\n"
+                + "echo 'created' > '" + freshFile + "'\n"
+                + "board_secure_file '" + freshFile + "' 1 || exit 1\n"
+                + "stat -f '%Lp' '" + freshDir + "' 2>/dev/null || stat -c '%a' '" + freshDir + "'\n"
+                + "stat -f '%Lp' '" + freshFile + "' 2>/dev/null || stat -c '%a' '" + freshFile + "'\n";
+
+        ProcessBuilder builder = new ProcessBuilder("bash", "-c", bashScript);
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+        process.getOutputStream().close();
+        String output = readAll(process.getInputStream());
+        boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+        assertThat(finished).as("腳本逾時：" + output).isTrue();
+        assertThat(process.exitValue()).as(output).isZero();
+        assertThat(output).as(output).contains("700");
+        assertThat(output).as(output).contains("600");
+    }
+
+    @Test
     void stopNeverEscalatesToSigkillWithoutExplicitForce() throws Exception {
         String source = Files.readString(script);
 
@@ -119,6 +166,10 @@ class BoardLifecycleScriptTest {
     // -----------------------------------------------------------------------
 
     private ProcessResult run(List<String> args) throws Exception {
+        return run(args, Map.of());
+    }
+
+    private ProcessResult run(List<String> args, Map<String, String> extraEnv) throws Exception {
         List<String> command = new ArrayList<>(List.of("bash", script.toString()));
         command.addAll(args);
 
@@ -133,6 +184,7 @@ class BoardLifecycleScriptTest {
         builder.environment().put("BOARD_LOG_FILE", tempDir.resolve("board.log").toString());
         builder.environment().put("BOARD_DB_URL",
                 "jdbc:h2:file:" + tempDir.resolve("data/board") + ";DB_CLOSE_ON_EXIT=FALSE");
+        builder.environment().putAll(extraEnv);
 
         Process process = builder.start();
         process.getOutputStream().close();

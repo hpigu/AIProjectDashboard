@@ -159,8 +159,14 @@ Read this before exposing the board to anything beyond your own machine.
 - **Before shutdown**: `ShutdownBackupService` runs H2's `BACKUP TO` on
   `ContextClosedEvent` (SIGTERM, Ctrl+C, normal JVM shutdown) for a consistent
   snapshot. `kill -9`, JVM crashes and power loss cannot trigger it.
-- **Retention**: backups newer than 30 days are always kept; older ones are only
-  deleted while at least 7 remain.
+- **While running**: `ScheduledBackupService` takes a consistent snapshot every
+  6 hours by default (`BOARD_BACKUP_INTERVAL`, disable with
+  `BOARD_BACKUP_SCHEDULE_ENABLED=false`). This is the only backup that fires
+  during a long-running process between starts and stops.
+- **Retention**: each of the three backup phases (startup/shutdown/scheduled)
+  has its own quota so frequent scheduled snapshots cannot crowd out the
+  shutdown snapshot. Backups newer than 30 days are always kept; older ones
+  are only deleted while at least 7 remain in that phase's bucket.
 - **Restore**: `bin/restore-db.sh --list`, then
   `bin/restore-db.sh latest` (or a specific file); on Windows,
   `.\bin\restore-db.ps1 -List` and `.\bin\restore-db.ps1 latest`. It refuses to run while the
@@ -183,6 +189,10 @@ See [docs/operations.md](docs/operations.md) for the operational runbook.
 | `BOARD_PID_FILE` | `<BOARD_HOME_DIR>/board.pid` | PID file used by `bin/board` |
 | `BOARD_STOP_TIMEOUT_SEC` | `60` | How long `stop` waits for shutdown |
 
+This is a subset covering the common cases. The full list (SSE limits, log
+rotation, backup retention counts, etc.) is in the "設定" section of
+[README.md](README.md#7-設定).
+
 ## Development
 
 ```bash
@@ -193,19 +203,24 @@ Never run tests or a dev instance against `:8080` or the default database — th
 is the user's live board. Development rules for agents are in
 [AGENTS.md](AGENTS.md).
 
-Stack: Spring Boot 3.5.16, Spring AI 1.1.8 (MCP, Streamable HTTP), Java 21, H2,
+Stack: Spring Boot 4.1.0, Spring AI 2.0.0 (MCP, Streamable HTTP), Java 21, H2,
 Flyway, Vue 3 (no build step; the Vue runtime and fonts are vendored into the repo
 so the UI works fully offline).
 
 ## Known limitations
 
-- Single machine only; no cross-device sync, no cloud deployment path
+- Single machine only; no cross-device sync, no cloud deployment path is
+  provided or validated
 - No server-side authentication on `/mcp` (see the security model above)
 - The SSE registry is a single in-process singleton; no horizontal scaling
 - Role instructions live in the H2 database, so they do not travel with the
   plugin — a new machine reseeds defaults and loses your `upsert_role` edits
-- `/api/health` reports the pom version, without a git commit hash
-- Backups are tied to startup and shutdown; there is no scheduled backup daemon
+- The web UI has a **zh-TW/English switcher** (top-right language button; it
+  remembers your choice and detects browser language, see
+  `src/main/resources/static/i18n.js`), but **this document, MCP tool
+  descriptions, and the board role instructions (`RoleSeeder`) are Traditional
+  Chinese only**, and most backend error messages are Chinese too — i18n
+  coverage is partial, not complete
 
 ## License
 

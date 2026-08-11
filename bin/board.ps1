@@ -20,7 +20,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'help')]
+    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'update', 'help')]
     [string]$Command = 'help',
 
     # stop：等待逾時後強制終止（會失去關閉前備份）
@@ -30,7 +30,14 @@ param(
     [switch]$Foreground,
 
     # logs：先顯示的行數
-    [int]$Lines = 50
+    [int]$Lines = 50,
+
+    # update：必須由使用者明確指定 immutable stable vV 與來源。
+    [string]$Version,
+    [string]$ReleaseUrl,
+    [string]$ReleaseZip,
+    [string]$Checksums,
+    [switch]$Check
 )
 
 Set-StrictMode -Version 2.0
@@ -39,6 +46,19 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'board-env.ps1')
 . (Join-Path $PSScriptRoot 'backup-db.ps1')
+
+# Stable Windows ZIP 的 app/ 與 runtime/ 和 bin/ 同層。這不是「偏好」或可覆寫
+# 的 Java 候選：release 一旦偵測到該佈局，就只能用其中的 java.exe 與唯一 JAR。
+# 這樣被截斷、手動修改或放錯平台的 ZIP 會清楚失敗，而不會安靜地改用 PATH、
+# JAVA_HOME、網路下載或 repo target 的另一個版本。
+$script:BundledJavaPath = Join-Path $RepoRoot 'runtime\bin\java.exe'
+$script:BundledAppDir = Join-Path $RepoRoot 'app'
+$script:BundledJarPath = $null
+if (Test-Path $script:BundledAppDir) {
+    $bundledJars = @(Get-ChildItem -Path $script:BundledAppDir -Filter 'ai-project-board-backend-*.jar' `
+        -File -ErrorAction SilentlyContinue)
+    if ($bundledJars.Count -eq 1) { $script:BundledJarPath = $bundledJars[0].FullName }
+}
 
 function Write-BoardLog { param([string]$Message) Write-Host "[board] $Message" }
 function Write-BoardErr { param([string]$Message) Write-Host "[board][錯誤] $Message" -ForegroundColor Red }
@@ -138,6 +158,8 @@ BOARD_JAVA 環境變數直接指定 java.exe 的完整路徑。
 }
 
 function Resolve-BoardJar {
+    if ($script:BoardIsBundledRelease) { return $script:BundledJarPath }
+
     $explicit = [Environment]::GetEnvironmentVariable('BOARD_JAR')
     if ($explicit) { return $explicit }
 
@@ -323,14 +345,42 @@ function Stop-BoardProcessTree {
 function Invoke-BoardStart {
     Write-BoardLog "repo 根目錄：$RepoRoot"
 
-    $javaBin = [Environment]::GetEnvironmentVariable('BOARD_JAVA')
-    if ($javaBin) {
+    $javaBin = $null
+    if ($script:BoardIsBundledRelease) {
+        $requestedHost = [Environment]::GetEnvironmentVariable('BOARD_HOST')
+        if ($requestedHost -and $requestedHost -ne '127.0.0.1') {
+            Write-BoardErr "Windows release ZIP 僅允許 127.0.0.1；拒絕 BOARD_HOST=$requestedHost"
+            Write-BoardErr 'MCP 尚無 server-side authentication，不能公開綁定。'
+            return 1
+        }
+        # Do not merely rely on application.yml's default: a parent process can carry an
+        # inherited BOARD_HOST. The bundled distribution never launches on a public host.
+        $env:BOARD_HOST = '127.0.0.1'
+        if (-not (Test-Path $script:BundledJavaPath)) {
+            Write-BoardErr "Windows release ZIP 缺少 bundled runtime：$script:BundledJavaPath"
+            Write-BoardErr '此 release 不會改用 BOARD_JAVA、JAVA_HOME 或 PATH。請重新下載並驗證 ZIP。'
+            return 1
+        }
+        if (-not $script:BundledJarPath -or -not (Test-Path $script:BundledJarPath)) {
+            Write-BoardErr "Windows release ZIP 缺少唯一 server JAR：$script:BundledAppDir"
+            Write-BoardErr '此 release 不會改用 BOARD_JAR、target 或現場組裝。請重新下載並驗證 ZIP。'
+            return 1
+        }
+        $javaBin = $script:BundledJavaPath
         if (-not (Test-Java21 -JavaPath $javaBin)) {
-            Write-BoardErr "BOARD_JAVA 指定的執行檔不是 JDK 21：$javaBin"
+            Write-BoardErr "bundled runtime 不是可用的 Java 21：$javaBin"
             return 1
         }
     } else {
-        $javaBin = Find-Java21
+        $javaBin = [Environment]::GetEnvironmentVariable('BOARD_JAVA')
+        if ($javaBin) {
+            if (-not (Test-Java21 -JavaPath $javaBin)) {
+                Write-BoardErr "BOARD_JAVA 指定的執行檔不是 JDK 21：$javaBin"
+                return 1
+            }
+        } else {
+            $javaBin = Find-Java21
+        }
     }
     if (-not $javaBin) {
         Show-JdkInstallHint
@@ -338,7 +388,7 @@ function Invoke-BoardStart {
     }
     Write-BoardLog "使用 JDK 21：$javaBin"
     Write-BoardLog "BOARD_PORT=$script:BoardPort"
-    Write-BoardLog "BOARD_DB_URL=$script:BoardDbUrl"
+    Write-BoardLog "BOARD_DB_URL=$(Get-BoardMaskedDbUrl $script:BoardDbUrl)"
     Write-BoardLog "BOARD_LOG_FILE=$script:BoardLogFile"
 
     # 埠號檢查：被佔用時先判斷是不是看板自己，避免重複啟動或誤殺別的服務。
@@ -348,12 +398,25 @@ function Invoke-BoardStart {
         if (Test-BoardHttpReady -TimeoutSec 3) {
             Write-BoardLog "偵測到看板已在 :$script:BoardPort 正常運作（PID $portPid），不重複啟動。"
             # 補寫 PID 檔：看板可能是手動 java -jar 起的，補上之後 stop 才停得掉。
-            New-Item -ItemType Directory -Path (Split-Path $script:BoardPidFile) -Force -ErrorAction SilentlyContinue | Out-Null
+            # 此路徑是盡力而為的補救（看板其實已在正常運作），ACL 收斂失敗不阻擋。
+            New-BoardSecureDirectory -Path (Split-Path $script:BoardPidFile) | Out-Null
             Set-Content -Path $script:BoardPidFile -Value $portPid -Encoding ASCII
+            try { Protect-BoardPath -Path $script:BoardPidFile -NewlyCreated $true } catch { Write-Host "[board][錯誤] $($_.Exception.Message)" }
             return 0
         }
         Write-BoardErr "埠號 $script:BoardPort 被其他行程佔用（PID $portPid，非本看板服務）。"
         Write-BoardErr "請先確認該行程用途，或改用 BOARD_PORT 指定其他埠號再重試。"
+        return 1
+    }
+
+    # ZIP release 的所有可寫狀態（資料、備份、日誌、PID、設定）都在 user scope。
+    # 新建目錄無法收斂 ACL 時必須 fail closed；既有路徑仍保留 #142 的警告降級語意。
+    if (-not (New-BoardSecureDirectory -Path $script:BoardHomeDir)) {
+        Write-BoardErr "使用者資料根目錄權限收斂失敗，已中止啟動：$script:BoardHomeDir"
+        return 1
+    }
+    if (-not (New-BoardSecureDirectory -Path $script:BoardConfigDir)) {
+        Write-BoardErr "設定目錄權限收斂失敗，已中止啟動：$script:BoardConfigDir"
         return 1
     }
 
@@ -367,7 +430,12 @@ function Invoke-BoardStart {
             Write-BoardErr "請先確認並結束該行程（.\bin\board.ps1 status 可看目前的看板行程），再重試。"
             return 1
         }
-        New-Item -ItemType Directory -Path (Split-Path $dbMvFile) -Force -ErrorAction SilentlyContinue | Out-Null
+        # 新建目錄套用 ACL 失敗必須中止：此時目錄下還沒有任何使用者資料，
+        # 資料庫檔案即將在這個目錄下誕生，不能讓它落在權限過寬的目錄裡。
+        if (-not (New-BoardSecureDirectory -Path (Split-Path $dbMvFile))) {
+            Write-BoardErr "資料庫目錄權限收斂失敗，已中止啟動。"
+            return 1
+        }
     }
 
     # 啟動前冷備份：失敗必須中止啟動，不可讓 migration 在沒有備份的情況下繼續。
@@ -380,6 +448,10 @@ function Invoke-BoardStart {
 
     $jarPath = Resolve-BoardJar
     if (-not $jarPath -or -not (Test-Path $jarPath)) {
+        if ($script:BoardIsBundledRelease) {
+            Write-BoardErr 'Windows release ZIP 的 bundled server JAR 不可用，已中止啟動。'
+            return 1
+        }
         $mvnw = Join-Path $RepoRoot 'mvnw.cmd'
         if ((Test-Path (Join-Path $RepoRoot 'pom.xml')) -and (Test-Path $mvnw)) {
             Write-BoardLog "找不到可執行 jar，偵測到完整 repo，現場組裝一次……"
@@ -405,8 +477,14 @@ function Invoke-BoardStart {
     }
 
     Write-BoardLog "啟動 jar：$jarPath"
-    New-Item -ItemType Directory -Path (Split-Path $script:BoardLogFile) -Force -ErrorAction SilentlyContinue | Out-Null
-    New-Item -ItemType Directory -Path (Split-Path $script:BoardPidFile) -Force -ErrorAction SilentlyContinue | Out-Null
+    if (-not (New-BoardSecureDirectory -Path (Split-Path $script:BoardLogFile))) {
+        Write-BoardErr "日誌目錄權限收斂失敗，已中止啟動。"
+        return 1
+    }
+    if (-not (New-BoardSecureDirectory -Path (Split-Path $script:BoardPidFile))) {
+        Write-BoardErr "PID 目錄權限收斂失敗，已中止啟動。"
+        return 1
+    }
 
     if ($Foreground) {
         # 診斷模式：logback 初始化之前的錯誤（JVM 參數、classpath、埠號綁定失敗的
@@ -424,6 +502,12 @@ function Invoke-BoardStart {
         -WindowStyle Hidden -PassThru
     $boardPid = $process.Id
     Set-Content -Path $script:BoardPidFile -Value $boardPid -Encoding ASCII
+    try {
+        Protect-BoardPath -Path $script:BoardPidFile -NewlyCreated $true
+    } catch {
+        Write-BoardErr $_.Exception.Message
+        return 1
+    }
     Write-BoardLog "已啟動子行程 PID=$boardPid（PID 檔：$script:BoardPidFile），等待服務就緒……"
 
     $elapsed = 0
@@ -553,7 +637,7 @@ function Invoke-BoardStatus {
     if (-not (Test-Path $script:BoardPidFile)) { $pidNote = '（不存在）' }
     Write-BoardLog "PID 檔：$script:BoardPidFile$pidNote"
     Write-BoardLog "埠號：$script:BoardPort"
-    Write-BoardLog "資料庫：$script:BoardDbUrl"
+    Write-BoardLog "資料庫：$(Get-BoardMaskedDbUrl $script:BoardDbUrl)"
     Write-BoardLog "日誌：$script:BoardLogFile"
 
     $httpReady = Test-BoardHttpReady -TimeoutSec 3
@@ -601,6 +685,7 @@ function Show-BoardUsage {
   restart              stop 後再 start
   status               顯示 PID、埠號與 /api/health 版本資訊
   logs [-Lines N]      追蹤日誌，預設先顯示 50 行
+  update -Version V ... 明確指定 stable vV 的交易式更新；執行 update -? 看完整用法
 
 環境變數：
   BOARD_PORT               預設 8080
@@ -629,5 +714,10 @@ switch ($Command) {
     }
     'status'  { exit (Invoke-BoardStatus) }
     'logs'    { exit (Invoke-BoardLogs) }
+    'update'  {
+        & (Join-Path $PSScriptRoot 'board-update.ps1') -Version $Version -ReleaseUrl $ReleaseUrl `
+            -ReleaseZip $ReleaseZip -Checksums $Checksums -Check:$Check
+        exit $LASTEXITCODE
+    }
     default   { Show-BoardUsage; exit 0 }
 }

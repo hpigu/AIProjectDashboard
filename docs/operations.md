@@ -15,6 +15,19 @@ bin/board restart
 bin/board logs -n 200
 ```
 
+透過 stable release 安裝時，請改用安裝根目錄的絕對入口；不依賴 repo cwd、`pom.xml`、
+`mvnw` 或 `target/`：
+
+```bash
+~/.ai-project-board/bin/board start
+~/.ai-project-board/bin/board status
+~/.ai-project-board/bin/board stop
+```
+
+安裝器用 `--home DIR` 指定另一個根目錄時，將上述路徑的
+`~/.ai-project-board` 換成 `DIR`。`data/`、`backups/`、`logs/`、PID 與安裝設定
+會全部保留在同一個 user-scope 根目錄；不要把它們指回 repo 或 plugin cache。
+
 ### 為什麼不要自己 kill
 
 `bin/board stop` 送的是 `SIGTERM`，Spring 的 `ContextClosedEvent` 會觸發
@@ -40,6 +53,13 @@ Windows 沒有 bash，改用同名的 `.ps1`（預設值、啟動前備份、保
 .\bin\board.ps1 restart
 .\bin\board.ps1 logs -Lines 200
 ```
+
+Windows x64 stable ZIP 則只從解壓根目錄執行 `bin\board.ps1`；它固定使用 ZIP 的
+`runtime\bin\java.exe` 和 `app\ai-project-board-backend-V.jar`，因此不需要 JDK、
+Git Bash、symlink 或 `lsof`。資料、備份、日誌、PID、設定仍在
+`%USERPROFILE%\.ai-project-board`（或 `BOARD_HOME_DIR`），不在可覆寫的 ZIP 目錄。
+若 bundled runtime/JAR 遺失或不是 Java 21，啟動會明確失敗，絕不改用 PATH／
+`JAVA_HOME`／網路下載；重新驗證 release checksum 後完整解壓即可。
 
 **停止的機制不同，必須知道**：Windows 沒有 SIGTERM，`Stop-Process` 等同
 `kill -9`，會跳過 JVM shutdown hook，關閉前備份就不會產生。因此 `stop` 改用

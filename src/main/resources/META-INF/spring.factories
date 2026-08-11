@@ -1,0 +1,17 @@
+# EnvironmentPostProcessor 必須透過本檔案（classic spring.factories 機制）註冊；
+# 不會被 @SpringBootApplication 元件掃描找到——它在任何 bean 定義載入前就要執行，
+# 掃描機制在那個時間點根本還沒開始運作。
+#
+# 見 dev.aiboard.config.SensitiveDirectoryEnvironmentPostProcessor 的類別註解：
+# 這是在 DataSource／Flyway／Logback 初始化之前收斂資料庫與日誌目錄權限的唯一
+# 可行時機（#142）。
+#
+# key 必須是 org.springframework.boot.EnvironmentPostProcessor，不是舊套件路徑
+# org.springframework.boot.env.EnvironmentPostProcessor：Spring Boot 4.1 把介面
+# 移到 org.springframework.boot 下（org.springframework.boot.env 版仍存在但已
+# 標記淘汰），SpringFactoriesLoader 依「工廠型別的完整類別名稱」當 key 比對，
+# 兩個路徑不是同一個 key，用錯路徑會讓這個類別靜靜地永遠不會被載入、不會有任何
+# 錯誤訊息——本專案的 pom.xml 已固定在 spring-boot-starter-parent 4.1.0，
+# 這裡的 key 必須對應同一個大版本；實際踩過這個坑，別再用回舊路徑。
+org.springframework.boot.EnvironmentPostProcessor=\
+dev.aiboard.config.SensitiveDirectoryEnvironmentPostProcessor

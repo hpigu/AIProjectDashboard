@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# board — 看板的服務生命週期入口（start / stop / restart / status / logs）
+# board — 看板的服務生命週期入口（start / stop / restart / status / logs / update）
 #
 # 這支腳本是 mac 與 Linux 上唯一的服務入口，對稱於 Windows 的 bin\board.ps1。
 # 兩邊的形狀刻意一致：每個平台各一支主入口（board / board.ps1）、一份共用預設值
@@ -85,6 +85,7 @@ usage() {
   restart            stop 後再 start
   status             顯示 PID、埠號與 /api/health 版本資訊
   logs [-n N]        追蹤日誌（tail -f）；-n 指定先顯示的行數，預設 50
+  update ...         明確指定 stable vV 的交易式更新；詳見 board update --help
 
 還原資料庫請用 bin/restore-db.sh——它必須在看板停止的狀態下執行，且會覆寫
 資料庫檔，刻意不放進這個天天使用的入口。
@@ -125,6 +126,58 @@ resolve_pid() {
   fi
 
   return 1
+}
+
+# JVM 已經由本次 start 啟動、但後續的安全收尾失敗時，不能只讓啟動腳本退出：
+# 那會留下沒有可信 PID 檔可管理、卻仍持有資料庫的孤兒行程。這裡只操作由 `$!`
+# 當場記下的確切 PID，絕不以名稱或命令列子字串搜尋行程。
+#
+# 先送 SIGTERM，讓 Spring 有機會正常關閉；逾時才對同一個確切 PID 送 SIGKILL。
+# 這和使用者主動執行 stop 的語意不同：stop 預設不強制終止健康、已受 PID 檔管理
+# 的服務；此處是啟動交易尚未完成，不能把未受管理的子行程留在系統裡。
+abort_started_process() {
+  local pid="$1"
+  local reason="$2"
+  local elapsed=0
+  local cleanup_timeout="$STOP_TIMEOUT_SEC"
+  [[ "$cleanup_timeout" =~ ^[0-9]+$ ]] || cleanup_timeout=60
+
+  err "$reason"
+  err "啟動交易未完成，正在終止本次啟動的確切 PID=${pid}，避免留下孤兒行程。"
+
+  if kill -0 "$pid" 2>/dev/null; then
+    if ! kill -TERM "$pid" 2>/dev/null; then
+      if kill -0 "$pid" 2>/dev/null; then
+        err "無法對本次啟動的 PID=${pid} 送出 SIGTERM；仍會等待並只對同一個確切 PID 做後續收尾。"
+      fi
+    fi
+  fi
+
+  while kill -0 "$pid" 2>/dev/null && [ "$elapsed" -lt "$cleanup_timeout" ]; do
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  if kill -0 "$pid" 2>/dev/null; then
+    err "PID=${pid} 在 ${cleanup_timeout} 秒後仍未結束；啟動交易無法安全完成，改對同一個確切 PID 送出 SIGKILL。"
+    force_kill_exact_pid "$pid"
+    sleep 1
+  fi
+
+  if kill -0 "$pid" 2>/dev/null; then
+    err "SIGKILL 後 PID=${pid} 仍存在；未使用名稱比對清理，請手動確認這個確切 PID。"
+    return 1
+  fi
+
+  # disown 前失敗時它仍是目前 shell 的子行程；盡力 reap，避免短暫 zombie。
+  wait "$pid" 2>/dev/null || true
+  if [ -f "$BOARD_PID_FILE" ]; then
+    local recorded_pid
+    recorded_pid="$(head -n1 "$BOARD_PID_FILE" 2>/dev/null | tr -d '[:space:]')"
+    [ "$recorded_pid" = "$pid" ] && rm -f -- "$BOARD_PID_FILE"
+  fi
+  log "已終止本次啟動的 PID=${pid}；未留下未受管理的看板行程。"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -249,6 +302,10 @@ find_jar() {
 cmd_start() {
   log "repo 根目錄：$REPO_ROOT"
 
+  # JVM 與其所有子系統都繼承 077。這使 H2／Logback 之後建立或重建的資料庫、
+  # active log 與 rolling log 從誕生時就是 0600，而不是只在啟動當下 chmod 一次。
+  board_set_secure_umask
+
   # -------------------------------------------------------------------------
   # 1. JDK 偵測
   # -------------------------------------------------------------------------
@@ -270,19 +327,31 @@ cmd_start() {
     exit 1
   fi
 
-  log "使用 JDK 21：$JAVA_BIN（$("$JAVA_BIN" -version 2>&1 | head -n1)）"
+  log "使用 JDK 21：${JAVA_BIN}（$("$JAVA_BIN" -version 2>&1 | head -n1)）"
 
   # -------------------------------------------------------------------------
   # 2. 環境變數與絕對路徑資料庫（預設值來自已 source 的 board-env.sh）
+  #
+  #    目錄依實際解析出的 BOARD_DB_URL（而非固定的預設路徑）建立並收斂為僅
+  #    目前使用者可存取（0700）；新建目錄收斂失敗會中止啟動（fail closed），
+  #    因為此時目錄裡還沒有任何使用者資料。JVM 啟動後
+  #    SensitiveDirectoryEnvironmentPostProcessor 會在 DataSource 初始化前
+  #    再次確認同一目錄的權限，這裡先做一次是為了在資料庫檔案於此目錄下
+  #    誕生之前，目錄本身就已經是嚴格權限，不留任何窗口。
   # -------------------------------------------------------------------------
-  local DEFAULT_DB_DIR="$BOARD_DEFAULT_DB_DIR"
+  local DB_DIR_TO_SECURE
+  DB_DIR_TO_SECURE="$(dirname "$(board_db_file_path)")"
   [ -n "${BOARD_DB_USER:-}" ] && export BOARD_DB_USER
   [ -n "${BOARD_DB_PASSWORD:-}" ] && export BOARD_DB_PASSWORD
 
-  mkdir -p "$DEFAULT_DB_DIR" 2>/dev/null || true
+  if [ -n "$DB_DIR_TO_SECURE" ] && [ "$DB_DIR_TO_SECURE" != "." ]; then
+    if ! board_secure_dir "$DB_DIR_TO_SECURE"; then
+      exit 1
+    fi
+  fi
 
   log "BOARD_PORT=${BOARD_PORT}"
-  log "BOARD_DB_URL=${BOARD_DB_URL}"
+  log "BOARD_DB_URL=$(board_mask_db_url "$BOARD_DB_URL")"
   log "BOARD_LOG_FILE=${BOARD_LOG_FILE}"
 
   # -------------------------------------------------------------------------
@@ -299,9 +368,11 @@ cmd_start() {
         --max-time 3 "http://127.0.0.1:${BOARD_PORT}/api/projects" 2>/dev/null | grep -q '^2'; then
       log "偵測到看板已在 :${BOARD_PORT} 正常運作（PID ${PORT_PID}），不重複啟動。"
       # 補寫 PID 檔：看板可能是舊版腳本或手動 java -jar 起的，補上之後
-      # `bin/board stop` 才停得掉，不必叫使用者自己 ps | grep。
-      mkdir -p "$(dirname "$BOARD_PID_FILE")" 2>/dev/null || true
+      # `bin/board stop` 才停得掉，不必叫使用者自己 ps | grep。此路徑是盡力而為
+      # 的補救（看板其實已在正常運作），權限收斂失敗不阻擋這裡繼續，僅記錄。
+      board_secure_dir "$(dirname "$BOARD_PID_FILE")" || true
       printf '%s\n' "$PORT_PID" > "$BOARD_PID_FILE" 2>/dev/null || true
+      board_secure_file "$BOARD_PID_FILE" 1 || true
       exit 0
     else
       err "埠號 ${BOARD_PORT} 被其他行程佔用（PID ${PORT_PID}，非本看板服務）。"
@@ -315,6 +386,8 @@ cmd_start() {
   # -------------------------------------------------------------------------
   local DB_FILE_PATH DB_MV_FILE LOCK_PIDS
   DB_FILE_PATH="$(board_db_file_path)"
+  board_secure_runtime_files \
+    "${DB_FILE_PATH:+${DB_FILE_PATH}.mv.db}" "$BOARD_LOG_FILE" "$BOARD_CONSOLE_LOG"
   if [ -n "$DB_FILE_PATH" ]; then
     DB_MV_FILE="${DB_FILE_PATH}.mv.db"
     if [ -e "$DB_MV_FILE" ] && command -v lsof >/dev/null 2>&1; then
@@ -375,8 +448,8 @@ cmd_start() {
   fi
 
   log "啟動 jar：${JAR_PATH}"
-  mkdir -p "$(dirname "$BOARD_LOG_FILE")"
-  mkdir -p "$(dirname "$BOARD_PID_FILE")"
+  board_secure_dir "$(dirname "$BOARD_LOG_FILE")" || exit 1
+  board_secure_dir "$(dirname "$BOARD_PID_FILE")" || exit 1
 
   # -------------------------------------------------------------------------
   # 7. 背景啟動
@@ -393,10 +466,28 @@ cmd_start() {
   # 使用者會完全看不到原因。
   # -------------------------------------------------------------------------
   local APP_PID
+  local CONSOLE_LOG_IS_NEW=0
+  [ -e "$BOARD_CONSOLE_LOG" ] || CONSOLE_LOG_IS_NEW=1
   nohup "$JAVA_BIN" -jar "$JAR_PATH" >> "$BOARD_CONSOLE_LOG" 2>&1 &
   APP_PID=$!
+  # console log 可能含 JVM 參數錯誤等診斷資訊，收斂為僅目前使用者可讀寫；
+  # 既有檔案（重啟後續寫）收斂失敗不阻擋啟動，只記錄警告。
+  if ! board_secure_file "$BOARD_CONSOLE_LOG" "$CONSOLE_LOG_IS_NEW"; then
+    abort_started_process "$APP_PID" \
+      "無法安全收斂本次新建的 console log，已中止啟動：${BOARD_CONSOLE_LOG}"
+    exit 1
+  fi
+  if ! printf '%s\n' "$APP_PID" > "$BOARD_PID_FILE"; then
+    abort_started_process "$APP_PID" \
+      "無法寫入 PID 檔，已中止啟動：${BOARD_PID_FILE}"
+    exit 1
+  fi
+  if ! board_secure_file "$BOARD_PID_FILE" 1; then
+    abort_started_process "$APP_PID" \
+      "無法安全收斂本次寫入的 PID 檔，已中止啟動：${BOARD_PID_FILE}"
+    exit 1
+  fi
   disown "$APP_PID" 2>/dev/null || true
-  printf '%s\n' "$APP_PID" > "$BOARD_PID_FILE"
   log "已啟動子行程 PID=${APP_PID}（PID 檔：${BOARD_PID_FILE}），等待服務就緒……"
 
   # -------------------------------------------------------------------------
@@ -490,7 +581,7 @@ cmd_stop() {
   if [ "$force" -eq 1 ]; then
     err "等待 ${STOP_TIMEOUT_SEC} 秒仍未結束，依 --force 送出 SIGKILL。"
     err "注意：SIGKILL 不會執行關閉前備份，本次停止沒有一致性快照。"
-    kill -KILL "$pid" 2>/dev/null || true
+    force_kill_exact_pid "$pid"
     sleep 1
     if kill -0 "$pid" 2>/dev/null; then
       err "SIGKILL 後行程仍存在（PID=${pid}），請手動確認。"
@@ -505,6 +596,13 @@ cmd_stop() {
   err "刻意不自動送 SIGKILL：那會中斷關閉前備份。可先查看 ${BOARD_LOG_FILE} 確認"
   err "是否正在進行備份；確定要強制終止再執行：bin/board stop --force"
   return 1
+}
+
+# 集中唯一一處 SIGKILL 實作，讓 stop --force 與「啟動交易失敗後不得留下孤兒」
+# 共用同一條只接受確切 PID 的路徑。呼叫端必須先完成自己的 TERM／等待／診斷語意。
+force_kill_exact_pid() {
+  local pid="$1"
+  kill -KILL "$pid" 2>/dev/null || true
 }
 
 cmd_restart() {
@@ -530,7 +628,7 @@ cmd_status() {
 
   log "PID 檔：${BOARD_PID_FILE}$([ -f "$BOARD_PID_FILE" ] || printf '（不存在）')"
   log "埠號：${BOARD_PORT}"
-  log "資料庫：${BOARD_DB_URL}"
+  log "資料庫：$(board_mask_db_url "$BOARD_DB_URL")"
   log "日誌：${BOARD_LOG_FILE}"
 
   if board_http_ready 3; then
@@ -580,6 +678,7 @@ case "$COMMAND" in
   restart) cmd_restart "$@" ;;
   status)  cmd_status "$@" ;;
   logs)    cmd_logs "$@" ;;
+  update)  exec "${SCRIPT_DIR}/board-update.sh" "$@" ;;
   ''|-h|--help|help) usage ;;
   *) err "不認識的指令：${COMMAND}"; echo; usage >&2; exit 1 ;;
 esac
