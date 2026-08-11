@@ -17,6 +17,23 @@ set -u
 
 : "${REPO_ROOT:?board-env.sh 需要呼叫端先設定 REPO_ROOT}"
 
+# 已安裝的 release 會在 <install-root>/config/board.env 寫入這兩個固定鍵。
+# 這不是一般 shell 設定檔，刻意不用 source：安裝目錄中的資料不應取得啟動／
+# 備份／還原腳本的任意 shell 執行權。此處而不是 bin/board 讀取，確保獨立執行
+# backup-db.sh 與 restore-db.sh 時也能得到相同的已安裝資料根目錄。
+INSTALL_CONFIG="${REPO_ROOT}/config/board.env"
+if [ -f "$INSTALL_CONFIG" ]; then
+  BOARD_INSTALLED_HOME="$(sed -n 's/^BOARD_INSTALLED_HOME=//p' "$INSTALL_CONFIG")"
+  BOARD_INSTALLED_JAR="$(sed -n 's/^BOARD_INSTALLED_JAR=//p' "$INSTALL_CONFIG")"
+  if [ -z "$BOARD_INSTALLED_HOME" ] || [ -z "$BOARD_INSTALLED_JAR" ] \
+      || [ "$(printf '%s\n' "$BOARD_INSTALLED_HOME" | wc -l | tr -d '[:space:]')" != "1" ] \
+      || [ "$(printf '%s\n' "$BOARD_INSTALLED_JAR" | wc -l | tr -d '[:space:]')" != "1" ]; then
+    printf '[board-env][錯誤] 安裝設定格式無效：%s\n' "$INSTALL_CONFIG" >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  export BOARD_INSTALLED_HOME BOARD_INSTALLED_JAR
+fi
+
 # ---------------------------------------------------------------------------
 # 家目錄與資料目錄
 #
@@ -27,7 +44,7 @@ set -u
 #   b) 全新環境：改用 ~/.ai-project-board/data/board。plugin 目錄可能因更新
 #      （重新 clone／覆蓋）而遺失內容，H2 檔案不能放在會被覆蓋的路徑下。
 # ---------------------------------------------------------------------------
-BOARD_HOME_DIR="${BOARD_HOME_DIR:-$HOME/.ai-project-board}"
+BOARD_HOME_DIR="${BOARD_HOME_DIR:-${BOARD_INSTALLED_HOME:-$HOME/.ai-project-board}}"
 
 if [ -f "${REPO_ROOT}/data/board.mv.db" ]; then
   BOARD_DEFAULT_DB_DIR="${REPO_ROOT}/data"
@@ -39,6 +56,13 @@ BOARD_PORT="${BOARD_PORT:-8080}"
 BOARD_DB_URL="${BOARD_DB_URL:-jdbc:h2:file:${BOARD_DEFAULT_DB_DIR}/board;DB_CLOSE_ON_EXIT=FALSE}"
 BOARD_LOG_FILE="${BOARD_LOG_FILE:-${REPO_ROOT}/logs/board.log}"
 BOARD_BACKUP_DIR="${BOARD_BACKUP_DIR:-${BOARD_HOME_DIR}/backups}"
+
+# install/install.sh 的已安裝版以此絕對路徑指定 release JAR。使用者顯式設定
+# BOARD_JAR 時仍優先，方便診斷或回復到保留的舊 release；沒有安裝設定的 repo
+# checkout 則完全不受影響。
+if [ -n "${BOARD_INSTALLED_JAR:-}" ]; then
+  : "${BOARD_JAR:=${BOARD_INSTALLED_JAR}}"
+fi
 
 # PID 檔放在家目錄而非 repo 內：repo 可能被 plugin 更新覆蓋，且同一份 repo 可能
 # 被多個 worktree 共用，而「正在跑的看板」在一台機器上只有一個。

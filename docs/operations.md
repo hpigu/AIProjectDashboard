@@ -15,6 +15,19 @@ bin/board restart
 bin/board logs -n 200
 ```
 
+透過 stable release 安裝時，請改用安裝根目錄的絕對入口；不依賴 repo cwd、`pom.xml`、
+`mvnw` 或 `target/`：
+
+```bash
+~/.ai-project-board/bin/board start
+~/.ai-project-board/bin/board status
+~/.ai-project-board/bin/board stop
+```
+
+安裝器用 `--home DIR` 指定另一個根目錄時，將上述路徑的
+`~/.ai-project-board` 換成 `DIR`。`data/`、`backups/`、`logs/`、PID 與安裝設定
+會全部保留在同一個 user-scope 根目錄；不要把它們指回 repo 或 plugin cache。
+
 ### 為什麼不要自己 kill
 
 `bin/board stop` 送的是 `SIGTERM`，Spring 的 `ContextClosedEvent` 會觸發

@@ -270,7 +270,7 @@ cmd_start() {
     exit 1
   fi
 
-  log "使用 JDK 21：$JAVA_BIN（$("$JAVA_BIN" -version 2>&1 | head -n1)）"
+  log "使用 JDK 21：${JAVA_BIN}（$("$JAVA_BIN" -version 2>&1 | head -n1)）"
 
   # -------------------------------------------------------------------------
   # 2. 環境變數與絕對路徑資料庫（預設值來自已 source 的 board-env.sh）
