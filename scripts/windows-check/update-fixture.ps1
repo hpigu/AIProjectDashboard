@@ -116,7 +116,7 @@ function New-Scenario {
     # 落在 $programs 底下並由 board.ps1 啟動，而 Windows 的 java.exe launcher 以
     # ANSI code page 解析自身路徑定位 java.dll，非 ASCII 路徑會失敗（could not
     # find java.dll）。這是 Windows 自帶 runtime 的已知限制。空白字元仍保留。
-    # 下面的 $home／Profile（使用者資料）維持中文，那些由 JVM 自己處理，不受限。
+    # 下面的 $homeDir／Profile（使用者資料）維持中文，那些由 JVM 自己處理，不受限。
     $scenarioRoot = Join-Path $work ($Name + '-space path')
     $programs = Join-Path $scenarioRoot 'programs root'
     $extract = Join-Path $scenarioRoot 'extract temp'
@@ -129,7 +129,7 @@ function New-Scenario {
     Move-Item -LiteralPath $extracted -Destination $oldRoot -ErrorAction Stop
     $checksum = Join-Path $assets ('ai-project-board-backend-' + $Version + '-SHA256SUMS.txt')
     New-ChecksumFile -Path $checksum -ZipPath $zipPath -Valid $true
-    $home = Join-Path $scenarioRoot '使用者 資料'
+    $homeDir = Join-Path $scenarioRoot '使用者 資料'
     $scenario = [pscustomobject]@{
         Name = $Name
         Port = $Port
@@ -139,13 +139,13 @@ function New-Scenario {
         TargetRoot = (Join-Path $programs $expectedTop)
         Board = (Join-Path $oldRoot 'bin\board.ps1')
         Profile = (Join-Path $scenarioRoot '使用者 Profile')
-        Home = $home
-        DbBase = (Join-Path $home 'data\fixture-board')
-        Log = (Join-Path $home 'logs\fixture-board.log')
-        ConsoleLog = (Join-Path $home 'logs\fixture-board.console.log')
-        Backups = (Join-Path $home 'backups')
-        Config = (Join-Path $home 'config')
-        PidFile = (Join-Path $home 'fixture-board.pid')
+        Home = $homeDir
+        DbBase = (Join-Path $homeDir 'data\fixture-board')
+        Log = (Join-Path $homeDir 'logs\fixture-board.log')
+        ConsoleLog = (Join-Path $homeDir 'logs\fixture-board.console.log')
+        Backups = (Join-Path $homeDir 'backups')
+        Config = (Join-Path $homeDir 'config')
+        PidFile = (Join-Path $homeDir 'fixture-board.pid')
         Checksums = $checksum
     }
     Set-ScenarioEnvironment -Scenario $scenario
