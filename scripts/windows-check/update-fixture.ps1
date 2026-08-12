@@ -258,6 +258,12 @@ function Invoke-ChecksumRejectionCase {
         $badContractPath = Join-Path $badDir (Split-Path $scenario.Checksums -Leaf)
         Move-Item -LiteralPath $badChecksums -Destination $badContractPath
         $result = Invoke-Board -Scenario $scenario -Arguments @('update', '-Version', $Version, '-ReleaseZip', $zipPath, '-Checksums', $badContractPath)
+        if (-not ($result.ExitCode -ne 0 -and $result.Output -match 'SHA-256 verification failed')) {
+            Write-Host "`n--- checksum rejection diagnostic ---"
+            Write-Host "ExitCode: $($result.ExitCode)"
+            Write-Host "Output:`n$($result.Output)"
+            Write-Host "--- end diagnostic ---`n"
+        }
         Assert-True ($result.ExitCode -ne 0 -and $result.Output -match 'SHA-256 verification failed') 'checksum mismatch 在 transaction 前被拒絕'
         Assert-True (Test-Path -LiteralPath $scenario.OldRoot -PathType Container) 'checksum 拒絕保留舊 versioned root'
         Assert-True (-not (Test-Path -LiteralPath $scenario.TargetRoot)) 'checksum 拒絕不建立 target root'
