@@ -73,7 +73,9 @@ function Set-ScenarioEnvironment {
     param([object]$Scenario)
 
     $env:USERPROFILE = $Scenario.Profile
-    $env:HOME = $Scenario.Profile
+    # pwsh 7 的 $HOME 是唯讀自動變數，直接 $env:HOME = ... 會觸發
+    # SessionStateUnauthorizedAccessException。用 .NET API 繞過。
+    [Environment]::SetEnvironmentVariable('HOME', $Scenario.Profile, 'Process')
     $env:BOARD_HOME_DIR = $Scenario.Home
     $env:BOARD_PORT = [string]$Scenario.Port
     $env:BOARD_HOST = '127.0.0.1'
