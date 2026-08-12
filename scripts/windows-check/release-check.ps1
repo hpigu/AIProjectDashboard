@@ -168,6 +168,11 @@ try {
         $env:BOARD_JAVA = 'C:\must-not-be-used\java.exe'
         $env:JAVA_HOME = 'C:\must-not-be-used'
         $env:BOARD_JAR = 'C:\must-not-be-used\server.jar'
+        # workflow 環境可能帶有 BOARD_DB_URL / BOARD_LOG_FILE（例如指向
+        # ./data/release-windows），若不清除，board-env.ps1 會直接採用而非
+        # 根據 BOARD_HOME_DIR 算出隔離路徑，導致 DB lock 衝突與日誌錯位。
+        $env:BOARD_DB_URL = $null
+        $env:BOARD_LOG_FILE = $null
         $env:BOARD_HOST = '0.0.0.0'
         $board = Join-Path $root 'bin\board.ps1'
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $board start
