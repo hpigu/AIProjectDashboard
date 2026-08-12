@@ -498,7 +498,7 @@ function Invoke-BoardStart {
     # 之後就無法只對看板送 Ctrl+C（會波及同一個 console 上的其他行程，包含使用者
     # 自己的 shell）。這裡讓它取得自己的隱藏 console，代價是 logback 初始化前的
     # stdout 不會落檔——需要看那段輸出時改用 -Foreground。
-    $process = Start-Process -FilePath $javaBin -ArgumentList @('-jar', $jarPath) `
+    $process = Start-Process -FilePath $javaBin -ArgumentList @('-jar', "`"$jarPath`"") `
         -WindowStyle Hidden -PassThru
     $boardPid = $process.Id
     Set-Content -Path $script:BoardPidFile -Value $boardPid -Encoding ASCII

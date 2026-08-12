@@ -179,7 +179,18 @@ try {
         Assert-True ($LASTEXITCODE -ne 0) 'release launcher 拒絕公開 BOARD_HOST'
         $env:BOARD_HOST = $null
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $board start
-        Assert-True ($LASTEXITCODE -eq 0) 'start 使用 bundled runtime 成功'
+        $startExit = $LASTEXITCODE
+        if ($startExit -ne 0) {
+            $smokeLog = Join-Path $smokeHome 'logs\board.log'
+            Write-Host "`n--- board.log (smoke) ---"
+            if (Test-Path $smokeLog) { Get-Content $smokeLog -Encoding UTF8 | Write-Host }
+            else { Write-Host "(board.log 不存在：$smokeLog)" }
+            Write-Host "`n--- Foreground 重試（抓取 stdout/stderr）---"
+            Remove-Item (Join-Path $smokeHome 'board.pid') -Force -ErrorAction SilentlyContinue
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $board start -Foreground
+            Write-Host "--- end foreground ---`n"
+        }
+        Assert-True ($startExit -eq 0) 'start 使用 bundled runtime 成功'
         $smokeBoard = $board
         $smokeStarted = $true
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $board status
