@@ -254,7 +254,7 @@ function Invoke-ChecksumRejectionCase {
         New-ChecksumFile -Path $badChecksums -ZipPath $zipPath -Valid $false
         # The updater also checks the checksum basename, so retain the contract filename in
         # a separate directory rather than weakening that precondition.
-        $badDir = Join-Path $scenario.Root 'bad checksum dir'
+        $badDir = Join-Path $scenario.Root 'bad-checksums'
         New-Item -ItemType Directory -Path $badDir -Force | Out-Null
         $badContractPath = Join-Path $badDir (Split-Path $scenario.Checksums -Leaf)
         Move-Item -LiteralPath $badChecksums -Destination $badContractPath
@@ -265,6 +265,8 @@ function Invoke-ChecksumRejectionCase {
         $result = Invoke-Board -Scenario $scenario -Arguments @('update', '-Version', $Version, '-ReleaseZip', $zipPath, '-Checksums', $badContractPath)
         if (-not ($result.ExitCode -ne 0 -and $result.Output -match 'SHA-256 verification failed')) {
             Write-Host "--- checksum rejection diag: ExitCode=$($result.ExitCode) ---"
+            Write-Host "badContractPath=$badContractPath"
+            Write-Host "fileSize=$([IO.File]::ReadAllBytes($badContractPath).Length)"
             Write-Host $result.Output
             Write-Host '--- end diag ---'
         }

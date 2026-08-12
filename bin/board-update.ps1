@@ -65,6 +65,7 @@ try {
     Assert-True ((Split-Path $checksumsPath -Leaf) -eq $expectedChecksums) 'checksum filename/version does not match target'
 
     $bytes = [IO.File]::ReadAllBytes($checksumsPath)
+    Log "DEBUG checksumsPath=$checksumsPath len=$($bytes.Length) head=$($bytes[0..2] -join ',')"
     Assert-True ($bytes.Length -gt 0 -and $bytes[-1] -eq 0x0a -and -not ($bytes -contains 0x0d) -and -not ($bytes -contains 0x00)) 'checksum list must be ASCII UTF-8 with LF only'
     $checksumText = [Text.Encoding]::UTF8.GetString($bytes)
     Assert-True (-not $checksumText.StartsWith([char]0xfeff)) 'checksum list must not contain a BOM'
