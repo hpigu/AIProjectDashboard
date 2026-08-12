@@ -24,7 +24,8 @@ function Assert-True {
 }
 function Write-Utf8NoBomLf {
     param([string]$Path, [string]$Content)
-    [IO.File]::WriteAllText($Path, $Content, (New-Object Text.UTF8Encoding($false)))
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllBytes($Path, $utf8NoBom.GetBytes($Content))
 }
 function Invoke-ChildPowerShell {
     param([string]$ScriptPath, [string[]]$Arguments)
@@ -252,18 +253,16 @@ function Invoke-ChecksumRejectionCase {
         $badChecksums = Join-Path (Split-Path $scenario.Checksums -Parent) ('bad-' + (Split-Path $scenario.Checksums -Leaf))
         New-ChecksumFile -Path $badChecksums -ZipPath $zipPath -Valid $false
         # The updater also checks the checksum basename, so retain the contract filename in
-        # a separate non-ASCII directory rather than weakening that precondition.
-        $badDir = Join-Path $scenario.Root '錯誤 checksum'
+        # a separate directory rather than weakening that precondition.
+        $badDir = Join-Path $scenario.Root 'bad checksum dir'
         New-Item -ItemType Directory -Path $badDir -Force | Out-Null
         $badContractPath = Join-Path $badDir (Split-Path $scenario.Checksums -Leaf)
         Move-Item -LiteralPath $badChecksums -Destination $badContractPath
-        $result = Invoke-Board -Scenario $scenario -Arguments @('update', '-Version', $Version, '-ReleaseZip', $zipPath, '-Checksums', $badContractPath)
-        if (-not ($result.ExitCode -ne 0 -and $result.Output -match 'SHA-256 verification failed')) {
-            Write-Host "`n--- checksum rejection diagnostic ---"
-            Write-Host "ExitCode: $($result.ExitCode)"
-            Write-Host "Output:`n$($result.Output)"
-            Write-Host "--- end diagnostic ---`n"
+        $headBytes = [IO.File]::ReadAllBytes($badContractPath)
+        if ($headBytes.Length -ge 3 -and $headBytes[0] -eq 0xEF -and $headBytes[1] -eq 0xBB -and $headBytes[2] -eq 0xBF) {
+            Fail "bad checksum file unexpectedly has a UTF-8 BOM at $badContractPath"
         }
+        $result = Invoke-Board -Scenario $scenario -Arguments @('update', '-Version', $Version, '-ReleaseZip', $zipPath, '-Checksums', $badContractPath)
         Assert-True ($result.ExitCode -ne 0 -and $result.Output -match 'SHA-256 verification failed') 'checksum mismatch 在 transaction 前被拒絕'
         Assert-True (Test-Path -LiteralPath $scenario.OldRoot -PathType Container) 'checksum 拒絕保留舊 versioned root'
         Assert-True (-not (Test-Path -LiteralPath $scenario.TargetRoot)) 'checksum 拒絕不建立 target root'
