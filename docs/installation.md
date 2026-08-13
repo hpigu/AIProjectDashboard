@@ -1,327 +1,122 @@
-# 安裝指南
+# Installation and updates
 
-本文件涵蓋三種整合方式：Claude Code plugin、Codex plugin，以及手動 clone +
-執行 jar／接線。兩套 plugin 會帶入 MCP 宣告、角色 agent 與 leader skill；所有
-方式最終連到的都是同一顆 Spring Boot 行程。
+[Back to README](../README.md) · [繁體中文](../README.zh-TW.md)
 
-## Windows x64 stable release ZIP（不需預裝 Java）
+The board server and agent plugin are separate components:
 
-從同一個 stable release `vV` 取得
-`ai-project-board-backend-windows-x64-V.zip` 與
-`ai-project-board-backend-V-SHA256SUMS.txt`，先依
-[release contract](release-contract.md#4-sha-256-完整性契約) 驗證 ZIP 的 SHA-256，
-再解壓到使用者可寫的位置（路徑可含空白或非 ASCII 字元）。不要解到 plugin cache，
-也不要從 ZIP 中挑出 JAR 或 runtime 另行搬動。
-
-ZIP 內的唯一服務入口固定是同層 bundled JDK 21 runtime；它**不會**改用
-`JAVA_HOME`、PATH、網路下載或其他 JAR：
-
-```powershell
-<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 start
-<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 status
-<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 stop
+```text
+server: local Spring Boot process + H2 data + browser UI
+plugin: MCP endpoint declaration + role shells + claim-tasks skill
 ```
 
-預設只監聽 `127.0.0.1:8080`。由於 MCP 沒有 server-side authentication，不能改成
-公開位址；若埠號已被使用，明確設定其他 loopback port，例如：
+Install and start the server first. Then connect Claude Code or Codex. Updating
+one component does not update the other.
 
-```powershell
-$env:BOARD_PORT = '8081'
-<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 start
-```
+## Supported paths
 
-資料、備份、日誌、PID 與設定預設都在
-`%USERPROFILE%\.ai-project-board`，而不是可被更新／刪除的解壓程式目錄；新建路徑
-會收斂為目前使用者專用 ACL。可用 `BOARD_HOME_DIR` 改成另一個使用者可寫的根目錄。
-若 ZIP 缺少 bundled `runtime\bin\java.exe` 或 `app\ai-project-board-backend-V.jar`，
-launcher 會 fail closed 並要求重新下載，不會退回系統 Java。
+| Platform | Server path | Java requirement |
+|---|---|---|
+| Windows x64 | Published ZIP or source checkout | ZIP includes Java; source requires JDK 21 |
+| macOS arm64/x64 | Published JAR installer or source checkout | Matching JDK 21 |
+| Linux x64 | Published JAR installer or source checkout | x64 JDK 21 |
 
-在一台真正沒裝過任何東西的 Windows 上（例如 Windows Sandbox）從頭走一次上述
-clean install 流程，可對照
-[docs/windows-sandbox-clean-install-checklist.md](windows-sandbox-clean-install-checklist.md)
-逐項確認；該清單同時列出哪些項目已由 CI 的 `windows-2022` runner 自動驗證、不需
-要在 Sandbox 內重做。
+Windows and Linux arm64 are not supported. The server is designed for local use
+and has no validated cloud deployment path.
 
-## 0. macOS／Linux stable release 安裝（不需 sudo）
+## Option 1: start from source
 
-Stable release 的 macOS／Linux 安裝器不需要 repo checkout、Maven、`target/` 或
-plugin cache。它只接受使用者明確取得的同版 JDK 21 executable JAR 與集中
-`SHA256SUMS.txt`，或在使用者明確指定 stable `vV` release URL 時下載該兩項；沒有
-背景下載、`latest` 推測或自動更新。
+This is the shortest common path on every supported platform. Maven is included
+through the wrapper; the first start downloads dependencies and builds the JAR.
 
-先從同一個 GitHub stable release `vV` 下載**本機平台**的 JAR 與
-`ai-project-board-backend-V-SHA256SUMS.txt`。名稱必須完全符合
-[release contract](release-contract.md)：macOS Apple Silicon 是
-`ai-project-board-backend-macos-arm64-V.jar`、Intel macOS 是
-`...-macos-x64-V.jar`、Linux x64 是 `...-linux-x64-V.jar`。
+macOS or Linux:
 
 ```bash
-# 在包含這個 installer 的 release source checkout 執行；V 以實際版本取代。
-./install/install.sh \
-  --jar /path/to/ai-project-board-backend-macos-arm64-V.jar \
-  --checksums /path/to/ai-project-board-backend-V-SHA256SUMS.txt
-```
-
-若要由 installer 在**這一次明確操作**下載，必須指定 immutable tag 的 asset URL 與
-版本，不能用 mutable `latest`：
-
-```bash
-./install/install.sh \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/vV" \
-  --version V
-```
-
-預設會安裝在 `~/.ai-project-board`；所有 server release、設定、H2 資料、備份、日誌
-與 PID 都在這個使用者範圍內，並以 0700／0600 權限建立。可用 `--home` 選擇另一個
-使用者可寫的根目錄（CI／測試應一律用隔離暫存目錄，而非改寫 `HOME`）：
-
-```bash
-./install/install.sh --jar /path/to/JAR --checksums /path/to/SHA256SUMS.txt \
-  --home "/private/tmp/my board install"
-```
-
-安裝器會拒絕不支援的平台、非 JDK 21、JDK／平台架構不符、錯誤 artifact basename／
-版本、任何不符合嚴格四行契約的 checksum list，以及 hash 不符。驗證及所有檔案複製
-都在安裝根目錄同一個 parent 的 staging directory 完成；只有成功才原子發佈。失敗時
-既有 release 與資料不會被覆蓋。
-
-安裝後可從任何工作目錄執行絕對路徑入口：
-
-```bash
-~/.ai-project-board/bin/board start
-~/.ai-project-board/bin/board status
-~/.ai-project-board/bin/board stop
-```
-
-該入口固定使用安裝根目錄的絕對 JAR 與資料路徑；仍只監聽預設的
-`127.0.0.1:8080`，因 MCP 沒有 server-side authentication，**不得**改成公開位址。
-若 `:8080` 已在使用，顯式指定另一個 loopback 埠，例如
-`BOARD_PORT=8081 ~/.ai-project-board/bin/board start`。
-
-### 明確更新與回滾
-
-更新不是背景服務，也不會查詢或推測 `latest`。每次都必須由使用者明確指定 immutable
-stable `vV`；可先用 `--check` 驗證 current/target 與 artifact，完全不改動服務：
-
-```bash
-~/.ai-project-board/bin/board update --version V --jar /path/to/ai-project-board-backend-macos-arm64-V.jar \
-  --checksums /path/to/ai-project-board-backend-V-SHA256SUMS.txt --check
-~/.ai-project-board/bin/board update --version V \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/vV"
-```
-
-Windows 的同一語意以 ZIP 作為 offline artifact：
-
-```powershell
-<解壓目錄>\ai-project-board-backend-windows-x64-V\bin\board.ps1 update -Version V `
-  -ReleaseZip C:\path\ai-project-board-backend-windows-x64-V.zip `
-  -Checksums C:\path\ai-project-board-backend-V-SHA256SUMS.txt -Check
-```
-
-更新器會在停止服務前完整下載、嚴格驗證四行 `SHA256SUMS`、platform、JAR/ZIP layout
-與 runtime；再保存原 PID/activation identity 和可驗證的 H2 snapshot manifest。POSIX
-以同檔案系統的 `current` symlink rename 切換 immutable runtime；Windows 以同磁碟區的
-**versioned-root rename transaction**：舊解壓 root 改名保留為 rollback 目錄，目標 ZIP
-的 `ai-project-board-backend-windows-x64-V` root 改名發佈到同 parent。它不是 single-root
-atomic replace；成功後請從更新器印出的新絕對路徑（
-`...\ai-project-board-backend-windows-x64-V\bin\board.ps1`）操作後續 status/stop/update。
-新服務無論原先是否執行都必須通過 readiness 並回報目標
-version/commit，任何 download、checksum、stop、backup、publish、activate、start 或
-readiness 失敗都會復原舊 activation、DB snapshot 與原本的 running/stopped 狀態；原本停止
-時，target 也會先 start→驗證→正常 stop，最後維持停止。舊 runtime、snapshot 和失敗
-staging 保留供診斷；若 rollback 本身失敗，更新器 fail closed
-並印出保留路徑，絕不刪除唯一資料副本或宣稱成功。
-POSIX rollback 以同資料庫檔案系統中的 temporary copy→hash verification→atomic rename
-還原 live DB；snapshot、`manifest.sha256` 與原始 hash 都不會被移走，能在事後重驗或手動
-恢復。
-
-GitHub 不可達時 `--release-url` 在停止服務前失敗；改用已下載的 `--jar/--checksums`
-或 `-ReleaseZip/-Checksums` 即為完全離線的等價操作。更新只處理 server runtime，絕不
-安裝、更新或移除 Claude/Codex marketplace 或全域設定。
-
-### 從既有 repo H2 資料遷移
-
-遷移不是自動偵測；只有你明確指定舊資料目錄才會執行，且只允許建立全新的安裝根目錄：
-
-```bash
-./install/install.sh --jar /path/to/JAR --checksums /path/to/SHA256SUMS.txt \
-  --migrate-from /path/to/old-repo/data
-```
-
-它先把來源 `board.mv.db` 複製到新根目錄的
-`backups/migration-source-V-<UTC>/`，以 `cmp` 與 SHA-256 manifest 驗證，再複製到
-新 `data/`。來源檔永遠不移動或覆寫；任一失敗會捨棄 staging installation，因此原
-repo 與既有安裝仍可直接使用。若需回滾，只要不啟用新的安裝根目錄，繼續使用原 repo；
-新安裝內的 migration backup 也保留了已驗證的原始副本。
-
-## 1. 前置需求
-
-- **JDK 21**（`pom.xml` 的 `java.version` 寫死 21，其他版本編譯不會過）
-- **Maven**：不需要另外安裝，repo 內附 `./mvnw` 會自動下載對應版本
-- **作業系統**：Windows、macOS、Linux 都可以，**Windows 不需要 WSL 或 Git Bash**。
-  每個平台各有一套原生腳本：
-
-  | | Windows | macOS / Linux |
-  |---|---|---|
-  | 服務入口 | `bin\board.ps1` | `bin/board` |
-  | 共用預設值 | `bin\board-env.ps1` | `bin/board-env.sh` |
-  | 啟動前備份 | `bin\backup-db.ps1` | `bin/backup-db.sh` |
-  | 還原 | `bin\restore-db.ps1` | `bin/restore-db.sh` |
-
-  兩套的預設值、備份命名與保留策略完全一致。Windows 版以 **Windows PowerShell
-  5.1**（系統內建）為目標並在 CI 上以 5.1 與 pwsh 7 各測一次，不需要另外安裝
-  PowerShell 7。
-
-### 沒有 JDK 21 時怎麼辦
-
-`bin/board start`（Windows：`.\bin\board.ps1 start`）開頭會自動掃描系統上已安裝的
-JDK 找版本 21：
-
-1. 先看 `PATH` 上的 `java` 是不是剛好就是 21
-2. macOS：依序試 `/usr/libexec/java_home -v 21`、掃 `java_home -V` 列出的
-   全部候選、最後試 Homebrew 常見安裝路徑（`/opt/homebrew/opt/openjdk@21/bin/java`
-   等）——即使裝了 `brew install openjdk@21` 但沒有 `brew link`、
-   `java_home` 抓不到，這一步仍抓得到
-3. Linux：依序試 `update-alternatives --list java`、常見路徑
-   （`/usr/lib/jvm/*21*` 等）
-4. Windows（`board.ps1`）：`PATH` 上的 `java`、`JAVA_HOME`、`Program Files` 底下
-   常見的 JDK 安裝路徑
-
-全部找不到時腳本會直接印出對應平台的安裝指令並以非零狀態結束，不會讓
-Java 丟一坨看不懂的堆疊：
-
-```bash
-# macOS
-brew install openjdk@21
-# 安裝後如果 /usr/libexec/java_home -V 仍未列出，執行：
-sudo ln -sfn /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk \
-  /Library/Java/JavaVirtualMachines/openjdk-21.jdk
-
-# Debian/Ubuntu
-sudo apt-get update && sudo apt-get install -y openjdk-21-jdk
-# Fedora/RHEL
-sudo dnf install -y java-21-openjdk-devel
-# Arch
-sudo pacman -S jdk21-openjdk
-```
-
-Windows 從 [adoptium.net](https://adoptium.net/) 或 Oracle 下載 JDK 21 安裝檔即可。
-
-裝完之後重新執行 `bin/board start`（Windows：`.\bin\board.ps1 start`）即可，
-不需要手動指定 `JAVA_HOME`。
-
-本文件撰寫時，實測機器上 `java_home` 只列出 JDK 11/8，但透過
-`brew install openjdk@21`（未 link）安裝了 21；腳本仍正確透過 Homebrew
-路徑 fallback 抓到並啟動成功，驗證方式與結果見本文件最後一節「驗證記錄」。
-
-## 1. 方式一：Claude Code plugin（推薦）
-
-適合已經在用 Claude Code、想要「認領任務」這套多 agent 分工流程的情境。
-
-目前 plugin 尚未發佈到公開 marketplace，以本機路徑安裝：
-
-```bash
-claude plugin marketplace add /path/to/AIProjectDashboard
-```
-
-```bash
-claude plugin install ai-project-board@ai-board
-```
-
-裝完在當前 session 生效需要 `/reload-plugins`，或重開 Claude Code。之後更新本機
-來源執行 `claude plugin update ai-project-board@ai-board` 並重啟。
-
-plugin 內含：
-
-- `agents/`：六個角色薄殼（`backend-dev`、`frontend-dev`、`qa`、`infra`、
-  `docs`、`reviewer`），各自呼叫 `get_role` 取得看板上的最新指引
-- `skills/claim-tasks/`：leader 事件驅動流程（盤點 → task worktree → dev 整合 →
-  整批 reviewer → main）
-- `.mcp.json`：預先指到 `http://127.0.0.1:8080/mcp`
-
-**plugin 不負責啟停看板，也不內含編譯好的 jar。**
-
-先前 `plugin/bin/` 底下有一支指回 repo 根目錄的 `start-board.sh` symlink，用意是
-「兩邊永遠是同一份」。實際上那在 Windows 上是壞的：git 的 `core.symlinks` 在
-Windows 預設為 `false`，checkout 會把 symlink 變成一個「內容是路徑字串」的 24
-位元組文字檔，**每個在 Windows 上安裝 plugin 的人拿到的都是壞檔案，而且沒有任何
-錯誤訊息**。它同時也是死碼（plugin 的 `.mcp.json`、`plugin.json`、`SKILL.md` 都
-沒有引用它），因此已移除。啟停一律走 repo 的 `bin/board`（Windows：
-`bin\board.ps1`），plugin 只負責宣告 MCP 端點與提供薄殼。
-
-clone 下來的 repo 裡沒有 `target/*.jar`（59MB 的二進位檔不適合放進 git、也不利於
-plugin 更新）。第一次執行 `bin/board start` 找不到 jar 時，若偵測到 repo 根目錄有
-`pom.xml` 與 `mvnw`，會自動執行 `./mvnw package -DskipTests` 現場組裝一次。代價：
-
-- 需要前置需求裡的 JDK 21 + 網路（下載 Maven 依賴）
-- 首次啟動會多花數十秒到數分鐘不等（視網路與機器效能），之後有
-  `target/*.jar` 就不會重複組裝
-
-安裝完成後啟動看板：
-
-```bash
+git clone https://github.com/hpigu/AIProjectDashboard.git
+cd AIProjectDashboard
 ./bin/board start
 ```
 
+Windows PowerShell:
+
 ```powershell
+git clone https://github.com/hpigu/AIProjectDashboard.git
+cd AIProjectDashboard
 .\bin\board.ps1 start
 ```
 
-`start` 會依序完成：偵測 JDK 21 → 決定資料庫路徑（見下方「資料目錄」）→
-檢查埠號 8080 是否已被佔用（若已是看板本身則直接略過、不重複啟動）→
-偵測 H2 檔案是否被舊行程鎖住 → 啟動前冷備份 → 找 jar（找不到則自動組裝）→ 啟動 →
-輪詢 `/api/projects` 直到就緒或逾時 → 印出 `/api/health` 版本資訊。全部訊息都會
-標上 `[board]` 前綴印在終端機上。
+Open <http://127.0.0.1:8080> when the launcher reports readiness.
 
-看到 `看板已就緒：http://127.0.0.1:8080` 就代表可以打開瀏覽器了。
+Useful lifecycle commands:
 
-### 家目錄薄殼要移除（重要）
+| Action | macOS/Linux | Windows |
+|---|---|---|
+| Status | `bin/board status` | `.\bin\board.ps1 status` |
+| Stop | `bin/board stop` | `.\bin\board.ps1 stop` |
+| Restart | `bin/board restart` | `.\bin\board.ps1 restart` |
+| Logs | `bin/board logs` | `.\bin\board.ps1 logs -Lines 200` |
 
-Claude Code 讀取 subagent 定義的優先序是：
+`stop` waits for the shutdown backup. It does not escalate to a forced kill
+unless you explicitly pass `--force` or `-Force`.
 
+## Option 2: install a stable release
+
+Use assets from one immutable release tag and verify them against that release's
+`ai-project-board-backend-V-SHA256SUMS.txt`.
+
+### Windows x64
+
+Download and extract:
+
+```text
+ai-project-board-backend-windows-x64-V.zip
 ```
-專案 .claude/agents/  >  家目錄 ~/.claude/agents/  >  plugin 提供的 agents/
+
+Start the bundled launcher:
+
+```powershell
+<extract-dir>\ai-project-board-backend-windows-x64-V\bin\board.ps1 start
 ```
 
-如果你的機器上 `~/.claude/agents/` 底下已經有舊版的
-`backend-dev.md`、`frontend-dev.md`、`qa.md`、`infra.md`、`docs.md`
-這幾個檔案（例如照著本 repo 較早版本的 README 手動建立過），**它們會蓋掉
-plugin 內建的版本**，導致你以為裝了新 plugin、實際上還在跑舊薄殼邏輯。
+The ZIP contains its own JDK 21 runtime and ignores `JAVA_HOME` and the system
+`PATH`. Application data is stored under `%USERPROFILE%\.ai-project-board` by
+default, not inside the extracted program directory.
 
-改用 plugin 之前請先確認並移除：
+### macOS or Linux
+
+The published JARs require a matching JDK 21. The installer is currently kept in
+the source tree, so obtain a source checkout before running it:
 
 ```bash
-ls ~/.claude/agents/
-rm ~/.claude/agents/{backend-dev,frontend-dev,qa,infra,docs}.md   # 視實際存在檔案調整
+./install/install.sh \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1" \
+  --version 3.2.1
+
+~/.ai-project-board/bin/board start
 ```
 
-（`reviewer.md` 是新增角色，家目錄通常還沒有同名檔案，但仍建議一併確認。）
+The installer validates the platform, JDK architecture, asset name, checksum
+manifest, and SHA-256 before publishing the installation under
+`~/.ai-project-board`. It does not use a mutable `latest` URL.
 
-## 2. 方式二：Codex plugin
+## Connect Codex
 
-repo 內的 Codex plugin 由以下兩層組成：
-
-- `plugins/ai-project-board/`：plugin manifest、`.mcp.json`、六個角色薄殼與
-  `skills/claim-tasks/`
-- `.agents/plugins/marketplace.json`：把上述目錄登錄為 repo/Git marketplace 可安裝的
-  **AI Project Board** plugin
-
-從 GitHub 的 `main` branch 加入 marketplace 並安裝：
+Install the Git marketplace and plugin:
 
 ```bash
 codex plugin marketplace add hpigu/AIProjectDashboard --ref main
 codex plugin add ai-project-board@ai-board
 ```
 
-日後發布新版後，更新 marketplace snapshot 並重新安裝：
+Enable the `board` connector when prompted, then open a new Codex task. Plugin
+updates are explicit:
 
 ```bash
 codex plugin marketplace upgrade ai-board
 codex plugin add ai-project-board@ai-board
 ```
 
-如果 `codex plugin marketplace list` 顯示既有 `ai-board` 指向本機 clone，Git source
-尚未推送完成前先保留原設定。發布到遠端 `main` 後，經使用者確認再切換：
+If `ai-board` already points to a local checkout, remove that marketplace source
+before adding the Git source:
 
 ```bash
 codex plugin marketplace remove ai-board
@@ -329,110 +124,136 @@ codex plugin marketplace add hpigu/AIProjectDashboard --ref main
 codex plugin add ai-project-board@ai-board
 ```
 
-`marketplace remove` 只移除 marketplace source 設定，和解除安裝 plugin 的
-`codex plugin remove` 是不同操作。切換後需開新 task 驗證新版 skill 與 MCP。
+Removing a marketplace source does not remove the installed plugin or delete the
+source checkout.
 
-在 Codex 開啟本 repo 後，也能從 repo marketplace 安裝 **AI Project Board**。
-安裝時若提示啟用 `board` connector，需確認一次；它會連到
-`http://127.0.0.1:8080/mcp`。安裝或更新後重開 task，使角色與 skill 清單重新
-載入。只在 `~/.codex/config.toml` 手動設定 MCP 也能使用看板工具，但不會帶入
-plugin 內的角色薄殼與 leader skill。
+## Connect Claude Code
 
-Codex plugin 與 Claude Code plugin 使用不同的包裝目錄，但兩者的角色邊界與
-leader 流程應保持一致；更新其中一份時需同步檢查另一份。
+The verified Claude Code path uses a local marketplace checkout:
 
-3.0.0 起，worker 完成修改、驗證與 commit 後保持 `IN_PROGRESS`，由 leader 將
-`task/<task-id>-<role>` 合併進 `dev` 後才標記 `DONE`。整批 task 完成後 reviewer
-只讀審查 `main...dev` 並回報 leader；它不建立 task、不修改或合併。
-
-## 3. 方式三：手動 clone + 執行 jar
-
-適合不使用 Claude Code plugin 機制、或想手動控制啟動流程的情境，
-細節與完整環境變數表見 README「安裝與啟動」與「設定」兩節，這裡不重複。
-
-## 4. 資料目錄
-
-`bin/board`／`bin\board.ps1` 決定資料庫路徑的邏輯（也適用於直接執行 jar 時手動
-指定 `BOARD_DB_URL` 的參考預設值）：
-
-1. 若 `<repo>/data/board.mv.db` 已存在（代表這個 repo 路徑本來就是既有
-   看板的資料所在地），沿用 `<repo>/data`，向下相容
-2. 否則（全新安裝、尚未在這個路徑啟動過）使用
-   `~/.ai-project-board/data`，可用 `BOARD_HOME_DIR` 環境變數整個改掉
-   家目錄位置，或直接用 `BOARD_DB_URL` 指定完整 JDBC URL
-
-這樣設計的原因：plugin 目錄可能因為更新（重新 clone / 覆蓋整個目錄）而
-遺失內容，H2 資料庫檔案不能放在會被覆蓋的路徑下。
-
-## 5. 已知限制與落差
-
-### 角色指引不跟著 plugin 走
-
-角色（`backend-dev`、`frontend-dev`、`qa`、`infra`、`docs`）的**完整工作
-指引存在看板的 H2 資料庫**（`role` 表），透過 MCP 工具 `get_role` 取得，
-不是寫在 plugin 的 `agents/*.md` 檔案裡——那些檔案只是薄殼，內容是
-「呼叫 `get_role` 拿最新指引來 work，拿不到才退回檔案內建的最小規則」。
-
-實務影響：
-
-- 全新安裝的看板，行程啟動時 `RoleSeeder` 會自動建立五個角色的**初始**
-  通用指引（只在該角色尚未存在時建立，已存在就原樣保留，不會重複匯入
-  也不會覆蓋）
-- 但如果你在既有看板上由 leader 依使用者目前明確要求透過 `upsert_role` 調整過任何角色的指引內容
-  （通用層或某專案的覆寫層），**這些調整不會被 plugin 帶走**——plugin
-  只是程式碼與薄殼檔案的散布單位，不含資料庫內容。換一台機器、或砍掉
-  重建看板的資料庫，等於回到 `RoleSeeder` 給的初始版本
-- 若要讓調整過的指引在新環境上重現，需要另外手動呼叫 `upsert_role`
-  重新灌一次，或自行備份/搬移 `data/board.mv.db`
-
-`reviewer` 是 leader 驗收階段直接呼叫的唯讀角色，不認領 category 任務，因而
-不在 `RoleSeeder` 初始化的五個 worker 角色內。Claude Code 與 Codex plugin 的
-reviewer 薄殼都含完整 fallback，且「不修改、不建 task、不認領、不分派、不合併、
-只回報 leader」是不可被資料庫 role 覆蓋的硬邊界。看板若另有 reviewer 指引，
-只能補充唯讀審查準則；找不到時則直接依薄殼工作。
-
-### 版本號無法區分同版本號跨多次 commit 的新舊 build（3.1.0 起已解決）
-
-3.1.0 之前，`/api/health` 只回傳 `pom.xml` 的版本號（例如 `3.0.0`），不含 git
-commit hash；同一個版本號底下可能已經有多次 commit，單看 `version` 無法判斷跑
-的是不是最新程式碼。
-
-3.1.0 起 `/api/health` 與 `/api/diagnostics` 都會回傳 `commit`，內容是 build
-來源的 short commit hash：
-
-```json
-{"version":"3.1.0","commit":"f23cd31","tools":["..."],"startedAt":"..."}
+```bash
+claude plugin marketplace add /path/to/AIProjectDashboard
+claude plugin install ai-project-board@ai-board
 ```
 
-該值由建置期產生的 `git.properties` 提供。從沒有 `.git` 的原始碼壓縮檔建置時
-（例如 release 頁面的 Source code (zip)）取不到，此時會是 `unknown`，這是預期
-行為而非錯誤。同一份 `version` 也不再依賴 jar manifest，因此 `mvnw
-spring-boot:run` 與 IDE 直接跑 main 都能看到正確版號（3.1.0 之前一律是
-`unknown`）。
+Reload plugins or restart Claude Code, then install the declared `board`
+connector when prompted. To update after pulling a newer source version:
 
-## 6. 驗證記錄
+```bash
+claude plugin update ai-project-board@ai-board
+```
 
-以下為撰寫本文件時的實際驗證方式，供之後比對程式行為是否漂移：
+Old role files in `~/.claude/agents/` can override the plugin copies. Remove
+manually installed `backend-dev.md`, `frontend-dev.md`, `qa.md`, `infra.md`, and
+`docs.md` if they came from an older installation of this project.
 
-1. 用 `git clone` 把本 repo clone 到暫存目錄（模擬全新安裝，確認
-   clone 出來的目錄底下沒有 `target/*.jar`、沒有 `data/`）
-2. 確認本機 `/usr/libexec/java_home -V` 只列出 JDK 11 / 8，**沒有 21**；
-   但透過 Homebrew 裝有 `openjdk@21`（未 link，`java_home` 抓不到）
-3. 以 `BOARD_HOME_DIR=<暫存目錄>` `BOARD_PORT=18099`（避開正式看板的
-   8080）執行啟動腳本（當時為 `bin/start-board.sh`，現已併入 `bin/board start`），
-   觀察到：
-   - 正確透過 Homebrew 路徑 fallback 找到 JDK 21 並印出版本
-   - 找不到 `target/*.jar`，自動執行 `./mvnw package -DskipTests` 組裝
-   - 組裝完成後啟動，資料庫路徑落在 `BOARD_HOME_DIR` 指定的目錄下
-   - 輪詢就緒後印出 `/api/health`：`version`、`databasePath`、
-     `tools`（16 個，與程式實際註冊的一致）、`startedAt` 均正確回傳
-     （**注意**：`databasePath` 是撰寫本文件當時的回應內容，後續
-     `/api/health` 已收斂為不含資料庫路徑等敏感資訊的最小版本，該欄位
-     現在改由 `/api/diagnostics` 提供，見
-     [docs/mcp-tools.md](mcp-tools.md) 的 REST 端點表）
-4. 測試完畢後 `kill` 掉該臨時行程、刪除暫存目錄，並確認正式看板
-   （8080）的 `/api/projects` 仍正常回應，未受影響
+## MCP-only connection
 
-這份記錄只描述當次隔離環境的驗證結果，不代表任何時間點正式 `:8080` 行程的
-即時狀態。判斷目前服務是否已更新，請直接查看該行程的 `/api/health`；若端點
-不存在，再確認實際啟動的 jar 與 commit，而不要依賴本文件的歷史狀態。
+This exposes the tools without the role shells or `claim-tasks` workflow.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http board http://127.0.0.1:8080/mcp --scope project
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.board]
+url = "http://127.0.0.1:8080/mcp"
+```
+
+## Update the server
+
+Server updates are never implied by plugin or marketplace updates. Select an
+exact stable version.
+
+macOS/Linux source or installed server:
+
+```bash
+bin/board update --version 3.2.1 \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1" \
+  --check
+
+bin/board update --version 3.2.1 \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1"
+```
+
+Use `~/.ai-project-board/bin/board` instead when installed under the default
+stable root. `--check` validates the target without stopping or changing the
+server.
+
+Windows updates use a downloaded ZIP and checksum list:
+
+```powershell
+<install-root>\bin\board.ps1 update -Version 3.2.1 `
+  -ReleaseZip C:\path\ai-project-board-backend-windows-x64-3.2.1.zip `
+  -Checksums C:\path\ai-project-board-backend-3.2.1-SHA256SUMS.txt -Check
+```
+
+Remove `-Check` to apply the update. The updater verifies the artifact before
+stopping the service, takes a database snapshot, validates the new process, and
+restores the previous activation and database if the update fails. See
+[`release-contract.md`](release-contract.md) for artifact rules and
+[`operations.md`](operations.md) for recovery procedures.
+
+## Data locations
+
+| Installation | Default data root |
+|---|---|
+| Existing source checkout with `data/board.mv.db` | `<repo>/data` for backward compatibility |
+| New source checkout | `~/.ai-project-board` |
+| macOS/Linux stable install | `~/.ai-project-board` or `--home DIR` |
+| Windows stable ZIP | `%USERPROFILE%\.ai-project-board` |
+
+Override the root with `BOARD_HOME_DIR`. Do not place data in a plugin cache or
+release directory that may be replaced during an update.
+
+To migrate an existing source-checkout database into a new macOS/Linux stable
+root:
+
+```bash
+./install/install.sh \
+  --jar /path/to/platform-V.jar \
+  --checksums /path/to/ai-project-board-backend-V-SHA256SUMS.txt \
+  --migrate-from /path/to/old-repo/data
+```
+
+Migration is allowed only for a new installation root. It copies and verifies
+the source database; it does not move or overwrite the original.
+
+## Configuration
+
+Common variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BOARD_HOST` | `127.0.0.1` | Bind address |
+| `BOARD_PORT` | `8080` | HTTP port |
+| `BOARD_HOME_DIR` | `~/.ai-project-board` | Data, backups, logs, and PID root |
+| `BOARD_DB_URL` | derived from data root | H2 JDBC URL |
+| `BOARD_ALLOWED_HOSTS` | empty | Additional Host/Origin values; does not add authentication |
+
+Do not expose `/mcp` directly beyond the local machine. It has no server-side
+authentication. Read [`SECURITY.md`](../SECURITY.md) before changing the bind or
+proxy configuration.
+
+## Verify an installation
+
+```bash
+curl -s http://127.0.0.1:8080/api/health
+curl -s http://127.0.0.1:8080/api/health/ready
+```
+
+The health response identifies the running version and build commit. A source
+archive built without `.git` may report `commit: "unknown"`.
+
+## Current limitations
+
+- Claude Code and Codex CLI are the verified plugin clients. Equivalent desktop
+  GUI installation paths have not been independently tested.
+- Role customizations made through `upsert_role` live in the local H2 database;
+  they do not travel with the thin plugin.
+- macOS/Linux stable installation still requires JDK 21 and a source checkout to
+  obtain `install/install.sh`.

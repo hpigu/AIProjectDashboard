@@ -82,33 +82,19 @@ for file in $FILES; do
   fi
 done
 
-# README 的安裝指令裡寫著完整 jar 檔名（`java -jar target/...-3.1.0.jar`）。
-# 那是陌生人照抄的第一行指令：版號沒跟上，他複製貼上後看到的是「檔案不存在」，
-# 而 manifest 全對、CI 全綠。這裡把檔名裡的版號也一起比對。
-#
-# 只掃 code fence 內的內容：README 裡還會提到「舊 release tag 底下實際的 asset
-# 檔名」這類歷史事實敘述（散文，不在 fence 裡），那些檔名本來就該維持發布當時
-# 的舊版號，跟著 pom 一起比對會把正確的歷史敘述誤判成沒跟上版號。
-#
-# 用 fence 而不是比對 `java -jar` 這種指令寫法，是因為要判斷的是「這個檔名是不是
-# 一句要讀者照抄的指令」，而 fence 正是 README 自己標記這件事的方式。綁指令寫法
-# 只能認得當下這一種形式：日後多一段 `java -jar ./target/...` 或加上 JVM 參數的
-# 安裝指令，比對會悄悄漏掉它而仍然回報 [OK]。
-readme_refs="$(awk '/^```/{in_fence=!in_fence; next} in_fence' README.md \
-  | grep -o 'ai-project-board-backend-[0-9][0-9A-Za-z.-]*\.jar' | sort -u || true)"
-if [ -z "$readme_refs" ]; then
-  echo "::error::README.md 的 code fence 裡找不到 ai-project-board-backend-<版號>.jar。" >&2
-  echo "安裝指令若移出 code block，請一併更新本腳本，否則這道檢查等於沒作用。" >&2
+# Stable-release install examples must remain aligned with the build version.
+doc_refs="$(awk '/^```/{in_fence=!in_fence; next} in_fence' docs/installation.md \
+  | sed -n 's/.*--version \([0-9][0-9A-Za-z.-]*\).*/\1/p' | sort -u || true)"
+if [ -z "$doc_refs" ]; then
+  echo "::error::docs/installation.md 的 code fence 裡找不到 --version <版號>。" >&2
   failures=$((failures + 1))
 fi
-for ref in $readme_refs; do
-  actual="${ref#ai-project-board-backend-}"
-  actual="${actual%.jar}"
+for actual in $doc_refs; do
   if [ "$actual" != "$pom_version" ]; then
-    echo "::error::README.md 的安裝指令寫的是 ${ref}，pom.xml 是 ${pom_version}。" >&2
+    echo "::error::docs/installation.md 的安裝指令寫的是 ${actual}，pom.xml 是 ${pom_version}。" >&2
     failures=$((failures + 1))
   else
-    echo "  [OK] README.md 安裝指令 = ${actual}"
+    echo "  [OK] docs/installation.md 安裝指令 = ${actual}"
   fi
 done
 

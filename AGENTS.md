@@ -96,9 +96,9 @@ jar 在主工作區 `target/`。**任何 agent 都不得佔用或寫入這四者
 1. agent 在主工作區跑 `mvnw clean package`，**刪掉了正在運行的 jar**。
 2. agent 誤連到不同路徑的空資料庫，看板上所有專案「消失」。
 3. agent 在 worktree 用跨離埠號（如 `:8091`）啟動測試 jar，收尾時執行
-   `pkill -f "ai-project-board-backend-3.1.1.jar"` 清理。`pkill -f` 是用
+   `pkill -f "ai-project-board-backend-<version>.jar"` 清理。`pkill -f` 是用
    **命令列子字串**比對，而正式看板行程的命令列同樣是
-   `java -jar target/ai-project-board-backend-3.1.1.jar`（版本號相同）——
+   `java -jar target/ai-project-board-backend-<version>.jar`（版本號相同）——
    結果連正式看板一起殺掉，服務中斷。（事後因 SIGTERM 觸發 graceful
    shutdown、H2 正常關閉才沒有資料遺失，純屬僥倖，不是這個做法安全。）
 

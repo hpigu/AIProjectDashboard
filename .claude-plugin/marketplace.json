@@ -4,12 +4,12 @@
     "name": "Daniel Huang",
     "url": "https://github.com/hpigu/AIProjectDashboard"
   },
-  "description": "AI 專案看板的 Claude Code 整合。",
+  "description": "Local MCP task board integrations for AI coding agents.",
   "plugins": [
     {
       "name": "ai-project-board",
       "source": "./plugin",
-      "description": "AI 專案看板的 Claude Code 整合：認領/更新任務、取得角色指引、啟動看板服務。",
+      "description": "Role agents and workflow support for a local dependency-aware MCP task board.",
       "version": "3.2.1",
       "author": {
         "name": "Daniel Huang"

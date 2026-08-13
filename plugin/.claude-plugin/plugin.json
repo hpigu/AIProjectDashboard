@@ -1,6 +1,6 @@
 {
   "name": "ai-project-board",
-  "description": "AI 專案看板的 Claude Code 整合：認領/更新任務、取得角色指引、啟動看板服務。",
+  "description": "Local AI task board integration for Claude Code: role agents, dependency-aware claiming, blockers, and completion evidence.",
   "version": "3.2.1",
   "author": {
     "name": "Daniel Huang"

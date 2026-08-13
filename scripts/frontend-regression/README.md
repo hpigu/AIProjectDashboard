@@ -1,31 +1,20 @@
-# 前端手動回歸驗證工具（非 CI，非建置流程）
+# Frontend browser regression tool
 
-## 這是什麼
+## Purpose
 
-#126 曾用瀏覽器自動化（Chrome DevTools Protocol，簡稱 CDP）手動跑過 87 項前端
-行為驗證（RWD、鍵盤焦點、URL state、篩選、相依圖、SSE 重連、CSP、離線載入），
-全數通過，但腳本只存在該次工作階段的臨時目錄，沒有進 repo，事後無法重跑。
+`check.mjs` drives a local Chrome or Chromium instance through the Chrome DevTools
+Protocol. It uses only Node.js built-in modules: there is no `package.json`, npm
+install, or frontend build step. Run it manually when a change needs real browser
+rendering or interaction.
 
-`check.mjs` 是 #140 重建的等價工具：只用 Node.js 內建模組（`node:child_process`、
-`node:http`）啟動本機 Chrome 並透過 CDP WebSocket 協定操控，**不使用任何 npm 套件
-（不執行 `npm install`，沒有 `package.json`）**，因此定位為「需要時手動執行的
-診斷工具」，不進 `src/test`、不掛進 `./mvnw test`、不是 CI 的必要條件、
-不影響零建置 Vue 3 CDN 架構。
+## Test boundary
 
-## 為什麼不放進 Maven 測試生命週期
+The script requires a locally installed browser and a remote-debugging port, so it
+is not part of `./mvnw test` or CI. Server-side checks remain in
+`FrontendStaticAssetsTest`, `SecurityHeadersFilterTest`, and
+`OperationalSafetyConfigurationTest`.
 
-`AGENTS.md` 明訂維持零建置 Vue 3 CDN、不引入 npm/Vite/SFC/TypeScript。這個腳本
-需要本機已安裝 Chrome/Chromium 且透過 `--remote-debugging-port` 啟動，這類環境
-依賴不適合放進 `./mvnw test`（會讓沒裝 Chrome 的機器/CI 容器整套測試失敗）。
-已能在伺服器端驗證的部分（CSP header、零跨 origin 資源、SSE 端點可達性）已寫成
-JUnit 測試，見 `src/test/java/dev/aiboard/web/FrontendStaticAssetsTest.java` 與
-`src/test/java/dev/aiboard/config/SecurityHeadersFilterTest.java`、
-`OperationalSafetyConfigurationTest`。本腳本只補「必須真的用瀏覽器渲染、量測、
-互動」才能驗證的那一小部分。
-
-## 何時該重跑
-
-不是每次改動都需要。建議在以下情況手動跑一次：
+## When to run it
 
 - 大幅改動 `app.js` 的版面、CSS breakpoint、或詳情面板的 focus 管理邏輯
 - 改動 `SecurityHeadersFilter` 的 CSP 設定
@@ -33,30 +22,29 @@ JUnit 測試，見 `src/test/java/dev/aiboard/web/FrontendStaticAssetsTest.java`
   `app.js` 內的 `EventSource` 處理）
 - 發版前的手動抽查
 
-日常小改動（文字調整、單一 API 欄位）不需要跑，改看 `docs/frontend-regression-checklist.md`
-挑對應項目手動檢查即可。
+For smaller changes, use `docs/frontend-regression-checklist.md` and select only
+the relevant checks.
 
-## 使用方式
+## Run
 
-前置需求：本機已安裝 Chrome 或 Chromium，且 `node` 可用（v18+，用到
-`fetch`/`node:test` 皆為內建）。
+Requirements: Chrome or Chromium and Node.js 18 or newer.
 
 ```bash
-# 1. 用開發用埠號與資料庫啟動看板（比照 AGENTS.md，不得用 8080/data/board）
+# Use an isolated development port and database. Never use 8080 or data/board.
 BOARD_PORT=8091 BOARD_DB_URL=jdbc:h2:file:./data/dev-qa-next4 \
   java -jar target/ai-project-board-backend-*.jar &
 
-# 2. 啟動 Chrome headless 並開放 CDP 除錯埠
+# Start Chrome with a CDP port.
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
   --headless=new --remote-debugging-port=9222 --no-first-run about:blank &
 
-# 3. 執行驗證腳本，指向看板網址
+# Run the checks.
 node scripts/frontend-regression/check.mjs --base-url http://127.0.0.1:8091
 ```
 
-腳本會依序執行各項檢查並印出 PASS/FAIL，非零 exit code 代表至少一項失敗。
+The script prints PASS/FAIL for each check and exits non-zero on failure.
 
-## 涵蓋範圍對照（原 87 項 vs. 本腳本 vs. JUnit 測試）
+## Coverage
 
 | 驗證項目 | 伺服器端 JUnit（已在 repo） | 本腳本（手動執行） | 純人工檢查清單 |
 | --- | --- | --- | --- |
@@ -73,16 +61,14 @@ node scripts/frontend-regression/check.mjs --base-url http://127.0.0.1:8091
 | DAG／大型相依圖展開收合 | - | 需要視覺比對 | 建議人工複查 |
 | i18n 字典 key parity／插值 placeholder 一致／無空值/未翻譯殘留 | `I18nDictionaryTest` | - | - |
 | app.js／index.html 靜態 `t('key')` 呼叫皆指向存在的 key | `I18nDictionaryTest` | - | - |
-| 手動切換語言即時更新 html lang、reload 後保留 | - | `checkManualSwitchUpdatesHtmlLangAndPersists()`（#145） | - |
-| 不支援的 stored locale（如殘留舊值）fallback 到 zh-TW | - | `checkUnsupportedStoredLocaleFallsBackToDefault()`（#145） | - |
-| 無 stored 偏好時依 `navigator.languages` 偵測（含 zh-CN 等變體 fallback） | - | `checkBrowserLanguageDetectionWithoutStoredPreference()`（#145） | - |
-| 實際渲染畫面無 raw key fallback（`⚠key`） | - | `checkNoRawKeyFallbackVisibleInRenderedDom()`（#145） | 更換語言後人工掃視畫面文字建議一併檢查 |
-| 插值（`{n}`／`{title}` 等）正確代入、不殘留樣板字面值 | - | `checkInterpolationRendersActualValues()`（#145） | - |
-| 主要看板／詳情／空態／錯誤／確認流程雙語下文案完整可讀 | - | - | 見 `docs/frontend-regression-checklist.md` 的「i18n（#145）」一節 |
+| 手動切換語言即時更新 html lang、reload 後保留 | - | `checkManualSwitchUpdatesHtmlLangAndPersists()` | - |
+| 不支援的 stored locale（如殘留舊值）fallback 到 zh-TW | - | `checkUnsupportedStoredLocaleFallsBackToDefault()` | - |
+| 無 stored 偏好時依 `navigator.languages` 偵測（含 zh-CN 等變體 fallback） | - | `checkBrowserLanguageDetectionWithoutStoredPreference()` | - |
+| 實際渲染畫面無 raw key fallback（`⚠key`） | - | `checkNoRawKeyFallbackVisibleInRenderedDom()` | 更換語言後人工掃視畫面文字建議一併檢查 |
+| 插值（`{n}`／`{title}` 等）正確代入、不殘留樣板字面值 | - | `checkInterpolationRendersActualValues()` | - |
+| 主要看板／詳情／空態／錯誤／確認流程雙語下文案完整可讀 | - | - | 見 `docs/frontend-regression-checklist.md` 的 i18n 一節 |
 
-## 已知限制
+## Limits
 
-- 這是骨架與範例，涵蓋 #126 驗證項目中最容易腳本化的部分；DAG 版面視覺正確性、
-  極端內容的實際渲染美觀程度仍需人工判斷。
-- 未內建 CI 執行；沒有人主動跑就不會發現回歸。這是方案 C 的已知取捨，
-  詳見 #140 的方案評估。
+- DAG layout quality and extreme-content rendering still require visual review.
+- The script runs only when invoked manually.

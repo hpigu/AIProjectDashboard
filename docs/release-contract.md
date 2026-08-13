@@ -1,8 +1,7 @@
 # Release 產品契約
 
-本文件定義 **stable** GitHub Release 對使用者、安裝器與後續更新流程承諾的
-server 產物與 thin plugin 關係。它是 #146–#149 實作時的驗收契約，不是那些
-功能已經存在的宣告。
+本文件定義 stable GitHub Release 的 server 產物、checksum 與 thin plugin
+版本契約。`v3.2.1` 已依這份契約發布。
 
 [`release workflow`](../.github/workflows/release.yml) 會在四個原生平台 runner 各自
 測試、封裝及自我驗證，再由唯一的 publish job 匯集四個產物，建立集中 checksum
@@ -14,7 +13,7 @@ notes 都使用這組值，而不是 workflow dispatch 的預設 SHA。
 
 ## 1. 版本、tag 與來源追溯
 
-令 `V` 為不帶 `v` 前綴的產品版本（例如 `3.1.1`）。`pom.xml` 的
+令 `V` 為不帶 `v` 前綴的產品版本（例如 `3.2.1`）。`pom.xml` 的
 `project.version` 是唯一的產品版本事實來源；目前它是字面值，且
 `scripts/check-versions.sh` 以它驗證已存在的散布 metadata。
 
@@ -35,10 +34,9 @@ notes 都使用這組值，而不是 workflow dispatch 的預設 SHA。
 路徑型 marketplace entry，版本由被選取 plugin manifest 提供。這仍可從 tag
 `vV` 追溯到同一份 Codex plugin metadata，而不創造第二個版本來源。
 
-建立 stable release 前，發布工作必須先在 tag checkout 上執行
+建立 stable release 前，發布工作會在 tag checkout 上執行
 `./scripts/check-versions.sh`，並拒絕 `v${pom.xml project.version}` 以外的 tag。
-現有 workflow 已有後一項 tag/pom 守門；集中化的 release 實作還必須把前一項保留為
-發佈門檻。Release notes 應列出 tag `vV` 與實際建置 commit；服務的
+Release notes 列出 tag `vV` 與實際建置 commit；服務的
 `/api/health` 可回報建置期嵌入的 version 與 commit，供已安裝實例核對。
 
 ## 2. Stable release assets
@@ -126,13 +124,13 @@ GitHub 的「最新 release」排序結果作為版本選擇依據。安裝與�
 - 每個 basename 必須是第 2 節四個檔名之一，版本皆為同一個 `V`，不能列 checksum
   清單本身、GitHub 自動產生的 source archive、plugin cache 或任何額外 asset。
 
-以 `V=3.1.1` 時，清單的形狀（雜湊值僅為格式佔位）如下：
+以 `V=3.2.1` 時，清單的形狀（雜湊值僅為格式佔位）如下：
 
 ```text
-<64 lowercase hex>  ai-project-board-backend-linux-x64-3.1.1.jar
-<64 lowercase hex>  ai-project-board-backend-macos-arm64-3.1.1.jar
-<64 lowercase hex>  ai-project-board-backend-macos-x64-3.1.1.jar
-<64 lowercase hex>  ai-project-board-backend-windows-x64-3.1.1.zip
+<64 lowercase hex>  ai-project-board-backend-linux-x64-3.2.1.jar
+<64 lowercase hex>  ai-project-board-backend-macos-arm64-3.2.1.jar
+<64 lowercase hex>  ai-project-board-backend-macos-x64-3.2.1.jar
+<64 lowercase hex>  ai-project-board-backend-windows-x64-3.2.1.zip
 ```
 
 安裝器／更新器必須先下載（或取得）目標 asset 與同版 `SHA256SUMS.txt`，以嚴格 UTF-8
@@ -142,41 +140,26 @@ GitHub 的「最新 release」排序結果作為版本選擇依據。安裝與�
 驗證成功後才可解壓 Windows ZIP 或替換 Linux/macOS JAR。這是下載完整性檢查，並不
 等同簽章、來源身分驗證或背景更新授權。
 
-## 5. 現況與後續實作邊界
+## 5. Windows 發布驗證
 
-- #147 已提供 Windows x64 打包與驗證入口，但這不等同 GitHub Release 已經發佈：在
-  Windows x64 runner 先建置 `target/ai-project-board-backend-V.jar`，再執行：
+Windows x64 runner 建置 `target/ai-project-board-backend-V.jar` 後執行：
 
-  ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\package-windows-x64.ps1 `
-    -ServerJar target\ai-project-board-backend-V.jar -JdkHome $env:JAVA_HOME `
-    -Version V -OutputDirectory target\release
-  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\package-fixture.ps1 `
-    -ServerJar target\ai-project-board-backend-V.jar -Version V
-  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\release-check.ps1 `
-    -ReleaseZip target\release\ai-project-board-backend-windows-x64-V.zip -Smoke
-  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\update-fixture.ps1 `
-    -ReleaseZip target\release\ai-project-board-backend-windows-x64-V.zip -Version V
-  ```
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\package-windows-x64.ps1 `
+  -ServerJar target\ai-project-board-backend-V.jar -JdkHome $env:JAVA_HOME `
+  -Version V -OutputDirectory target\release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\package-fixture.ps1 `
+  -ServerJar target\ai-project-board-backend-V.jar -Version V
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\release-check.ps1 `
+  -ReleaseZip target\release\ai-project-board-backend-windows-x64-V.zip -Smoke
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-check\update-fixture.ps1 `
+  -ReleaseZip target\release\ai-project-board-backend-windows-x64-V.zip -Version V
+```
 
-  打包器只接受 Windows x64 的完整 JDK 21，使用明示且版本控制的 module allowlist
-  （不以 `jdeps` 猜測 Spring/Hibernate 的反射與 service loading），先在暫存樹驗證
-  Java 21、layout、version 與 loopback health metadata，再以同目錄 atomic rename
-  發佈 ZIP。任何輸入／JDK／驗證失敗都不會覆寫或留下看似可用的最終 artifact。
-  `release-check.ps1 -Smoke` 是 Windows 真機的 start/status/stop gate；非 Windows
-  開發機不得把 parser 或 ZIP 結構檢查宣稱為此 smoke 的替代。
-  `update-fixture.ps1` 使用同一次 workflow 產生的真實 jlink ZIP，在隔離且含空白／
-  非 ASCII 的 `USERPROFILE`、資料庫、日誌、PID 與專用 loopback ports 上驗證 checksum
-  拒絕，以及 `publish`、`activate`、`start`、`readiness` 中斷後的 rollback。它同時
-  驗證原 running／stopped 狀態、舊 versioned root、可核對 hash 的 DB snapshot，
-  並以 `rollback_activate` fault 證明 rollback 自身失敗時維持 stopped、保留舊 root
-  與可直接執行的 manual recovery 路徑。此 gate 必須在 Windows artifact upload 前
-  通過；每個專用 port 在案例前後都必須為空，清理只能 force 該案例 PID 檔中的
-  exact PID，不以 port 上的未知 listener、process name 或 command line 比對終止。
-- 本 repo 已有 `v3.1.0` 與現行 Maven release JAR/checksum 流程；那些歷史 asset 不會
-  因本文被追溯改名，也不因此被重新定義為四平台 release。
-- 不修改或移除既有 Claude/Codex marketplace。後續工作只能讓兩個既有 marketplace
-  指向的 thin plugin manifest 與 server release 依第 1 節共同升版。
-- #146–#149 可實作 Windows jlink ZIP、平台 JAR 安裝、明確更新流程與 release
-  workflow；在該等工作完成並驗證前，本文件不得被引用為「已可免 JDK 安裝」或
-  「已有自動更新」的證據。
+打包器只接受 Windows x64 JDK 21。`release-check.ps1 -Smoke` 驗證
+start/status/stop；`update-fixture.ps1` 驗證 checksum 拒絕、含空白與非
+ASCII 路徑，以及 publish、activate、start、readiness 失敗後的回滾。
+這些檢查必須在 artifact upload 前通過。
+
+測試行程只能依該案例記錄的 PID 終止；不得用 process name、JAR 名稱或
+command-line substring 清理，以免誤傷正式看板。
