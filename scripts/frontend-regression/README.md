@@ -16,11 +16,11 @@ is not part of `./mvnw test` or CI. Server-side checks remain in
 
 ## When to run it
 
-- 大幅改動 `app.js` 的版面、CSS breakpoint、或詳情面板的 focus 管理邏輯
-- 改動 `SecurityHeadersFilter` 的 CSP 設定
-- 改動 SSE 重連相關程式碼（`EventStreamController`、`SseEmitterRegistry`、
-  `app.js` 內的 `EventSource` 處理）
-- 發版前的手動抽查
+- major layout, breakpoint, or drawer focus changes in `app.js`;
+- changes to CSP in `SecurityHeadersFilter`;
+- SSE reconnection changes in `EventStreamController`, `SseEmitterRegistry`, or
+  the frontend `EventSource` handling;
+- a pre-release browser check.
 
 For smaller changes, use `docs/frontend-regression-checklist.md` and select only
 the relevant checks.
@@ -46,27 +46,24 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 
 ## Coverage
 
-| 驗證項目 | 伺服器端 JUnit（已在 repo） | 本腳本（手動執行） | 純人工檢查清單 |
+| Check | Server-side JUnit | Manual browser script | Human checklist |
 | --- | --- | --- | --- |
-| CSP header 存在且內容正確 | `SecurityHeadersFilterTest` | - | - |
-| 零跨 origin 資源（vendor/字型/CSS 皆同源） | `OperationalSafetyConfigurationTest`、`FrontendStaticAssetsTest` | CSP violation 事件監聽（雙重確認） | - |
-| API/vendor 資源可實際同源取得 | `FrontendStaticAssetsTest` | - | - |
-| SSE 端點可達、回傳正確 content-type | `SecurityHeadersFilterTest` | 斷線/重連情境 | - |
-| RWD 三尺寸無水平溢出 | - | `checkNoHorizontalOverflow()` | 極端內容（超長 title 等）建議人工複查渲染 |
-| console 無錯誤 | - | `checkNoConsoleErrors()` | - |
-| Escape 關閉詳情並歸還焦點 | - | `checkEscapeReturnsFocus()` | - |
-| URL 篩選狀態同步與 reload 還原 | - | `checkFilterUrlRoundTrip()` | - |
-| SSE kill/restart 後重連且狀態保留 | - | 需要手動重啟後端，腳本僅檢測前端重連 UI 狀態 | 實際 kill/restart 後端程序需人工操作 |
-| 初次載入各 API 僅呼叫 1 次 | - | `checkApiCallCounts()`（Network 事件計數） | - |
-| DAG／大型相依圖展開收合 | - | 需要視覺比對 | 建議人工複查 |
-| i18n 字典 key parity／插值 placeholder 一致／無空值/未翻譯殘留 | `I18nDictionaryTest` | - | - |
-| app.js／index.html 靜態 `t('key')` 呼叫皆指向存在的 key | `I18nDictionaryTest` | - | - |
-| 手動切換語言即時更新 html lang、reload 後保留 | - | `checkManualSwitchUpdatesHtmlLangAndPersists()` | - |
-| 不支援的 stored locale（如殘留舊值）fallback 到 zh-TW | - | `checkUnsupportedStoredLocaleFallsBackToDefault()` | - |
-| 無 stored 偏好時依 `navigator.languages` 偵測（含 zh-CN 等變體 fallback） | - | `checkBrowserLanguageDetectionWithoutStoredPreference()` | - |
-| 實際渲染畫面無 raw key fallback（`⚠key`） | - | `checkNoRawKeyFallbackVisibleInRenderedDom()` | 更換語言後人工掃視畫面文字建議一併檢查 |
-| 插值（`{n}`／`{title}` 等）正確代入、不殘留樣板字面值 | - | `checkInterpolationRendersActualValues()` | - |
-| 主要看板／詳情／空態／錯誤／確認流程雙語下文案完整可讀 | - | - | 見 `docs/frontend-regression-checklist.md` 的 i18n 一節 |
+| CSP headers | `SecurityHeadersFilterTest` | - | - |
+| Same-origin vendor assets | `OperationalSafetyConfigurationTest`, `FrontendStaticAssetsTest` | CSP violation listener | - |
+| API and vendor availability | `FrontendStaticAssetsTest` | - | - |
+| SSE content type and access | `SecurityHeadersFilterTest` | Reconnection state | Restart server manually |
+| Responsive horizontal overflow | - | `checkNoHorizontalOverflow()` | Review extreme content |
+| Browser console errors | - | `checkNoConsoleErrors()` | - |
+| Escape closes drawer and restores focus | - | `checkEscapeReturnsFocus()` | Confirm focus order |
+| Filter URL round trip | - | `checkFilterUrlRoundTrip()` | - |
+| Initial API call counts | - | `checkApiCallCounts()` | - |
+| Dependency graph quality | - | - | Visual review |
+| i18n dictionary and placeholders | `I18nDictionaryTest` | - | Copy review |
+| Language switching and persistence | - | `checkManualSwitchUpdatesHtmlLangAndPersists()` | - |
+| Unsupported locale fallback | - | `checkUnsupportedStoredLocaleFallsBackToDefault()` | - |
+| Browser-language detection | - | `checkBrowserLanguageDetectionWithoutStoredPreference()` | - |
+| Raw translation keys | - | `checkNoRawKeyFallbackVisibleInRenderedDom()` | Visual scan |
+| Interpolation output | - | `checkInterpolationRendersActualValues()` | Native notification review |
 
 ## Limits
 

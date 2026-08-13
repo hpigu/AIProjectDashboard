@@ -38,7 +38,7 @@ external setup results are available.
 | Release | `v3.2.1` publishes Linux x64, macOS arm64/x64 JARs, a Windows x64 ZIP, and `SHA256SUMS.txt` | Release downloads have not yet produced verified external installs |
 | Windows | ZIP includes a JDK 21 jlink runtime; CI checks lifecycle and update rollback | Windows Sandbox validation is still pending |
 | macOS/Linux | Platform JARs are published | JDK 21 is required; `install/install.sh` is not distributed as a standalone release asset |
-| Agent clients | Claude Code local marketplace and Codex Git marketplace are documented | Codex Git marketplace still needs an external-user test; desktop GUI install paths are not verified |
+| Agent clients | Claude Code and Codex CLI paths are documented; plugin-page updates were validated in Codex and Claude Desktop | Clean first-time desktop GUI installation still needs an external-user test |
 | Language | The web UI supports English and Traditional Chinese | MCP descriptions, role instructions, CLI output, and most errors remain primarily Traditional Chinese |
 
 ## Deferred work

@@ -63,6 +63,10 @@ codex plugin add ai-project-board@ai-board
 依提示啟用 `board` connector，安裝後開新 task，讓角色 agent 與 `claim-tasks`
 skill 載入。
 
+既有安裝可直接在 Codex 桌面版的 plugin 頁面更新 `ai-board` marketplace；CLI
+替代指令是 `codex plugin marketplace upgrade ai-board`。更新後開新 task，不需
+重新安裝 plugin。
+
 ## 連接 Claude Code
 
 從本機 clone 加入 marketplace：
@@ -73,6 +77,9 @@ claude plugin install ai-project-board@ai-board
 ```
 
 重新載入 plugin 或重開 Claude Code，再依提示安裝 `board` connector。
+
+Claude Desktop 可從 **Code → Customize → Plugins → AI Project Board** 按
+**Update**；CLI 替代流程見 [安裝與更新](docs/installation.md)。
 
 ## 只連接 MCP
 
@@ -149,7 +156,8 @@ Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
 - 只支援單機，沒有帳號、跨裝置同步或經驗證的雲端部署路徑。
 - macOS／Linux release 需 JDK 21；只有 Windows x64 ZIP 內含 Java runtime。
 - MCP 工具說明、角色指引、CLI 輸出與多數錯誤訊息仍以繁體中文為主。
-- Claude Code 與 Codex CLI 是已驗證的 plugin 路徑；桌面版圖形安裝流程尚未獨立驗證。
+- Codex 與 Claude Desktop 的 plugin 頁面更新流程已驗證；桌面版全新圖形安裝仍待
+  外部使用者在乾淨環境驗證，CLI 安裝流程保留為替代方式。
 - 角色自訂內容存在本機 H2，不會跟著 thin plugin 移到另一台機器。
 
 目前優先工作與明確非目標見 [產品 roadmap](docs/roadmap.md)。

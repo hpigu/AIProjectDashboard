@@ -1,50 +1,23 @@
-# 維運手冊：啟停、備份還原、疑難排解
+# Operations
 
-給實際在用這個看板的人。安裝方式見 [installation.md](installation.md)，
-開發規則見 [../AGENTS.md](../AGENTS.md)。
+[Back to README](../README.md) · [Installation](installation.md)
 
-## 服務生命週期
+## Service lifecycle
 
-一律用 `bin/board`，不要自己 `java -jar` 或 `ps | grep | kill`：
+Use the supplied launcher. It tracks the exact process, waits for the shutdown
+backup, and keeps runtime paths consistent.
+
+macOS/Linux:
 
 ```bash
-bin/board start      # 啟動（背景執行，脫離終端機）
-bin/board status     # PID、埠號、/api/health 版本資訊
-bin/board stop       # SIGTERM 並等待關閉前備份完成
+bin/board start
+bin/board status
+bin/board stop
 bin/board restart
 bin/board logs -n 200
 ```
 
-透過 stable release 安裝時，請改用安裝根目錄的絕對入口；不依賴 repo cwd、`pom.xml`、
-`mvnw` 或 `target/`：
-
-```bash
-~/.ai-project-board/bin/board start
-~/.ai-project-board/bin/board status
-~/.ai-project-board/bin/board stop
-```
-
-安裝器用 `--home DIR` 指定另一個根目錄時，將上述路徑的
-`~/.ai-project-board` 換成 `DIR`。`data/`、`backups/`、`logs/`、PID 與安裝設定
-會全部保留在同一個 user-scope 根目錄；不要把它們指回 repo 或 plugin cache。
-
-### 安全停止
-
-`bin/board stop` 送的是 `SIGTERM`，Spring 的 `ContextClosedEvent` 會觸發
-`ShutdownBackupService`，用 H2 的 `BACKUP TO` 產生一份一致性快照。
-`kill -9`（SIGKILL）不給行程任何機會執行 shutdown hook，那份快照就不會存在。
-因此 `stop` 逾時後**不會**自動升級成 SIGKILL；確定要強制終止時才手動加：
-
-```bash
-bin/board stop --force   # 會失去這一次的關閉前備份
-```
-
-`stop` 動手前會確認 PID 檔指向的行程真的是看板（PID 會被作業系統回收），
-不是就直接說「未在執行」並清掉殘留 PID 檔，不會誤殺別的行程。
-
-### Windows
-
-Windows 沒有 bash，改用同名的 `.ps1`（預設值、啟動前備份、保留策略都與 bash 版一致）：
+Windows:
 
 ```powershell
 .\bin\board.ps1 start
@@ -54,72 +27,109 @@ Windows 沒有 bash，改用同名的 `.ps1`（預設值、啟動前備份、保
 .\bin\board.ps1 logs -Lines 200
 ```
 
-Windows x64 stable ZIP 則只從解壓根目錄執行 `bin\board.ps1`；它固定使用 ZIP 的
-`runtime\bin\java.exe` 和 `app\ai-project-board-backend-V.jar`，因此不需要 JDK、
-Git Bash、symlink 或 `lsof`。資料、備份、日誌、PID、設定仍在
-`%USERPROFILE%\.ai-project-board`（或 `BOARD_HOME_DIR`），不在可覆寫的 ZIP 目錄。
-若 bundled runtime/JAR 遺失或不是 Java 21，啟動會明確失敗，絕不改用 PATH／
-`JAVA_HOME`／網路下載；重新驗證 release checksum 後完整解壓即可。
-
-**停止的機制不同，必須知道**：Windows 沒有 SIGTERM，`Stop-Process` 等同
-`kill -9`，會跳過 JVM shutdown hook，關閉前備份就不會產生。因此 `stop` 改用
-console control event（`CTRL_C_EVENT`）通知行程，效果等同 mac/Linux 的 SIGTERM。
-
-兩個 Windows 專屬情況：
-
-- **看板是你手動 `java -jar` 起的**：它與那個終端機視窗共用 console，送 Ctrl+C
-  會連視窗一起打斷。`stop` 會偵測到並要求你直接到那個視窗按 Ctrl+C（效果相同，
-  同樣會產生關閉前備份）。改用 `.\bin\board.ps1 start` 之後就沒有這個問題。
-- **啟動失敗但日誌沒東西**：背景模式下看板有自己的隱藏 console，logback 初始化
-  前的輸出不會落檔。改用 `.\bin\board.ps1 start -Foreground` 在當前視窗執行，
-  直接看到那段輸出。
-
-要在乾淨的 Windows 環境驗證 stable release ZIP 的免 JDK 安裝、SmartScreen
-互動與 user-scope 資料落點，見
-[docs/windows-sandbox-clean-install-checklist.md](windows-sandbox-clean-install-checklist.md)；
-更新回滾等項目由 release CI 驗證。
-
-還原用 `.\bin\restore-db.ps1 -List` 與 `.\bin\restore-db.ps1 latest`，
-語意與 bash 版相同（拒絕在執行中還原、保留現有資料庫、驗證後才原子改名）。
-
-改動這些腳本後可用內建檢查驗證（不需要看板在跑，也不會碰到正式資料）：
-
-```powershell
-pwsh -NoProfile -File scripts\windows-check\check.ps1
-```
-
-它會做語法檢查，並用假的 H2 檔案跑完整的備份／保留策略／兩種格式還原／拒絕路徑。
-CI 也會在 windows-latest 上跑同一支腳本（Windows PowerShell 5.1 與 pwsh 7 各一次）。
-JDK 偵測、埠號反查與 CTRL_C 的實際效果無法自動驗證，需依下方演練清單手動確認。
-
-### 開機自動啟動
-
-**macOS（launchd）**：建立 `~/Library/LaunchAgents/dev.aiboard.board.plist`，
-把 `<repo>` 換成實際路徑：
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>dev.aiboard.board</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string><repo>/bin/board</string>
-    <string>start</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>/tmp/ai-project-board.launchd.log</string>
-</dict>
-</plist>
-```
+For a stable macOS/Linux installation, use the absolute installed entry point:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/dev.aiboard.board.plist
+~/.ai-project-board/bin/board status
 ```
 
-**Linux（systemd user unit）**：`~/.config/systemd/user/ai-project-board.service`
+`bin/board stop` sends SIGTERM and waits for Spring shutdown hooks. A normal stop
+creates a consistent H2 shutdown snapshot. `stop --force` or Windows `-Force`
+skips that guarantee and should be used only after confirming the exact target.
+
+Never stop board processes with `pkill -f`, `killall`, or a JAR-name match. Use
+the recorded PID or the PID listening on the development port you started.
+
+### Windows release bundle
+
+The Windows x64 ZIP always launches its bundled
+`runtime\bin\java.exe` and `app\ai-project-board-backend-V.jar`. It does not fall
+back to `PATH`, `JAVA_HOME`, or a network download. Runtime data remains under
+`%USERPROFILE%\.ai-project-board` or `BOARD_HOME_DIR`, not the extracted program
+directory.
+
+Windows uses a console control event for graceful shutdown because
+`Stop-Process` does not run JVM shutdown hooks. If the board was started manually
+with `java -jar` in a visible console, stop it with Ctrl+C in that console. For
+startup errors before logging is initialized, run:
+
+```powershell
+.\bin\board.ps1 start -Foreground
+```
+
+Use the [Windows Sandbox checklist](windows-sandbox-clean-install-checklist.md)
+to validate the human-visible first-run experience. Release CI covers archive
+layout, lifecycle, checksums, update rollback, and unusual paths.
+
+## Backups
+
+All backup phases share `BOARD_BACKUP_DIR`, which defaults to
+`~/.ai-project-board/backups`.
+
+| Pattern | When | Method |
+|---|---|---|
+| `board-startup-<UTC>-<TZ>.mv.db` | Before startup and Flyway migration | File copy plus H2 header validation; failure stops startup |
+| `board-shutdown-<UTC>-<TZ>.zip` | Graceful SIGTERM or Ctrl+C | H2 `BACKUP TO`; failure is logged |
+| `board-scheduled-<UTC>-<TZ>.zip` | Every six hours by default | H2 `BACKUP TO`; failure does not stop later runs |
+
+Files newer than 30 days are retained. Older files are deleted only while at
+least seven remain in that phase. Startup, shutdown, and scheduled files have
+independent quotas.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BOARD_BACKUP_INTERVAL` | `6h` | Fixed delay; accepts values such as `90m` or `PT6H` |
+| `BOARD_BACKUP_SCHEDULE_ENABLED` | `true` | Set to `false` to disable scheduled backups |
+
+The first scheduled run waits one complete interval after startup. SIGKILL, JVM
+crashes, and power loss cannot create a shutdown snapshot; recovery then uses the
+latest scheduled or startup backup.
+
+## Restore
+
+List available snapshots before selecting one:
+
+```bash
+bin/restore-db.sh --list
+```
+
+Stop the board before restoring:
+
+```bash
+bin/board stop
+bin/restore-db.sh latest
+bin/board start
+```
+
+Windows uses:
+
+```powershell
+.\bin\restore-db.ps1 -List
+.\bin\restore-db.ps1 latest
+```
+
+The restore script:
+
+1. refuses to continue while the board or database file is active;
+2. extracts ZIP backups when necessary and validates the H2 header;
+3. renames the current database to `board.mv.db.pre-restore-<UTC>`;
+4. writes and validates a temporary file before an atomic rename;
+5. removes stale trace and lock files.
+
+Verify the restored state:
+
+```bash
+curl -s http://127.0.0.1:8080/api/health/ready
+curl -s http://127.0.0.1:8080/api/projects
+```
+
+For development drills, use an isolated `BOARD_PORT` and `BOARD_HOME_DIR`. Never
+operate on the production board's port, database, log, or process.
+
+## Autostart
+
+For macOS, create a user LaunchAgent whose program arguments call the absolute
+installed `bin/board start` path. For Linux, a user systemd service can use:
 
 ```ini
 [Unit]
@@ -128,9 +138,8 @@ After=network.target
 
 [Service]
 Type=forking
-ExecStart=%h/path/to/repo/bin/board start
-ExecStop=%h/path/to/repo/bin/board stop
-# stop 要等關閉前備份跑完，逾時要比 BOARD_STOP_TIMEOUT_SEC 寬鬆
+ExecStart=%h/.ai-project-board/bin/board start
+ExecStop=%h/.ai-project-board/bin/board stop
 TimeoutStopSec=120
 Restart=on-failure
 
@@ -141,108 +150,27 @@ WantedBy=default.target
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now ai-project-board
-loginctl enable-linger "$USER"   # 沒登入時也保持執行
 ```
 
-## 備份
+Use `loginctl enable-linger "$USER"` only when the board must remain active while
+the user is logged out.
 
-三種備份，共用同一個目錄（`BOARD_BACKUP_DIR`，預設
-`~/.ai-project-board/backups`）：
+## Troubleshooting
 
-| 檔名 | 產生時機 | 方式 |
-|---|---|---|
-| `board-startup-<UTC>-<TZ>.mv.db` | 每次啟動、Flyway migration 之前 | 檔案複製 + H2 檔頭驗證；失敗會中止啟動 |
-| `board-shutdown-<UTC>-<TZ>.zip` | 正常關閉時（SIGTERM／Ctrl+C） | H2 `BACKUP TO` 一致性快照；失敗只記 ERROR，不阻塞關閉 |
-| `board-scheduled-<UTC>-<TZ>.zip` | 執行中，預設每 6 小時 | 同上；失敗只記 ERROR，不影響後續排程 |
-
-保留策略是 30 天內全留；超過 30 天的只在刪除後仍剩 ≥ 7 份時才刪。
-額度按階段獨立計算；`scheduled` 備份不會占用 `shutdown` 的保留額度。
-
-### 排程備份
-
-| 環境變數 | 預設 | 說明 |
-|---|---|---|
-| `BOARD_BACKUP_INTERVAL` | `6h` | 支援 `6h`／`90m`／`PT6H` 等寫法 |
-| `BOARD_BACKUP_SCHEDULE_ENABLED` | `true` | 設 `false` 完全停用 |
-
-間隔從「上一次執行結束」起算（`fixedDelay`），大型資料庫備份較久時任務不會
-堆疊。啟動後等待一個完整間隔才執行第一次排程備份。
-
-**涵蓋不到的情境**：`kill -9`、JVM crash、斷電。這些情況下能還原到的最近狀態，
-就是上一份排程備份（預設最多損失 6 小時），或上一次啟動前的備份。
-
-## 還原
-
-還原前先確認要還原到哪個時間點：
-
-```bash
-bin/restore-db.sh --list
-```
-
-```
-[restore-db] 備份目錄：/Users/you/.ai-project-board/backups
-  2026-08-06 02:10:51 CST        8626 bytes  定期（一致性快照）    .../board-scheduled-20260805T181051Z-UTC.zip
-  2026-08-05 20:53:56 CST        9984 bytes  關閉前（一致性快照）  .../board-shutdown-20260805T125356Z-UTC.zip
-  2026-08-05 20:54:06 CST       53248 bytes  啟動前（冷備份）      .../board-startup-20260805T125406Z-UTC.mv.db
-```
-
-`latest` 取的是這份清單的第一列。看板長時間運行時那通常是一份排程備份，
-而不是關閉前備份。
-
-然後停掉看板再還原（還原中的看板會寫壞資料庫，腳本會直接拒絕）：
-
-```bash
-bin/board stop
-bin/restore-db.sh latest              # 或指定某個備份檔的完整路徑
-bin/board start
-```
-
-還原做的事，依序：
-
-1. 確認看板沒在跑、資料庫檔沒被任何行程持有；
-2. 解出備份內容（`.zip` 會取出裡面的 `.mv.db`），驗證 H2 檔頭；
-3. **現有資料庫改名保留**成 `board.mv.db.pre-restore-<UTC>`，不刪除；
-4. 以 `.tmp` → 驗證 → 原子改名的方式寫入新資料庫；
-5. 清掉 `.trace.db` / `.lock.db` 殘留。
-
-還錯了備份的話，把保留檔改回原檔名即可：
-
-```bash
-mv ~/.ai-project-board/data/board.mv.db.pre-restore-20260805T125358Z \
-   ~/.ai-project-board/data/board.mv.db
-```
-
-還原後務必啟動並確認資料是預期的時間點：
-
-```bash
-bin/board start
-curl -s http://127.0.0.1:8080/api/health/ready   # 三項檢查都要 pass
-curl -s http://127.0.0.1:8080/api/projects
-```
-
-### 發版前的手動演練清單
-
-改動備份、還原或啟停相關程式碼後，至少跑一次：
-
-1. `bin/board start`，經 MCP 建立一個測試專案
-2. `bin/board stop`，確認 `backups/` 出現新的 `board-shutdown-*.zip`
-3. 故意破壞資料庫：`echo garbage > <data-dir>/board.mv.db`
-4. `bin/restore-db.sh latest --yes`
-5. `bin/board start`，確認 `/api/health/ready` 為 `UP` 且測試專案還在
-
-用開發用的埠號與資料目錄跑（`BOARD_PORT`、`BOARD_HOME_DIR`），不要動正式看板。
-
-## 疑難排解
-
-| 症狀 | 原因與處理 |
+| Symptom | Action |
 |---|---|
-| `找不到 JDK 21` | 執行 `java -version` 確認目前 shell 使用 Java 21；stable Windows ZIP 應使用內附 runtime，不讀取系統 Java |
-| 啟動時 `MVStoreException` | 舊行程還持有 H2 檔案。`bin/board status` 看 PID，或依腳本印出的 PID 結束該行程 |
-| 瀏覽器一片空白、console 有 403 | Host/Origin guard 擋下了非 loopback 的來源。用 `localhost`／`127.0.0.1` 開啟；若刻意要從區網存取，設定 `BOARD_ALLOWED_HOSTS` |
-| 停止後看板還在 | PID 檔遺失時 `stop` 會改用埠號反查；都找不到就是行程不是本腳本啟動的，用 `lsof -i :8080` 確認 |
-| 啟動失敗但日誌沒東西 | 看 `<BOARD_LOG_FILE>.console`：logback 初始化前的錯誤只會出現在那裡 |
-| 看板空的、沒有任何專案 | 正常。寫入只走 MCP，REST 唯讀，沒有種子資料；照首頁的三步操作 |
-| `/api/events` 回 503 | 已達 SSE 連線上限（`BOARD_SSE_MAX_CONNECTIONS`，預設 32）。關掉沒在用的看板分頁；持續發生代表有東西一直開新連線卻沒關舊的 |
-| 分頁的畫面突然重新整理了一次 | 該連線的事件佇列滿了（跟不上），伺服器主動斷線讓它重連並整批重抓。偶爾發生是正常的自我修復；頻繁發生可調高 `BOARD_SSE_CLIENT_QUEUE_CAPACITY` |
-| Windows：`stop` 說與視窗共用 console | 看板是手動 `java -jar` 起的，直接到那個視窗按 Ctrl+C；之後改用 `.\bin\board.ps1 start` |
-| Windows：`board.ps1` 無法執行（執行原則） | 以 `powershell -ExecutionPolicy Bypass -File .\bin\board.ps1 start` 執行，或為目前使用者放寬：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| JDK 21 not found | Run `java -version` in the same shell. The Windows stable ZIP should use its bundled runtime instead. |
+| `MVStoreException` on startup | Another process still holds the H2 file. Check `bin/board status` and the exact PID printed by the launcher. |
+| Blank page with HTTP 403 | Use `localhost` or `127.0.0.1`. A non-loopback Host or Origin is rejected unless explicitly listed in `BOARD_ALLOWED_HOSTS`. |
+| Board remains active after stop | Check the PID file and the process listening on the configured port. Do not match processes by JAR name. |
+| Startup fails before the main log is written | Read `<BOARD_LOG_FILE>.console`; on Windows, retry with `start -Foreground`. |
+| Empty board | This is normal on a new database. REST and the UI are read-only; create the first project through MCP. |
+| `/api/events` returns 503 | Close unused tabs or investigate a client leaking connections. The default limit is 32. |
+| A tab reloads its board state | Its SSE queue filled, so the server disconnected it and the UI resynchronized. Frequent occurrences may justify increasing `BOARD_SSE_CLIENT_QUEUE_CAPACITY`. |
+| PowerShell blocks `board.ps1` | Run it with `powershell -ExecutionPolicy Bypass -File .\bin\board.ps1 start`, or set an appropriate current-user execution policy. |
+
+After changing Windows lifecycle scripts, run:
+
+```powershell
+pwsh -NoProfile -File scripts\windows-check\check.ps1
+```

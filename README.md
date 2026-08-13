@@ -93,6 +93,11 @@ codex plugin add ai-project-board@ai-board
 When prompted, enable the `board` connector. Open a new Codex task after
 installation so the role agents and `claim-tasks` skill are loaded.
 
+To update an existing installation, upgrade the `ai-board` marketplace from
+the Codex desktop plugin page. CLI users can run
+`codex plugin marketplace upgrade ai-board`. Open a new task afterward; you do
+not need to install the plugin again.
+
 ### Claude Code plugin
 
 From a local clone:
@@ -104,6 +109,10 @@ claude plugin install ai-project-board@ai-board
 
 Reload plugins or restart Claude Code, then install the declared `board`
 connector when prompted.
+
+In Claude Desktop, open **Code → Customize → Plugins → AI Project Board** and
+click **Update** when a newer version is available. The installation guide also
+documents the CLI fallback.
 
 ### MCP only
 
@@ -192,9 +201,9 @@ Read [SECURITY.md](SECURITY.md) and the
 - The agent-facing tool descriptions, role instructions, most backend errors, and
   some reference documents remain Traditional Chinese. The web UI supports zh-TW
   and English.
-- Claude Desktop and Codex Desktop graphical installation paths have not been
-  independently validated; Claude Code and Codex CLI are the supported plugin
-  paths.
+- Plugin updates have been validated in the Codex and Claude Desktop plugin
+  pages. Clean first-time graphical installation still needs an independent
+  external-user test; the CLI installation paths remain documented fallbacks.
 - Role customizations are stored in the local database and do not travel with the
   thin plugin to another machine.
 
