@@ -1,7 +1,7 @@
 {
   "name": "ai-project-board",
   "version": "3.2.1",
-  "description": "AI 專案看板的 Codex 整合：認領/更新任務、取得角色指引、啟動看板服務。",
+  "description": "Local AI task board integration for Codex: role agents, dependency-aware claiming, blockers, and completion evidence.",
   "author": {
     "name": "Daniel Huang"
   },
@@ -17,8 +17,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AI Project Board",
-    "shortDescription": "以 leader 與角色 agent 執行看板任務",
-    "longDescription": "串接本機 AI 專案看板（http://localhost:8080），讓 Codex leader 以單角色鎖、task branch、dev 整合與整批 reviewer 流程派工。",
+    "shortDescription": "Coordinate Codex role agents on a local MCP task board",
+    "longDescription": "Connect Codex to a local AI Project Board server for dependency-aware task claiming, role-based dispatch, integration through task branches, and evidence-backed completion.",
     "developerName": "Daniel Huang",
     "category": "Productivity",
     "capabilities": [
@@ -27,9 +27,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "認領 AgentDashboard 的任務",
-      "看板上還有哪些任務待辦",
-      "把 #12 標記為完成"
+      "Claim tasks for my project",
+      "Show the dependency-ready tasks on the board",
+      "Create a project and break it into role-based tasks"
     ]
   }
 }

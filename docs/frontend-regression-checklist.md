@@ -1,8 +1,9 @@
-# 前端回歸驗證清單（#140）
+# 前端手動回歸清單
 
 ## 背景
 
-`AGENTS.md` 規定維持零建置 Vue 3 CDN（不引入 npm/Vite/SFC/TypeScript）。前端
+`AGENTS.md` 規定維持零建置 Vue 3（vendor 資源，不引入
+npm/Vite/SFC/TypeScript）。前端
 （`src/main/resources/static/**`）沒有元件框架層級的單元測試基礎設施，因此前端
 的回歸保護分三層，依可自動化程度由高到低：
 
@@ -83,14 +84,14 @@
 - i18n 字典（`i18n.js` 的 `dictionaries['zh-TW']`/`dictionaries['en']`）key
   parity（互不缺漏）、插值 placeholder 集合一致、無空字串、en 字典無殘留未
   翻譯中文（`lang.zh-TW` 例外）、app.js／index.html 靜態 `t('key')` 呼叫皆
-  指向存在的 key（`I18nDictionaryTest`，見 #145）
+  指向存在的 key（`I18nDictionaryTest`）
 - 手動切換語言後 html lang 即時更新且 reload 後保留、不支援的 stored locale
   fallback 到 zh-TW、無 stored 偏好時依瀏覽器語言偵測（含 zh-CN 等變體
   fallback）、實際渲染畫面無 raw key fallback（`⚠key`）、插值正確代入不殘留
   樣板字面值——以上由 `scripts/frontend-regression/check.mjs` 的 i18n 檢查
-  覆蓋（手動執行，非 CI，見該目錄 README.md，#145）
+  覆蓋（手動執行，非 CI，見該目錄 README.md）
 
-### i18n（#145）
+### i18n
 
 以下項目需要人判斷「雙語文案讀起來是否正確、有沒有跑版」，`check.mjs` 只能
 確認「有沒有 raw key／console warning」這類機械性錯誤，無法判斷語意或版面：

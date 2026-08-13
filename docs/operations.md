@@ -28,7 +28,7 @@ bin/board logs -n 200
 `~/.ai-project-board` 換成 `DIR`。`data/`、`backups/`、`logs/`、PID 與安裝設定
 會全部保留在同一個 user-scope 根目錄；不要把它們指回 repo 或 plugin cache。
 
-### 為什麼不要自己 kill
+### 安全停止
 
 `bin/board stop` 送的是 `SIGTERM`，Spring 的 `ContextClosedEvent` 會觸發
 `ShutdownBackupService`，用 H2 的 `BACKUP TO` 產生一份一致性快照。
@@ -74,11 +74,10 @@ console control event（`CTRL_C_EVENT`）通知行程，效果等同 mac/Linux �
   前的輸出不會落檔。改用 `.\bin\board.ps1 start -Foreground` 在當前視窗執行，
   直接看到那段輸出。
 
-要在真正沒裝過任何東西的 Windows（例如 Windows Sandbox）上驗證 stable release ZIP
-的免 JDK 安裝、SmartScreen 互動與 user-scope 資料落點，見
+要在乾淨的 Windows 環境驗證 stable release ZIP 的免 JDK 安裝、SmartScreen
+互動與 user-scope 資料落點，見
 [docs/windows-sandbox-clean-install-checklist.md](windows-sandbox-clean-install-checklist.md)；
-更新回滾等已由 CI 的 `windows-2022` runner 自動驗證過的部分，該清單也有說明何以
-不需要在 Sandbox 內重複人工操作。
+更新回滾等項目由 release CI 驗證。
 
 還原用 `.\bin\restore-db.ps1 -List` 與 `.\bin\restore-db.ps1 latest`，
 語意與 bash 版相同（拒絕在執行中還原、保留現有資料庫、驗證後才原子改名）。
@@ -157,8 +156,7 @@ loginctl enable-linger "$USER"   # 沒登入時也保持執行
 | `board-scheduled-<UTC>-<TZ>.zip` | 執行中，預設每 6 小時 | 同上；失敗只記 ERROR，不影響後續排程 |
 
 保留策略是 30 天內全留；超過 30 天的只在刪除後仍剩 ≥ 7 份時才刪。
-**這個額度是各階段獨立計算的**：`scheduled` 再頻繁也不會把 `shutdown` 那份
-一致性快照擠掉——長時間運行下，那份往往正是最值得留的。
+額度按階段獨立計算；`scheduled` 備份不會占用 `shutdown` 的保留額度。
 
 ### 排程備份
 
@@ -168,7 +166,7 @@ loginctl enable-linger "$USER"   # 沒登入時也保持執行
 | `BOARD_BACKUP_SCHEDULE_ENABLED` | `true` | 設 `false` 完全停用 |
 
 間隔從「上一次執行結束」起算（`fixedDelay`），大型資料庫備份較久時任務不會
-堆疊。啟動後會先等一個間隔才跑第一次——啟動前備份剛做過，不需要立刻再一份。
+堆疊。啟動後等待一個完整間隔才執行第一次排程備份。
 
 **涵蓋不到的情境**：`kill -9`、JVM crash、斷電。這些情況下能還原到的最近狀態，
 就是上一份排程備份（預設最多損失 6 小時），或上一次啟動前的備份。
@@ -224,7 +222,7 @@ curl -s http://127.0.0.1:8080/api/projects
 
 ### 發版前的手動演練清單
 
-備份沒演練過等於沒備份。改動備份／還原／啟停相關程式碼後，至少跑一次：
+改動備份、還原或啟停相關程式碼後，至少跑一次：
 
 1. `bin/board start`，經 MCP 建立一個測試專案
 2. `bin/board stop`，確認 `backups/` 出現新的 `board-shutdown-*.zip`
@@ -238,7 +236,7 @@ curl -s http://127.0.0.1:8080/api/projects
 
 | 症狀 | 原因與處理 |
 |---|---|
-| `找不到 JDK 21` 但明明裝了 | 舊版腳本只看 `java -version` 第一行，`JAVA_TOOL_OPTIONS` 的 "Picked up ..." 提示會排在版本字串前。已修正；若仍發生，用 `BOARD_JAR` 搭配自己的 java 啟動 |
+| `找不到 JDK 21` | 執行 `java -version` 確認目前 shell 使用 Java 21；stable Windows ZIP 應使用內附 runtime，不讀取系統 Java |
 | 啟動時 `MVStoreException` | 舊行程還持有 H2 檔案。`bin/board status` 看 PID，或依腳本印出的 PID 結束該行程 |
 | 瀏覽器一片空白、console 有 403 | Host/Origin guard 擋下了非 loopback 的來源。用 `localhost`／`127.0.0.1` 開啟；若刻意要從區網存取，設定 `BOARD_ALLOWED_HOSTS` |
 | 停止後看板還在 | PID 檔遺失時 `stop` 會改用埠號反查；都找不到就是行程不是本腳本啟動的，用 `lsof -i :8080` 確認 |
