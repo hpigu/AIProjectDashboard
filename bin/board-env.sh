@@ -180,6 +180,14 @@ board_secure_file() {
   local newly_created="${2:-0}"
 
   if ! chmod 600 "$file" 2>/dev/null; then
+    # chmod 可能因 macOS sandbox/ACL 而失敗；若檔案已安全（無 group/other
+    # 權限）則不阻擋，只有確實過寬時才報錯。
+    local perms
+    perms="$(stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null || echo '')"
+    local group_other="${perms#?}"
+    if [ -n "$group_other" ] && [ "$group_other" = "00" ]; then
+      return 0
+    fi
     if [ "$newly_created" -eq 1 ]; then
       err "無法將新建檔案收斂為僅目前使用者可讀寫（0600），為避免留下權限過寬的敏感檔案，已中止：$file"
       return 1
