@@ -183,7 +183,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: 檢查新增／升級的依賴有無已知漏洞
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           # moderate 以上才擋。單機、只聽 loopback 的服務把 low 也設成阻擋，
           # 只會製造一堆得手動放行的 PR，最後變成無條件放行的橡皮圖章。
