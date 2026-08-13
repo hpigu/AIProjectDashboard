@@ -108,12 +108,16 @@ codex plugin add ai-project-board@ai-board
 ```
 
 Enable the `board` connector when prompted, then open a new Codex task. Plugin
-updates are explicit:
+updates are explicit. In Codex Desktop, open the plugin page and upgrade the
+`ai-board` marketplace. The CLI equivalent is:
 
 ```bash
 codex plugin marketplace upgrade ai-board
-codex plugin add ai-project-board@ai-board
 ```
+
+The installed plugin uses the refreshed marketplace snapshot, so do not run
+`plugin add` again. Open a new task after the upgrade to load the updated agents
+and skills.
 
 If `ai-board` already points to a local checkout, remove that marketplace source
 before adding the Git source:
@@ -137,11 +141,22 @@ claude plugin install ai-project-board@ai-board
 ```
 
 Reload plugins or restart Claude Code, then install the declared `board`
-connector when prompted. To update after pulling a newer source version:
+connector when prompted.
+
+In Claude Desktop, switch to **Code**, then open **Customize → Plugins → AI
+Project Board** and click **Update** when it is available. If the desktop page
+has not discovered the new marketplace version yet, or when working entirely
+from the CLI, refresh the marketplace and update the plugin explicitly:
 
 ```bash
+claude plugin marketplace update ai-board
 claude plugin update ai-project-board@ai-board
 ```
+
+Restart Claude Code or open a new session after the update.
+
+Plugin updates only replace the client integration. They do not update or
+restart the board server; use the server update procedure below for that.
 
 Old role files in `~/.claude/agents/` can override the plugin copies. Remove
 manually installed `backend-dev.md`, `frontend-dev.md`, `qa.md`, `infra.md`, and
@@ -251,8 +266,9 @@ archive built without `.git` may report `commit: "unknown"`.
 
 ## Current limitations
 
-- Claude Code and Codex CLI are the verified plugin clients. Equivalent desktop
-  GUI installation paths have not been independently tested.
+- Plugin updates have been validated in the Codex and Claude Desktop plugin
+  pages. Clean first-time desktop GUI installation still needs an independent
+  external-user test; the CLI paths above remain the fallback.
 - Role customizations made through `upsert_role` live in the local H2 database;
   they do not travel with the thin plugin.
 - macOS/Linux stable installation still requires JDK 21 and a source checkout to
