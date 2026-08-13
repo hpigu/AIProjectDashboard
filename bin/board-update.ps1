@@ -15,7 +15,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-function Log { param([string]$Message) Write-Host "[board update] $Message" }
+function Log { param([string]$Message) [Console]::Out.WriteLine("[board update] $Message") }
 function Fail { param([string]$Message) throw "[board update] $Message" }
 function Test-FailAt {
     param([string]$Step)
@@ -124,12 +124,12 @@ try {
     $oldMoved = $false; $switched = $false; $snapshotReady = $false
     function Restore-Old {
         param([string]$Reason)
-        Write-Host "[board update][錯誤] update failed at $Reason; beginning rollback"
+        [Console]::Out.WriteLine("[board update][錯誤] update failed at $Reason; beginning rollback")
         $newBoard = Join-Path $targetRoot 'bin\board.ps1'
         if (Test-Path $newBoard) {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $newBoard stop *> $null
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "[board update][錯誤] rollback could not stop the target runtime; do not rename either versioned root until the process on port $script:BoardPort is stopped"
+                [Console]::Out.WriteLine("[board update][錯誤] rollback could not stop the target runtime; do not rename either versioned root until the process on port $script:BoardPort is stopped")
                 return $false
             }
         }
@@ -140,17 +140,17 @@ try {
                 if (Test-FailAt 'rollback_activate') { throw 'failure injection: rollback_activate' }
                 Move-Item -LiteralPath $rollback -Destination $root -ErrorAction Stop
             } catch {
-                Write-Host "[board update][錯誤] retained target diagnostics: $failed; database snapshot: $snapshot"
+                [Console]::Out.WriteLine("[board update][錯誤] retained target diagnostics: $failed; database snapshot: $snapshot")
                 if ($snapshotReady -and $dbBase -and (Test-Path (Join-Path $snapshot 'board.mv.db'))) {
-                    Write-Host "[board update][錯誤] rollback activation failed; service remains stopped. Manual recovery step 1: Copy-Item -LiteralPath '$snapshot\board.mv.db' -Destination '$($dbBase + '.mv.db')' -Force"
+                    [Console]::Out.WriteLine("[board update][錯誤] rollback activation failed; service remains stopped. Manual recovery step 1: Copy-Item -LiteralPath '$snapshot\board.mv.db' -Destination '$($dbBase + '.mv.db')' -Force")
                 } else {
-                    Write-Host '[board update][錯誤] rollback activation failed; service remains stopped. Manual recovery step 1: no pre-update database file existed; do not create one manually'
+                    [Console]::Out.WriteLine('[board update][錯誤] rollback activation failed; service remains stopped. Manual recovery step 1: no pre-update database file existed; do not create one manually')
                 }
-                Write-Host "[board update][錯誤] Manual recovery step 2: Move-Item -LiteralPath '$rollback' -Destination '$root'"
+                [Console]::Out.WriteLine("[board update][錯誤] Manual recovery step 2: Move-Item -LiteralPath '$rollback' -Destination '$root'")
                 if ($wasRunning) {
-                    Write-Host "[board update][錯誤] Manual recovery step 3: & '$root\bin\board.ps1' start"
+                    [Console]::Out.WriteLine("[board update][錯誤] Manual recovery step 3: & '$root\bin\board.ps1' start")
                 } else {
-                    Write-Host '[board update][錯誤] Manual recovery step 3: leave the service stopped (it was stopped before the update)'
+                    [Console]::Out.WriteLine('[board update][錯誤] Manual recovery step 3: leave the service stopped (it was stopped before the update)')
                 }
                 return $false
             }
@@ -161,9 +161,9 @@ try {
         }
         if ($wasRunning) {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'bin\board.ps1') start *> $null
-            if ($LASTEXITCODE -ne 0) { Write-Host "[board update][錯誤] rollback start failed; inspect '$snapshot' and '$rollback'"; return $false }
+            if ($LASTEXITCODE -ne 0) { [Console]::Out.WriteLine("[board update][錯誤] rollback start failed; inspect '$snapshot' and '$rollback'"); return $false }
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'bin\board.ps1') status *> $null
-            if ($LASTEXITCODE -ne 0) { Write-Host "[board update][錯誤] rollback readiness failed; inspect '$snapshot' and '$rollback'"; return $false }
+            if ($LASTEXITCODE -ne 0) { [Console]::Out.WriteLine("[board update][錯誤] rollback readiness failed; inspect '$snapshot' and '$rollback'"); return $false }
         }
         return $true
     }
@@ -185,8 +185,9 @@ try {
         "current=$currentVersion`ntarget=$Version`nactivation=$root" | Set-Content -LiteralPath (Join-Path $snapshot 'manifest.txt') -Encoding UTF8
         $snapshotReady = $true
     } catch {
+        [Console]::Out.WriteLine($_.Exception.Message)
         Restore-Old -Reason 'backup' | Out-Null
-        throw
+        throw $_
     }
 
     try {
@@ -214,8 +215,9 @@ try {
         }
     } catch {
         $message = $_.Exception.Message
+        [Console]::Out.WriteLine($message)
         Restore-Old -Reason $message | Out-Null
-        throw
+        throw $_
     }
     $newEntry = Join-Path $targetRoot 'bin\board.ps1'
     if ($wasRunning) { $state = 'service restored to ready' } else { $state = 'target verified, then returned to stopped' }
