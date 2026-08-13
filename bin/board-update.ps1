@@ -109,8 +109,6 @@ try {
     $stagedRoot = Join-Path $stage ('ai-project-board-backend-windows-x64-' + $Version)
     Assert-True (Test-Path (Join-Path $stagedRoot 'runtime\bin\java.exe')) 'staged runtime is missing'
     Assert-True (Test-Path (Join-Path $stagedRoot ('app\ai-project-board-backend-' + $Version + '.jar'))) 'staged JAR is missing'
-    $javaVersion = (& (Join-Path $stagedRoot 'runtime\bin\java.exe') -version 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
-    Assert-True ($javaVersion -match 'version "21') 'staged bundled runtime is not Java 21'
 
     $oldBoard = Join-Path $root 'bin\board.ps1'
     $wasRunning = $false

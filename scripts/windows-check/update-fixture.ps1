@@ -223,9 +223,6 @@ function Invoke-NormalRollbackCase {
         $env:BOARD_UPDATE_FAIL_AT = $Fault
         $result = Invoke-Board -Scenario $scenario -Arguments @('update', '-Version', $Version, '-ReleaseZip', $zipPath, '-Checksums', $scenario.Checksums)
         Assert-True ($result.ExitCode -ne 0) "$Fault injection 讓 updater 失敗"
-        if ($result.Output -notmatch [regex]::Escape("failure injection: $Fault")) {
-            Write-Host "  [DIAG] $Fault output length=$($result.Output.Length) first500=$(($result.Output.Substring(0, [Math]::Min(500, $result.Output.Length)) -replace "`r?`n", '|'))"
-        }
         Assert-True ($result.Output -match [regex]::Escape("failure injection: $Fault")) "$Fault failure 有明確診斷"
         Assert-True (Test-Path -LiteralPath $scenario.OldRoot -PathType Container) "$Fault rollback 還原舊 versioned root"
         Assert-True (-not (Test-Path -LiteralPath $scenario.TargetRoot)) "$Fault rollback 未留下 active target root"
