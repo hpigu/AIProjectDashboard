@@ -52,7 +52,7 @@ jobs:
 
       - name: 上傳測試報告（失敗時才需要）
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: surefire-reports
           path: target/surefire-reports/
