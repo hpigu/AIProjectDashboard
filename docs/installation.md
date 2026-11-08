@@ -155,6 +155,21 @@ claude plugin update ai-project-board@ai-board
 
 Restart Claude Code or open a new session after the update.
 
+Claude Code still loads personal skills from
+`~/.claude/skills/<name>/SKILL.md`, project skills from
+`.claude/skills/<name>/SKILL.md`, and plugin skills from
+`skills/<name>/SKILL.md` inside the plugin root. This repository therefore keeps
+its Claude skill at `plugin/skills/claim-tasks/SKILL.md`; no path migration is
+needed. The `~/.claude/skills/synced/` directory is managed by claude.ai skill
+sync and is not an installation target for this plugin. See the official
+[skill locations](https://code.claude.com/docs/en/skills#choose-where-skills-load)
+and [plugin layout](https://code.claude.com/docs/en/plugins-reference#standard-layout).
+
+Update the source checkout before refreshing a local marketplace. Use the
+marketplace/plugin update commands above instead of editing installed caches.
+When publishing a new plugin release, bump its version through the repository's
+release procedure so existing installations discover the changed skills.
+
 Plugin updates only replace the client integration. They do not update or
 restart the board server; use the server update procedure below for that.
 

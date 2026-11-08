@@ -1,0 +1,20 @@
+{
+  "name": "ai-project-board-workers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "dev:web": "node scripts/local.mjs web",
+    "dev:mcp": "node scripts/local.mjs mcp",
+    "db:migrate:local": "node scripts/local.mjs migrate",
+    "build:local": "node scripts/local.mjs build",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261104.0-beta",
+    "wrangler": "4.158.0"
+  }
+}

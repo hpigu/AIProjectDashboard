@@ -1,0 +1,27 @@
+[Unit]
+Description=Cloudflare Tunnel for AI Project Board
+Wants=network-online.target
+After=network-online.target ai-project-board.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=cloudflared-board
+Group=cloudflared-board
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/board.yml tunnel run
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

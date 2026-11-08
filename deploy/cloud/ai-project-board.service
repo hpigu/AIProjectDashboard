@@ -1,0 +1,36 @@
+[Unit]
+Description=AI Project Board (cloud single instance)
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ai-project-board
+Group=ai-project-board
+WorkingDirectory=/var/lib/ai-project-board
+EnvironmentFile=/etc/ai-project-board/board.env
+StateDirectory=ai-project-board
+StateDirectoryMode=0700
+LogsDirectory=ai-project-board
+LogsDirectoryMode=0700
+UMask=0077
+ExecStartPre=/bin/bash /opt/ai-project-board/current/deploy/cloud/preflight.sh
+ExecStart=/usr/bin/java -Xms128m -Xmx768m -jar /opt/ai-project-board/current/app.jar
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=120
+SuccessExitStatus=143
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 # AI Project Board
 
 > 讓多個 Claude Code 與 Codex agent 不重複領任務、不跳過前置，並用驗證證據回報完成。
-> 全程本機執行，不需帳號或雲端服務。
+> 預設本機執行，也可選用單人雲端部署。
 
 [英文首頁](README.md) ·
 [最新版本](https://github.com/hpigu/AIProjectDashboard/releases/latest) ·
@@ -16,6 +16,13 @@ AI coding agent 擅長執行單一任務，但同時開多個 session 後，會�
 AI Project Board 透過本機 MCP server 管理這個協作流程。Agent 原子認領可執行的
 任務、記錄結構化阻塞原因，並在完成時附上測試、變更檔案與 commit 證據。
 瀏覽器看板會即時顯示所有專案進度。
+
+若要讓電腦關機後仍能共用看板，可評估獨立的
+[Workers＋D1 免費方案部署版本](docs/workers-deployment.md)。它沿用原本零建置前端，
+瀏覽器採 Access 登入，Codex／Claude Code 使用各裝置的機器憑證；與本機 H2 資料
+分開，雲端資源仍需明確授權後才建立。免費額度與正式客戶端相容性須實際驗收。
+[架構與驗證計畫](docs/workers-architecture.md)記錄了移植範圍；原本的
+[VM＋Tunnel 方案](docs/cloud-deployment.md)保留作替代選項。
 
 ## 核心能力
 

@@ -1,8 +1,8 @@
 # AI Project Board
 
 > Coordinate parallel Claude Code and Codex agents without duplicate work,
-> missed prerequisites, or unverifiable "done" claims. Local-first, no account,
-> no cloud.
+> missed prerequisites, or unverifiable "done" claims. Local by default, with
+> optional single-user cloud hosting.
 
 [Traditional Chinese 繁體中文](README.zh-TW.md) ·
 [Latest release](https://github.com/hpigu/AIProjectDashboard/releases/latest) ·
@@ -180,7 +180,22 @@ editing, and archive operations. Their schemas and state transitions are in
 
 ## Safety model
 
-This is a trusted-user, single-machine product.
+For a personal cloud board, the separate
+[Workers + D1 backend](docs/workers-deployment.md) targets Cloudflare's Free plans
+and a `workers.dev` address. It shares the existing zero-build frontend, provides
+authenticated web and MCP endpoints, and requires its own deployment acceptance.
+The [architecture and validation plan](docs/workers-architecture.md) records the
+runtime and database differences. No cloud resources are created by local tests.
+
+An alternative VM deployment kit is available in
+[docs/cloud-deployment.md](docs/cloud-deployment.md), with the current client
+authentication findings in [docs/cloud-research.md](docs/cloud-research.md).
+It keeps the origin on loopback and requires Cloudflare Access JWT validation
+in the tunnel. Cloud deployment and real client/edge acceptance remain separate
+steps; this is not a public, unauthenticated hosting mode.
+
+The default Java backend trusts processes on the same machine. Its protections
+and limitations are:
 
 - The server binds to `127.0.0.1` by default.
 - `/mcp` has **no server-side authentication**. Do not expose it directly to a
@@ -195,7 +210,9 @@ Read [SECURITY.md](SECURITY.md) and the
 
 ## Scope and current limitations
 
-- Single machine only; no account, cloud sync, or validated server deployment.
+- No multi-user tenant isolation or backend leader/worker RBAC. The local/VM
+  backend uses one H2 instance; the personal Workers backend uses shared D1.
+  Both cloud options require deployment-specific acceptance testing.
 - macOS/Linux release JARs require JDK 21; only the Windows x64 release bundle
   currently includes a Java runtime.
 - The agent-facing tool descriptions, role instructions, most backend errors, and

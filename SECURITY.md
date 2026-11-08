@@ -2,7 +2,7 @@
 
 ## Threat model
 
-AI Project Board is designed for a trusted user on one machine. The Spring Boot
+The default Java backend is designed for a trusted user on one machine. Its Spring Boot
 server binds to `127.0.0.1:8080` by default and exposes MCP, read-only REST/SSE,
 and an offline web UI.
 
@@ -21,10 +21,44 @@ The following are known consequences of this model:
 
 Do not expose the server directly to a LAN or the public internet. Deployments
 outside the local trust boundary require an authentication layer such as an
-authenticated reverse proxy or mTLS. This repository does not provide or validate
-a cloud deployment path.
+authenticated reverse proxy or mTLS. The optional
+[cloud deployment kit](docs/cloud-deployment.md) uses two Access applications
+and per-ingress JWT validation by cloudflared. Real cloud acceptance must be
+completed before using it with production data.
+
+Cloud mode (`BOARD_CLOUD_ENABLED=true`) separates read-only web and MCP
+hostnames, rejects browser Origins on MCP, and refuses non-loopback binding.
+The application filter is routing protection, not a JWT validator: cloudflared
+must enforce `access.required` and the correct audience on **both** ingress
+rules. Merely supplying an assertion header does not authenticate a caller.
+Local processes on the VM remain trusted and can impersonate Host headers.
+Do not run untrusted workloads on the VM or expose its origin port.
+
+Access machine credentials grant all MCP tools across all projects; there is
+no backend leader/worker RBAC. Access audit identity is not the task assignee.
+Use separate credentials per device, revoke lost credentials, and never use an
+Access Bypass policy to solve a client authentication incompatibility.
 
 ## Implemented protections
+
+### Optional personal Workers backend
+
+The separate `workers/` implementation authenticates at the HTTP boundary.
+Web requests require an Access JWT signed by the configured team, with the
+configured audience, validity period, and owner email. Static assets pass through
+the same authentication check. MCP uses per-device Bearer credentials, matched
+against SHA-256 hashes in a Worker Secret; missing configuration fails closed.
+Machine credentials grant all 16 tools and all projects, not worker-only access.
+Browser credentials cannot invoke MCP, and machine credentials cannot read web
+routes. The two Workers share D1 transactions and a durable event outbox.
+
+Do not record credentials, request bodies, claim tokens, or exported board data
+in logs or version control. Do not enable preview deployments, public asset
+bypasses, remote development bindings, or paid resources to troubleshoot auth.
+The [Workers operations guide](docs/workers-deployment.md) distinguishes local
+tests from real Access/client acceptance and explains rotation and recovery.
+
+### Local and VM backend
 
 - `LocalOriginGuardFilter` rejects non-loopback Host and Origin values unless they
   are explicitly allowed with `BOARD_ALLOWED_HOSTS`.

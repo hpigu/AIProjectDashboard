@@ -92,10 +92,10 @@ Leader 從最新 `dev` 建立 task branch/worktree，再依下表啟動對應角
 
 | category | agent | model | reasoning_effort |
 |---|---|---|---|
-| BACKEND | `backend-dev` | `gpt-5.6-terra` | `high` |
-| FRONTEND | `frontend-dev` | `gpt-5.6-terra` | `medium` |
-| TEST | `qa` | `gpt-5.6-terra` | `high` |
-| INFRA | `infra` | `gpt-5.6-terra` | `high` |
+| BACKEND | `backend-dev` | `gpt-6.1-terra` | `high` |
+| FRONTEND | `frontend-dev` | `gpt-6.1-terra` | `medium` |
+| TEST | `qa` | `gpt-6.1-terra` | `high` |
+| INFRA | `infra` | `gpt-6.1-terra` | `high` |
 | DOC | `docs` | `gpt-5.6-luna` | `medium` |
 
 Codex 使用 `spawn_agent` 啟動一次性 agent，並設定 `fork_turns="none"`：派工訊息本身
@@ -181,7 +181,7 @@ Leader 只直接處理描述明確指定給 leader、範圍清楚且已獲目前
 ## 9. 整批 reviewer 與 main 合併
 
 只有 manifest 內全部 task 都 DONE、沒有 unresolved BLOCKED，才叫既有 `reviewer`
-唯讀審查完整 `git diff main...dev`。Reviewer 使用 `gpt-5.6-sol`、`high`，並以
+唯讀審查完整 `git diff main...dev`。Reviewer 使用 `gpt-6.1-sol`、`high`，並以
 `fork_turns="none"` 啟動；派工訊息提供 manifest、驗收條件、commit 清單、測試結果、
 完整 diff 範圍與 repo 規則，不讓它繼承 leader 的完整對話。
 純 DOC 也不跳過。

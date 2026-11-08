@@ -1,0 +1,32 @@
+# Locally managed named tunnel. This file contains no credentials.
+# Install final config /etc/cloudflared/board.yml; credential JSON is separate.
+tunnel: REPLACE_TUNNEL_UUID
+credentials-file: /etc/cloudflared/board-tunnel.json
+metrics: 127.0.0.1:20001
+loglevel: info
+ingress:
+  - hostname: mcp.example.com
+    path: ^/mcp$
+    service: http://127.0.0.1:18081
+    originRequest:
+      httpHostHeader: mcp.example.com
+      access:
+        required: true
+        teamName: REPLACE_TEAM_NAME
+        audTag:
+          - REPLACE_MCP_APP_AUD
+  - hostname: mcp.example.com
+    service: http_status:404
+  - hostname: board.example.com
+    path: ^/mcp(/.*)?$
+    service: http_status:404
+  - hostname: board.example.com
+    service: http://127.0.0.1:18081
+    originRequest:
+      httpHostHeader: board.example.com
+      access:
+        required: true
+        teamName: REPLACE_TEAM_NAME
+        audTag:
+          - REPLACE_WEB_APP_AUD
+  - service: http_status:404
