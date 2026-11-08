@@ -4,6 +4,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import dev.aiboard.common.BoardException;
 import dev.aiboard.common.TaskCategory;
+import dev.aiboard.config.WorkerCapacity;
 import dev.aiboard.event.BoardEvent;
 import dev.aiboard.event.BoardEventPublisher;
 import dev.aiboard.project.ProjectService;
@@ -25,17 +26,19 @@ public class TaskService {
     private final ProjectService projectService;
     private final BoardEventPublisher eventPublisher;
     private final ClaimTokenService claimTokenService;
+    private final WorkerCapacity workerCapacity;
 
     public TaskService(TaskRepository taskRepository, TaskLogRepository taskLogRepository,
                         TaskDependencyRepository taskDependencyRepository,
                         ProjectService projectService, BoardEventPublisher eventPublisher,
-                        ClaimTokenService claimTokenService) {
+                        ClaimTokenService claimTokenService, WorkerCapacity workerCapacity) {
         this.taskRepository = taskRepository;
         this.taskLogRepository = taskLogRepository;
         this.taskDependencyRepository = taskDependencyRepository;
         this.projectService = projectService;
         this.eventPublisher = eventPublisher;
         this.claimTokenService = claimTokenService;
+        this.workerCapacity = workerCapacity;
     }
 
     @Transactional
@@ -148,9 +151,11 @@ public class TaskService {
     public TaskStatusChangeResult updateStatus(Long taskId, String targetStatusRaw, String note,
                                                 String claimToken) {
         TaskStatus target = parseStatus(targetStatusRaw);
+        Long projectId = taskRepository.findProjectIdByTaskId(taskId)
+                .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
+        projectService.assertActiveForUpdate(projectId);
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
-        projectService.assertActiveForUpdate(task.getProjectId());
         TaskStatus current = task.getStatus();
 
         if (!current.canTransitionTo(target)) {
@@ -180,6 +185,12 @@ public class TaskService {
 
         // token 驗證：只有「這筆任務本身有 claimTokenHash」時才強制要求，
         // 讓部署前既有、以舊契約認領（沒有 token）的任務仍可用舊呼叫方式完成。
+        // DONE clears the token hash. A token-bearing completion retry cannot be verified;
+        // reject it instead of accepting an arbitrary token after a concurrent completion.
+        if (current == TaskStatus.DONE && target == TaskStatus.DONE
+                && claimToken != null && !claimToken.isBlank()) {
+            throw new BoardException("任務 #" + taskId + " 已完成，無法驗證已清除的 claim token");
+        }
         boolean operatingOnOwnedClaim = current == TaskStatus.IN_PROGRESS || current == TaskStatus.BLOCKED;
         if (operatingOnOwnedClaim && task.getClaimTokenHash() != null) {
             if (claimToken == null || claimToken.isBlank()) {
@@ -192,6 +203,13 @@ public class TaskService {
         }
 
         boolean changed = current != target;
+        if (changed && target == TaskStatus.IN_PROGRESS) {
+            var capacity = capacity(task.getProjectId(), TaskCategory.valueOf(task.getCategory()));
+            if (capacity != null && capacity.full()) {
+                throw new BoardException("CAPACITY_FULL：%s 容量已滿（%d/%d）"
+                        .formatted(capacity.category(), capacity.inProgress(), capacity.limit()));
+            }
+        }
         if (changed) {
             task.changeStatus(target);
             taskLogRepository.save(new TaskLog(taskId, current.name(), target.name(), note));
@@ -284,11 +302,30 @@ public class TaskService {
         }
 
         List<TaskDto> tasks = listTasks(project.id(), status, category);
-        return ProjectTasksResult.found(project, tasks);
+        return ProjectTasksResult.found(project, tasks, capacities(project.id()));
     }
 
     @Transactional
     public ClaimNextTaskResult claimNextTask(String projectName, String categoryRaw, String assigneeRaw) {
+        ClaimNextTaskResult result = claimNextTaskLocked(projectName, categoryRaw, assigneeRaw);
+        return result.projectFound()
+                ? result.withCapacity(capacity(result.project().id(), TaskCategory.valueOf(result.category())))
+                : result;
+    }
+
+    private WorkerCapacity.Snapshot capacity(Long projectId, TaskCategory category) {
+        if (category == TaskCategory.OTHER) return null;
+        return workerCapacity.snapshot(projectId, category,
+                taskRepository.countByProjectIdAndCategoryAndStatus(projectId, category.name(), TaskStatus.IN_PROGRESS));
+    }
+
+    public List<WorkerCapacity.Snapshot> capacities(Long projectId) {
+        return List.of(TaskCategory.BACKEND, TaskCategory.FRONTEND, TaskCategory.TEST,
+                        TaskCategory.INFRA, TaskCategory.DOC).stream()
+                .map(category -> capacity(projectId, category)).toList();
+    }
+
+    private ClaimNextTaskResult claimNextTaskLocked(String projectName, String categoryRaw, String assigneeRaw) {
         TaskCategory category = parseClaimCategory(categoryRaw);
         String assignee = normalizeAssignee(assigneeRaw);
         var project = projectService.findByNameIgnoreCase(projectName);
@@ -322,6 +359,11 @@ public class TaskService {
                                 .map(t -> new BlockedCandidate(toDto(t),
                                         waiting.getOrDefault(t.getId(), List.of())))
                                 .toList());
+            }
+
+            WorkerCapacity.Snapshot capacity = capacity(project.get().id(), category);
+            if (capacity != null && capacity.full()) {
+                return ClaimNextTaskResult.capacityFull(project.get(), category.name());
             }
 
             LocalDateTime claimedAt = LocalDateTime.now();
@@ -465,6 +507,7 @@ public class TaskService {
         NO_TASK,
         BLOCKED_BY_DEPENDENCY,
         CONTENDED,
+        CAPACITY_FULL,
         PROJECT_NOT_FOUND
     }
 
@@ -476,34 +519,42 @@ public class TaskService {
                                       ProjectService.ProjectDto project, TaskDto task,
                                       List<ProjectService.ProjectDto> availableProjects,
                                       String category, List<BlockedCandidate> blockedCandidates,
-                                      String claimToken) {
+                                      String claimToken, WorkerCapacity.Snapshot capacity) {
+        public ClaimNextTaskResult withCapacity(WorkerCapacity.Snapshot capacity) {
+            return new ClaimNextTaskResult(outcome, project, task, availableProjects, category, blockedCandidates, claimToken, capacity);
+        }
+
+        public static ClaimNextTaskResult capacityFull(ProjectService.ProjectDto project, String category) {
+            return new ClaimNextTaskResult(ClaimOutcome.CAPACITY_FULL, project, null, List.of(), category, List.of(), null, null);
+        }
+
         public static ClaimNextTaskResult claimed(ProjectService.ProjectDto project, TaskDto task,
                                                    String category, String claimToken) {
             return new ClaimNextTaskResult(ClaimOutcome.CLAIMED,
-                    project, task, List.of(), category, List.of(), claimToken);
+                    project, task, List.of(), category, List.of(), claimToken, null);
         }
 
         public static ClaimNextTaskResult noTask(ProjectService.ProjectDto project, String category) {
             return new ClaimNextTaskResult(ClaimOutcome.NO_TASK,
-                    project, null, List.of(), category, List.of(), null);
+                    project, null, List.of(), category, List.of(), null, null);
         }
 
         public static ClaimNextTaskResult contended(ProjectService.ProjectDto project, String category) {
             return new ClaimNextTaskResult(ClaimOutcome.CONTENDED,
-                    project, null, List.of(), category, List.of(), null);
+                    project, null, List.of(), category, List.of(), null, null);
         }
 
         /** 該 category 還有 TODO，但全部都在等前置任務完成。 */
         public static ClaimNextTaskResult allBlocked(ProjectService.ProjectDto project, String category,
                                                       List<BlockedCandidate> blockedCandidates) {
             return new ClaimNextTaskResult(ClaimOutcome.BLOCKED_BY_DEPENDENCY,
-                    project, null, List.of(), category, blockedCandidates, null);
+                    project, null, List.of(), category, blockedCandidates, null, null);
         }
 
         public static ClaimNextTaskResult projectNotFound(
                 List<ProjectService.ProjectDto> availableProjects, String category) {
             return new ClaimNextTaskResult(ClaimOutcome.PROJECT_NOT_FOUND,
-                    null, null, availableProjects, category, List.of(), null);
+                    null, null, availableProjects, category, List.of(), null, null);
         }
 
         public boolean projectFound() {
@@ -528,13 +579,18 @@ public class TaskService {
     }
 
     public record ProjectTasksResult(ProjectService.ProjectDto project, List<TaskDto> tasks,
-                                      List<ProjectService.ProjectDto> availableProjects) {
+                                      List<ProjectService.ProjectDto> availableProjects,
+                                      List<WorkerCapacity.Snapshot> capacities) {
         public static ProjectTasksResult found(ProjectService.ProjectDto project, List<TaskDto> tasks) {
-            return new ProjectTasksResult(project, tasks, List.of());
+            return found(project, tasks, List.of());
+        }
+
+        public static ProjectTasksResult found(ProjectService.ProjectDto project, List<TaskDto> tasks, List<WorkerCapacity.Snapshot> capacities) {
+            return new ProjectTasksResult(project, tasks, List.of(), capacities);
         }
 
         public static ProjectTasksResult projectNotFound(List<ProjectService.ProjectDto> availableProjects) {
-            return new ProjectTasksResult(null, List.of(), availableProjects);
+            return new ProjectTasksResult(null, List.of(), availableProjects, List.of());
         }
 
         public boolean projectFound() {

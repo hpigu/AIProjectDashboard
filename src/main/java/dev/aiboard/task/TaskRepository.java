@@ -11,6 +11,9 @@ import java.util.Optional;
 
 public interface TaskRepository extends JpaRepository<Task, Long> {
 
+    @Query("SELECT t.projectId FROM Task t WHERE t.id = :taskId")
+    Optional<Long> findProjectIdByTaskId(@Param("taskId") Long taskId);
+
     List<Task> findByProjectIdOrderBySortOrderAsc(Long projectId);
 
     List<Task> findByProjectIdAndStatusOrderBySortOrderAsc(Long projectId, TaskStatus status);
@@ -60,6 +63,8 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     long countByProjectId(Long projectId);
 
     long countByProjectIdAndStatus(Long projectId, TaskStatus status);
+
+    long countByProjectIdAndCategoryAndStatus(Long projectId, String category, TaskStatus status);
 
     @Query("SELECT t.projectId AS projectId, t.status AS status, COUNT(t) AS cnt "
             + "FROM Task t GROUP BY t.projectId, t.status")
