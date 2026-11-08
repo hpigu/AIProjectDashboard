@@ -1,6 +1,6 @@
 ---
 name: claim-tasks
-description: 從 AI 專案看板認領並執行指定專案的任務。當使用者明示專案名稱並要求「認領任務」、「開工」、「繼續開發」或查詢尚可執行工作時使用；由主 session 擔任 leader，以單角色鎖、獨立 task branch/worktree、dev 整合分支及整批 reviewer 流程派工。
+description: 從 AI 專案看板認領並執行指定專案的任務。當使用者明示專案名稱並要求「認領任務」、「開工」、「繼續開發」或查詢尚可執行工作時使用；由主 session 擔任 leader，以同專案 category 容量槽、獨立 task branch/worktree、dev 整合分支及整批 reviewer 流程派工。
 ---
 
 # 認領專案任務
@@ -59,31 +59,55 @@ list_tasks(projectName=<名稱>, includeDescription=true)
 - 每筆 task 從最新 `dev` 建立 `task/<task-id>-<role>` 與獨立 worktree。
   不使用 `dev/task-*`：Git 不能同時保存 `dev` 與 `dev/...` refs。
 
-### 既有執行中任務
+### 容量與既有執行中任務
 
-若某 category 已有 `IN_PROGRESS`，先把該角色鎖視為占用並比對 live agent、branch
-與 worktree。找不到對應工作時保留現況並詢問要接手、重開或停止；不得另派同角色。
-無關角色仍可繼續。
+容量以同一專案、同一 category 為單位；目前預設 `BACKEND=3`，`FRONTEND`、`TEST`、
+`INFRA`、`DOC` 各為 1。每個專案分開計算容量，但使用共用環境變數設定。實際上限以
+`list_tasks` 回傳的 `capacities` 為準，不能從預設或舊任務推測設定。`OTHER` 是 leader 自己處理的工作，不是 worker category，也不占
+worker 容量。leader 是唯一協調者，不另開 leader worker。
 
-### 角色鎖
+`list_tasks` 不論查詢篩選條件，`capacities` 都包含各 category 的容量快照：
+`{projectId, category, limit, inProgress, available, full}`。Java MCP 會以文字
+`Snapshot[]` 附在工具結果中，Workers 以 JSON 回傳。每個 worker 的 claim 結果也帶有
+`capacity` 快照。重新盤點時讀取最新快照；`available` 是看板狀態，不包含 leader 尚未
+登記的啟動預留，因此排程時要自行合併預留槽。
 
-固定五把鎖：`BACKEND`、`FRONTEND`、`TEST`、`INFRA`、`DOC`。同一時間每個
-category 最多一個 live agent；每個 agent 只處理一件 task，回報後結束。
-`OTHER` 不占 worker 鎖，但 leader 同一時間也只直接處理一件 OTHER。
+每個 `IN_PROGRESS` task 都占一槽，包括 worker 尚未完成、等待 leader 整合及 agent
+失聯的任務；`BLOCKED` 不占槽。恢復 `BLOCKED` 任務到 `IN_PROGRESS` 前，先確認容量。
+降低容量不會中止或釋放既有工作；若 `inProgress > limit`，停止新增派工，待狀態下降。
+沒有可信的 session 存活偵測，不能因 agent 看似離線就自動釋放 claim。比對 task、agent、
+branch 與 worktree；合法接手沿用原 task 和工作區，直到狀態明確改變前該槽持續占用。
+
+leader 排程時將各 category 槽位分為「已認領」與「已預留未認領」兩類，兩類合計不得
+超過 `limit`，且同一 task 只能算一次。預留從決定啟動 worker 起計入；worker 回報實際
+claim 後，將同一預留轉為已認領，不重複加算。平台總 session slots 包含 leader，依當下
+環境回報的可用總量為準；啟動前同時檢查 category `available` 與平台剩餘 slots。例如總量
+為 4 時，leader 保留一槽，最多同時三個 live worker；既有 `IN_PROGRESS` 工作（含待整合
+與失聯）仍占 category 槽，但只有實際 live session 才占平台 session slot。這是平台實例
+限制，不代表所有平台固定只有四槽或可無限增加 worker。
+
 
 ## 3. 事件驅動排程
 
 不要使用同步 wave。每次開工、agent 結束、task 轉態或使用者回答後，重新執行：
 
 1. `list_tasks(..., includeDescription=true)`。
-2. 排除前置未 DONE、角色鎖占用、已在處理及不屬本 batch 的 task。
-3. 每個空閒 category 只看依看板順序第一筆 eligible task；不得因難度或偏好跳題。
-4. 在平台容量內盡量填滿不同角色。容量不足時，比較各 category 的第一筆候選，
-   依 `sort_order`／看板順序，task id 僅作同序 tie-breaker。
+2. 排除前置未 DONE、容量已滿、已預留／認領及不屬本 batch 的 task。
+3. category 每一個可用槽都依看板順序挑第一筆 eligible task，跳過已預留或認領的 task；
+   不得因難度或偏好跳題。
+4. 先依各 category 的 `available` 與 leader 預留計算可用槽；有競爭時比較候選 task，
+   依 `sort_order`／看板順序，task id 僅作同序 tie-breaker。只在依賴和明顯檔案／資源
+   衝突允許時啟動 worker，不為填滿容量啟動閒置 session。
 5. 任一 agent 結束就立即重排；不等待其他角色「湊齊一波」。
 
-Agent 仍必須呼叫該角色的 `claim_next_task`。Leader 預期的 task id 與實際認領不符時，
-agent 不修改檔案，立即回報；leader 重新盤點，不把錯誤任務硬塞進既有 branch。
+Agent 仍必須呼叫該角色的 `claim_next_task`。同 category 的並行 worker 可能同時看到相同
+首筆候選，因此認領握手短暫序列化：leader 一次只發出一個該 category 的 claim 指令，等待
+claim 結果的實際 `taskId` 後，再分配下一筆不同候選。每個 worker 仍由自己呼叫
+`claim_next_task`。若工具提供可查詢候選的 `list_tasks`，leader 可先依候選建立預期 task
+worktree，但同一候選不得分配給多個 worker。認領結果與預期 taskId 不同時，worker 停止
+修改並回報實際 taskId；leader 重新盤點，確保後續工作區與該 taskId 對應，不把已認領任務
+硬塞進錯誤 branch。`CAPACITY_FULL` 表示容量競爭，重新盤點後再排；沒有 TODO、候選皆受
+相依阻擋等結果維持各自原義。
 
 ## 4. 建立 task 工作區並派工
 
@@ -98,12 +122,15 @@ Leader 從最新 `dev` 建立 task branch/worktree，再啟動對應角色 agent
 | DOC | `docs` |
 
 Claude Code 優先直接叫用 plugin 提供的具名 agent。若執行環境無法啟動 subagent，
-回報能力限制並停止該 worker 派工；不得由 leader 冒充該角色。平台容量低時循序派工，
-但角色鎖與一 agent 一 task 不變。
+回報能力限制並停止該 worker 派工；不得由 leader 冒充該角色。允許多個同角色 worker，
+但每個 instance 只認領一件 task，完成回報後結束；容量為 1 時自然退回循序派工。
 
 派工訊息必須包含：
 
-- `projectName`、預期 task id、branch/worktree 路徑與最新 `dev` 基準。
+- `projectName`、預期 task id、branch/worktree 路徑與最新 `dev` 基準；開發埠、DB、log
+  使用 task 或 instance 唯一標記；同角色 instance
+   使用同一個 `roleName`，並使用 leader 配發、長度不超過 60 字的唯一 `assignee`（例如
+   `backend-t6-a`），不可自行共用或猜測 assignee。
 - 只認領並處理一件；不得自行認領下一件。
 - 先呼叫 `get_role` 並遵守 repo 指引與角色邊界。
 - 驗證、commit、回報 changed files／commit／測試結果／完成摘要。
@@ -134,24 +161,25 @@ Agent 完成修改、驗證與 commit 後結束。Leader 只做表面 gate：
 
 ### BLOCKED
 
-- Agent 標記 `BLOCKED` 後結束並釋放角色鎖；保留 branch/worktree，不合併 `dev`。
+- Agent 標記 `BLOCKED` 後結束並釋放 category 槽；保留 branch/worktree，不合併 `dev`。
 - 下游保持等待，無關 task 繼續。
 - `USER_INPUT`、需求或責任不明時，agent 回報事實、歧義、原因、選項與建議；
   所有使用者問題由 leader 統一提出。
 - Leader 先查 repo、task 與歷史，仍不清楚才問。釐清次數不受返工上限限制。
 - 技術問題有明確解法就留在原 task；需要新設計或新 task 時先問使用者，只有 QA
   發現 production bug 可依角色規則直接建 task。
-- 回答後優先讓原 agent／原 branch 接續；無法復用時開新的同角色 agent，仍不可並行。
+- 回答後優先讓原 agent／原 branch 接續；無法復用時由 leader 確認容量與原 claim 後，合法
+  接手原 task。不得因 session 失聯自行釋放 claim 或清除 dirty worktree。
 
 ### Agent 異常結束
 
 任務仍 `IN_PROGRESS` 但 agent 消失時，檢查 branch、diff、commit 與最後回報，保留
 成果並派新的同角色 agent 接續原 branch。自動接手最多一次；再次異常就標記
-`BLOCKED` 並詢問使用者。接手期間角色鎖仍占用。
+`BLOCKED` 並詢問使用者。接手期間該 `IN_PROGRESS` task 仍占 category 容量。
 
 ### 認領競爭
 
-把 contention 與 no-task 分開處理。競爭時重新盤點後再排，不把它當成 category 已清空。
+把 `CAPACITY_FULL`、CAS contention、無 TODO、前置阻擋分開處理。容量滿或 CAS contention 時重新盤點；不得將它們當成 category 已清空，也不得覆蓋原本「無待辦」或「等待前置」回覆。
 
 ## 7. OTHER
 
