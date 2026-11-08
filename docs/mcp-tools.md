@@ -15,7 +15,7 @@ next section; the leader handles planning and global queries.
 |---|---|
 | `create_project(name, description?)` | Create a project. Names are trimmed and deduplicated case-insensitively. |
 | `create_tasks(projectId, tasks[])` | Create 1–50 tasks. Titles are limited to 300 characters. Dependencies can use `dependsOnIndexes` or `dependsOnTaskIds`. |
-| `list_tasks(projectId?/projectName?, status?, category?, includeDescription?)` | Read tasks and progress. Provide either project ID or exact case-insensitive name. |
+| `list_tasks(projectId?/projectName?, status?, category?, includeDescription?)` | Read tasks and progress. Provide either project ID or exact case-insensitive name. Also returns all five worker-category capacity snapshots, unaffected by task filters. |
 | `list_roles(projectName?)` | List generic roles, with project overrides replacing roles of the same name. |
 | `get_role(name, projectName?)` | Return the project override when present, otherwise the generic role. |
 
@@ -23,7 +23,7 @@ next section; the leader handles planning and global queries.
 
 | Tool | Purpose |
 |---|---|
-| `claim_next_task(projectName, category, assignee)` | Atomically claim the first TODO task whose prerequisites are all DONE. |
+| `claim_next_task(projectName, category, assignee)` | Atomically claim the first TODO task whose prerequisites are all DONE, subject to category capacity. Assignee is leader-provided and limited to 60 characters. |
 | `block_task(taskId, claimToken?, reasonType, detail, blockingTaskIds?, expectedVersion?)` | Mark the worker's task BLOCKED with structured evidence. |
 | `complete_task(taskId, claimToken?, summary, verificationResults, changedFiles?, commitRef?, expectedVersion?)` | Complete an IN_PROGRESS or BLOCKED task with verification evidence. |
 | `update_task_status(taskId, status, note?, claimToken?)` | Compatibility status endpoint. Resume with IN_PROGRESS and release with TODO. Evidence-required tasks cannot use it to reach DONE. |
@@ -57,6 +57,34 @@ TODO --claim_next_task--> IN_PROGRESS --complete_task--> DONE
 
 Categories are `BACKEND`, `FRONTEND`, `TEST`, `INFRA`, `DOC`, and `OTHER`.
 Missing or unknown categories normalize to `OTHER`.
+
+## Worker capacity
+
+Capacity is per project and category. Configure shared defaults with
+`BOARD_CAPACITY_BACKEND` (3), `BOARD_CAPACITY_FRONTEND` (1),
+`BOARD_CAPACITY_TEST` (1), `BOARD_CAPACITY_INFRA` (1), and `BOARD_CAPACITY_DOC`
+(1). Values must be ASCII decimal integers from 1 through 2147483647 without
+leading zeroes. Empty or invalid values fail initialization. `OTHER` is handled
+by the leader and has no worker capacity.
+
+`list_tasks` includes a `capacities` array for BACKEND, FRONTEND, TEST, INFRA,
+and DOC regardless of status/category filters. Each snapshot has
+`{projectId, category, limit, inProgress, available, full}`. A successful
+`claim_next_task` returns a snapshot in `capacity`; `OTHER` returns `null`.
+Java MCP renders snapshots as text (`Snapshot[]` for `list_tasks`), while the
+Workers MCP response returns JSON. These are observations for leader scheduling;
+the claim/status writes perform the actual capacity guards.
+
+Claim outcomes distinguish `CAPACITY_FULL` (eligible TODO work exists but the
+category is full), `BLOCKED_BY_DEPENDENCY` (all remaining TODO candidates await
+prerequisites), `NO_TASK` (no TODO candidates), and `CONTENDED` (a candidate was
+lost during concurrent claims; re-read state before dispatching again). Claims
+retain compare-and-swap and retry at most three times. Capacity admission counts
+`IN_PROGRESS` tasks, including work awaiting integration and interrupted claims.
+`BLOCKED` does not consume a slot; resuming it to `IN_PROGRESS` and reopening a
+`DONE` task are guarded. Repeating the current status does not take another slot.
+Lowering a configured limit does not stop existing tasks. The server cannot
+reliably detect live sessions and does not reclaim abandoned claims.
 
 - A TODO task must be claimed before it can become IN_PROGRESS or BLOCKED.
 - Returning a task to TODO clears `assignee` and `claimed_at`.

@@ -19,9 +19,66 @@ tool boundaries, and a consistent integration workflow.
 `OTHER` has no dedicated worker and is handled by the leader when the scope and
 authorization are clear.
 
-Each worker claims one task in its category, commits the result, reports evidence
-to the leader, and stops. It does not mark the task done or claim another task.
-Only one live worker per category is allowed at a time.
+Each worker instance claims one task in its category, commits the result, reports
+evidence to the leader, and stops. It does not mark the task done or claim another
+task. Multiple instances of the same role may run concurrently when category
+capacity and platform session slots allow it. `OTHER` remains leader-owned and
+does not use a worker slot.
+
+## Capacity and configuration
+
+Capacity is counted independently for each project and worker category. The
+environment variables are shared by all projects using a server; they are not
+per-project settings:
+
+| Variable | Default |
+|---|---:|
+| `BOARD_CAPACITY_BACKEND` | 3 |
+| `BOARD_CAPACITY_FRONTEND` | 1 |
+| `BOARD_CAPACITY_TEST` | 1 |
+| `BOARD_CAPACITY_INFRA` | 1 |
+| `BOARD_CAPACITY_DOC` | 1 |
+
+Values must be ASCII decimal integers from 1 through 2147483647, with no leading
+zero. Empty values, signs, whitespace, decimals, and values outside that range
+are rejected at startup (Java) or when the Workers service is initialized. The
+Workers Wrangler configs carry the same defaults in `vars`.
+
+`IN_PROGRESS` tasks consume capacity, including work awaiting integration and
+claims left by an interrupted session. `BLOCKED` tasks release capacity; check
+the latest snapshot before resuming one. Reopening a `DONE` task is also guarded.
+Transitions that leave a task in its current state do not count as new work.
+Lowering a limit does not stop existing work, but the leader must pause new
+dispatch while the category is over capacity. The board has no reliable session
+liveness signal and never reclaims or reassigns an abandoned claim automatically.
+
+The platform's total live-session limit includes the leader. For example, if the
+current platform allows four sessions total, keep at most three worker sessions;
+this is an example, not a universal platform limit. Do not start idle sessions to
+fill the quota. Account for prerequisites, file/resource conflicts, existing
+claims, and leader-side reservations; do not count a reserved task again after it
+has been claimed. If capacity is one, use the usual sequential dispatch.
+
+### Three Claude Code Backend workers
+
+For a platform that can run the leader plus three workers, the leader can use
+three `backend-dev` Claude Code instances. Each instance receives a distinct
+assignee (for example, `backend-t12-a`, `backend-t12-b`, `backend-t12-c`, each no
+longer than 60 characters) and one expected task ID. The leader briefly
+serializes the claim handshake within BACKEND: select an eligible, unreserved
+task; start its worker in that task's worktree; wait for the actual claimed
+task ID; then assign the next distinct candidate. Each worker still calls
+`claim_next_task` itself. If the returned ID differs from the expected ID, it
+stops before editing and reports the mismatch so the leader can re-plan.
+
+Create each `task/<task-id>-backend-dev` branch/worktree from the latest `dev`.
+Give every worker its own worktree and task/instance-specific development port,
+database, log, and PID. Never share a mutable worktree or local database. Check
+prerequisites and obvious file/resource conflicts first; fewer than three
+workers is correct when fewer independent tasks are ready. Codex workers follow
+the same role, capacity, serialized claim, task-ID, and isolation rules. The
+claim result's task `capacity` is a snapshot for the leader, not a session
+reservation or caller identity.
 
 ## Dispatch workflow
 
@@ -30,7 +87,7 @@ planning session
   create project and dependency-aware tasks
 
 implementation session
-  leader records the batch and starts one eligible task per idle role
+  leader reads capacity snapshots and dispatches eligible, unreserved tasks
   worker claims, implements, verifies, commits, and reports
   leader validates the report and merges task branch into dev
   leader marks the task DONE only after the merge succeeds
@@ -42,7 +99,8 @@ review
 ```
 
 Scheduling is event-driven. When a worker exits or a task changes state, the
-leader fills any newly idle role without waiting for the rest of the batch.
+leader rechecks prerequisites and capacity and dispatches eligible work without
+waiting for the rest of the batch.
 
 ## Git model
 
@@ -112,6 +170,17 @@ the board because `get_role` reads them at task start.
 A project-specific role is a complete instruction document, not a patch applied
 to the generic role. Updating a role through `upsert_role` requires explicit
 leader authorization. Changes take effect on the next `get_role` call.
+
+### Updating an existing role
+
+Changing `RoleSeeder` only affects a role that does not already exist in that
+database. Before upgrading a customized role, the leader reads the current
+generic and project-specific instructions with `get_role`/`list_roles`, compares
+them with the proposed complete replacement, and preserves intentional local
+differences. The leader may call `upsert_role` only after the user explicitly
+authorizes that update in the current conversation. Updating the source seeder
+does not update an online database; this documentation does not perform an
+online role update.
 
 ## Worker tool boundary
 

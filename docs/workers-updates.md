@@ -18,6 +18,13 @@ Cloudflare 不會因為 Git commit 或 push 就自動更新。這個 repo 尚未
 | Workers 後端 | 測試後發布 web 與 MCP；兩者共用後端程式碼，避免版本不同 |
 | skill、agent 薄殼或本機客戶端設定 | 依 plugin 安裝/更新流程處理，發布 Worker 不會自動更新客戶端 |
 
+容量功能上線時，先發布並驗收包含容量驗證與 snapshot 的 MCP backend，再更新
+leader/client 指引及排程器；web Worker 可依本次靜態檔變更一併更新。Java/H2 與
+Workers/D1 的 `BOARD_CAPACITY_*` 預設及驗證規則應保持一致。舊版 Workers 尚未回傳
+capacity snapshot 是預期狀態；升級前 leader 不可依新版文件假設可同時派出三個
+Backend worker，應先完成 backend 升級並確認 `list_tasks` 回傳容量資料。本文件只描述
+升級順序，不代表此批程式已部署或正式角色已更新。
+
 這是維持免費方案的代價：Java 與 Workers 有兩份後端。現有整合測試會比對 Java
 工具名稱與 Workers 工具名稱，但不能自動證明所有新業務語意都已移植；每次後端
 改動都必須明確確認雙方的功能、輸入 schema、DTO、相依與認領規則一致。

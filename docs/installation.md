@@ -46,6 +46,16 @@ cd AIProjectDashboard
 
 Open <http://127.0.0.1:8080> when the launcher reports readiness.
 
+Worker capacity is configured on the server with `BOARD_CAPACITY_BACKEND`
+(default `3`) and `BOARD_CAPACITY_FRONTEND`, `BOARD_CAPACITY_TEST`,
+`BOARD_CAPACITY_INFRA`, `BOARD_CAPACITY_DOC` (default `1` each). For example,
+set the environment variable before starting `bin/board`; in PowerShell use
+`$env:BOARD_CAPACITY_BACKEND = "2"` before `.\bin\board.ps1 start`. Values must be
+ASCII decimal integers from 1 to 2147483647, without a leading zero; invalid or
+empty values prevent startup. The same settings apply across projects, while
+each project's usage is counted separately. See [Agent roles](agent-roles.md)
+for dispatch behavior and capacity limits.
+
 Useful lifecycle commands:
 
 | Action | macOS/Linux | Windows |

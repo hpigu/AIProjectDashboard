@@ -31,6 +31,8 @@ AI Project Board 透過本機 MCP server 管理這個協作流程。Agent 原子
 - **強制任務相依**：前置未完成的任務不會被發放，其他無相依工作仍可繼續。
 - **完成證據**：任務可保留驗證結果、變更檔案與 commit reference。
 - **跨 session 進度**：Claude Code 與 Codex 可對不同專案與角色共用同一看板。
+- **可設定 Worker 容量**：每個專案的 BACKEND 預設可同時執行 3 件，其餘 Worker
+  分類預設各 1 件，由 leader 協調認領並遵守平台 session 上限。
 - **本機優先**：預設只監聽 `127.0.0.1`，資料存在本機 H2，前端不依賴 CDN。
 - **可追溯歷史**：認領、阻塞、狀態變更與完成證據都會顯示在任務詳情。
 
@@ -121,7 +123,9 @@ url = "http://127.0.0.1:8080/mcp"
 認領「結帳穩定性」的任務，開始可執行的工作。
 ```
 
-看板會透過 SSE 即時更新，不需重新整理。
+看板會透過 SSE 即時更新，不需重新整理。Leader 可依各專案分類容量派發可執行
+任務，再透過 `dev` 整合並於批次完成後安排 reviewer。容量設定與三個 Claude Code
+Backend Worker 的範例見[角色與派工](docs/agent-roles.md)。
 
 ## 介面
 
@@ -162,6 +166,8 @@ Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
 ## 已知限制
 
 - 只支援單機，沒有帳號、跨裝置同步或經驗證的雲端部署路徑。
+- 容量限制的是每個專案與分類中 `IN_PROGRESS` 任務數；系統無法偵測 session 是否存活，
+  不會自動回收失聯認領。調低上限不會中止既有工作。
 - macOS／Linux release 需 JDK 21；只有 Windows x64 ZIP 內含 Java runtime。
 - MCP 工具說明、角色指引、CLI 輸出與多數錯誤訊息仍以繁體中文為主。
 - Codex 與 Claude Desktop 的 plugin 頁面更新流程已驗證；桌面版全新圖形安裝仍待

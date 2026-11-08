@@ -147,6 +147,43 @@ npm test
 npm run build:local
 ```
 
+### 建立全新本機 D1 與使用新版角色指引
+
+一般的 `npm run db:migrate:local` 保留既有角色，不會覆寫 role。若要建立一份
+隔離、全新的本機資料供新版 `fresh-role-seed.sql` 初始化，使用已安裝的 Node 22+
+與 Wrangler 依賴：
+
+```bash
+cd workers
+npm ci --ignore-scripts
+node scripts/init-local.mjs /absolute/path/to/board-local-fresh
+```
+
+目的路徑必須是尚不存在的絕對路徑；已有路徑（即使是空目錄）會被拒絕，且此命令
+僅執行 `--local` migrations 與角色 seed。完成後命令會印出例如
+`Fresh local D1 state: /absolute/path/to/board-local-fresh/state/d1-state`。此初始化
+位置不同於一般 runner 固定使用的 `workers/.wrangler/state`，所以啟動服務時必須
+明確傳入剛印出的 state 路徑。分別開兩個 terminal，從 `workers/` 執行：
+
+```bash
+node node_modules/wrangler/bin/wrangler.js dev --local --ip 127.0.0.1 --port 18787 \
+  --persist-to /absolute/path/to/board-local-fresh/state/d1-state \
+  --config wrangler.jsonc --env ''
+```
+
+```bash
+node node_modules/wrangler/bin/wrangler.js dev --local --ip 127.0.0.1 --port 18788 \
+  --persist-to /absolute/path/to/board-local-fresh/state/d1-state \
+  --config wrangler.mcp.jsonc --env ''
+```
+
+MCP URL 為 `http://127.0.0.1:18788/mcp`；唯讀 web 使用 `http://127.0.0.1:18787`。
+若之後對這份新 state 執行其他本機 D1 migration/資料修改命令，也必須同樣加上
+`--local --persist-to /absolute/path/to/board-local-fresh/state/d1-state`。不要對既有
+或正式 D1 使用 fresh-only 初始化腳本。Wrangler 要求在使用自訂本機資料目錄時，
+對應的本機資料修改命令也指定相同 `--persist-to` 路徑；詳見 Cloudflare 的
+[本機資料持久化說明](https://developers.cloudflare.com/workers/local-development/local-data/)。
+
 `db:migrate:local` 明確帶 `--local`；`build:local` 只呼叫
 `wrangler deploy --dry-run --outdir ...`，不會發布。runner 會清除程序環境中的
 Cloudflare 管理憑證與關閉 Wrangler metrics，不讀取雲端 DB。設定中的 `remote:false`
@@ -160,8 +197,9 @@ npm run dev:mcp
 ```
 
 兩者明確使用 `--local --ip 127.0.0.1`、18787/18788 與同一個
-`workers/.wrangler/state`。D1 migration、dev 與資料檢查都要使用相同 persist path，
-不然會誤接空白資料庫。`workers/.wrangler`、`node_modules`、`.dev.vars*` 均被忽略。
+`workers/.wrangler/state`。若使用 fresh-only 初始化，改依上方命令明確指定新 state。
+D1 migration、dev 與資料檢查都要使用相同 persist path，不然會誤接空白資料庫。
+`workers/.wrangler`、`node_modules`、`.dev.vars*` 均被忽略。
 沒有使用正式 8080、H2、主工作區 target 或正式程序。
 [本機 D1](https://developers.cloudflare.com/d1/best-practices/local-development/)、
 [local persistence](https://developers.cloudflare.com/workers/local-development/local-data/)
@@ -174,7 +212,10 @@ Cloudflare 金鑰。Miniflare 重建後使用同一個資料目錄驗證持久�
 
 | 檢查 | 結果 |
 |---|---|
-| Workers 測試套件 | 29 項通過，涵蓋 16 工具、安全邊界、版本衝突、相依、claim token 與完成證據 |
+| Java | 最終版本 351 項測試通過；隔離 worktree 的 clean package 通過 |
+| Workers 測試套件 | 最終版本 59 項全數通過，含容量、任務狀態恢復競爭與 fresh-only CLI 檢查 |
+| 前端瀏覽器回歸 | Chrome 10/10；使用 mock GET/EventSource，未驗證真實 SSE 或並行 claim |
+| 排程回歸 | Node regression 5/5；涵蓋排程 model 與真實 Git fixture，未執行 Claude/Codex client |
 | 真正 workerd + MCP SDK | 連線協商、讀寫、併發單贏、50 筆批次、D1 失敗整批回滾均通過 |
 | 登入與即時更新 | 真 RSA JWT、錯 owner/audience/到期拒絕、靜態檔保護及跨 Worker SSE 通過 |
 | 持久化與還原 | runtime 重啟保留狀態；官方 Wrangler schema/data 匯出後在另一個 D1 還原通過 |
@@ -183,7 +224,9 @@ Cloudflare 金鑰。Miniflare 重建後使用同一個資料目錄驗證持久�
 最後修正本機持久化與原生匯出路徑後，另重跑實際 runtime/還原相關 7 項均通過。
 所有測試僅使用 loopback 與隔離資料，未操作正式 H2、8080 或主工作區 target。
 Cloudflare 真實 Access 登入、各裝置 Codex/Claude、workers.dev BIC、Free CPU 與
-額度、遠端 Time Travel/還原仍是部署後的必要驗收，不把本機結果當成已上線。
+額度、遠端 Time Travel/還原仍是部署後的必要驗收。這批程式尚未部署到正式
+`board_cloud`，也未更新線上角色或執行遠端 migration；既有正式環境尚無容量功能是
+預期狀態，這些本機驗證不能當成正式環境已支援三個 Backend worker 的證據。
 
 ## 免費額度與已知限制
 
