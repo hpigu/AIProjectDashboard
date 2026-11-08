@@ -1,3 +1,4 @@
+import { workerCapacity, capacitySnapshot } from "./capacity.js";
 /** Domain service for D1. No HTTP/MCP types or credentials cross this boundary.
  * Every writer fences all reads with a database revision. A failed CHECK in a
  * D1 batch rolls back mutations, audit records and the outbox together. This is
@@ -91,8 +92,9 @@ function constantEqual(a, b) {
   return diff === 0;
 }
 class BoardService {
-  constructor(db) {
+  constructor(db, limits = workerCapacity({})) {
     this.db = db;
+    this.limits = limits;
   }
   stmt(sql, ...params) {
     return this.db.prepare(sql).bind(...params);
@@ -107,7 +109,7 @@ class BoardService {
     check(ACTIONS.has(action), "不支援的工具");
     check(args && typeof args === "object" && !Array.isArray(args), "arguments 必須是物件");
     /** Request-scoped context: a shared BoardService may have concurrent callers. */
-    const context = new BoardService(this.db);
+    const context = new BoardService(this.db, this.limits);
     if (!READ_ACTIONS.has(action)) context.revision = (await this.first("SELECT revision FROM board_revision WHERE id=1")).revision;
     return context[action](args);
   }
@@ -203,6 +205,10 @@ class BoardService {
       403
     );
   }
+  capacity(projectId, category, tasks) {
+    if (category === "OTHER") return null;
+    return capacitySnapshot(this.limits, projectId, category, tasks.filter(t => t.category === category && t.status === "IN_PROGRESS").length);
+  }
   async tasks(projectId) {
     return this.all("SELECT * FROM task WHERE project_id=? ORDER BY sort_order,id", projectId);
   }
@@ -295,7 +301,7 @@ class BoardService {
     const waiting = await this.waiting(p.id);
     return { projectFound: true, project: projectDto(p), tasks: tasks.map((t) => ({ ...taskDto(t), waitingFor: waiting.get(
       t.id
-    ) ?? [] })), doneCount: allTasks.filter((t) => t.status === "DONE").length, totalCount: allTasks.length };
+    ) ?? [] })), doneCount: allTasks.filter((t) => t.status === "DONE").length, totalCount: allTasks.length, capacities: CATEGORIES.filter(c => c !== "OTHER").map(c => this.capacity(p.id, c, allTasks)) };
   }
   async waiting(projectId) {
     const rows = await this.all("SELECT d.task_id,t.* FROM task_dependency d JOIN task t ON t.id=d.depends_on_task_id WHERE t.project_id=? AND t.status<>'DONE' ORDER BY t.sort_order,t.id", projectId);
@@ -312,9 +318,10 @@ class BoardService {
       const p2 = await this.namedProject(a.projectName, false);
       if (!p2) return this.missingProject();
       this.active(p2);
-      const candidates = (await this.tasks(p2.id)).filter((t) => t.category === category && t.status === "TODO");
+      const allTasks = await this.tasks(p2.id), capacity = this.capacity(p2.id, category, allTasks);
+      const candidates = allTasks.filter((t) => t.category === category && t.status === "TODO");
       const waiting2 = await this.waiting(p2.id), candidate = candidates.find((t) => !waiting2.has(t.id));
-      if (!candidates.length) return { projectFound: true, project: projectDto(p2), category, outcome: contended ? "CONTENDED" : "NO_TASK", claimed: false, contended };
+      if (!candidates.length) return { projectFound: true, project: projectDto(p2), category, outcome: contended ? "CONTENDED" : "NO_TASK", claimed: false, contended, capacity };
       if (!candidate) return {
         projectFound: true,
         project: projectDto(p2),
@@ -322,10 +329,12 @@ class BoardService {
         outcome: "BLOCKED_BY_DEPENDENCY",
         claimed: false,
         blockedByDependency: true,
+        capacity,
         blockedCandidates: candidates.map((t) => ({ task: taskDto(t), waitingFor: waiting2.get(
           t.id
         ) }))
       };
+      if (capacity?.full) return { projectFound: true, project: projectDto(p2), category, outcome: "CAPACITY_FULL", claimed: false, capacity };
       const token = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join(
         ""
       );
@@ -340,19 +349,18 @@ class BoardService {
         ]);
         return { projectFound: true, project: projectDto(p2), category, outcome: "CLAIMED", claimed: true, task: taskDto(
           { ...candidate, status: "IN_PROGRESS", assignee, claimed_at: at }
-        ), claimToken: token };
+        ), claimToken: token, capacity: capacity ? capacitySnapshot(this.limits, p2.id, category, capacity.inProgress + 1) : null };
       } catch (e) {
         if (e.code !== "CONFLICT") throw e;
         contended = true;
       }
     }
-    const p = await this.namedProject(a.projectName), waiting = await this.waiting(p.id), remaining = (await this.tasks(
-      p.id
-    )).filter((t) => t.status === "TODO" && t.category === category);
-    if (remaining.length && remaining.every((t) => waiting.has(t.id))) return { projectFound: true, category, outcome: "BLOCKED_BY_DEPENDENCY", claimed: false, blockedByDependency: true, blockedCandidates: remaining.map((t) => ({ task: taskDto(
+    const p = await this.namedProject(a.projectName), waiting = await this.waiting(p.id), allTasks = await this.tasks(p.id), capacity = this.capacity(p.id, category, allTasks), remaining = allTasks.filter((t) => t.status === "TODO" && t.category === category);
+    if (remaining.length && remaining.every((t) => waiting.has(t.id))) return { projectFound: true, category, outcome: "BLOCKED_BY_DEPENDENCY", claimed: false, blockedByDependency: true, capacity, blockedCandidates: remaining.map((t) => ({ task: taskDto(
       t
     ), waitingFor: waiting.get(t.id) })) };
-    return { projectFound: true, category, outcome: "CONTENDED", claimed: false, contended: true };
+    if (remaining.length && capacity?.full) return { projectFound: true, category, outcome: "CAPACITY_FULL", claimed: false, capacity };
+    return { projectFound: true, category, outcome: "CONTENDED", claimed: false, contended: true, capacity };
   }
   async transition(t, to, note, extra = [], blockId = null) {
     const at = now(), clearClaim = to === "TODO", clearHash = clearClaim || to === "DONE";
@@ -370,12 +378,27 @@ class BoardService {
     const to = enumeration(a.status, STATUSES, "status"), t = await this.editableTask(a);
     const transitions = { TODO: ["IN_PROGRESS", "BLOCKED"], IN_PROGRESS: ["DONE", "BLOCKED"], BLOCKED: ["IN_PROGRESS", "TODO"], DONE: ["IN_PROGRESS"] };
     check(t.status === to || transitions[t.status].includes(to), "不合法的狀態轉移");
-    check(!(to === "DONE" && t.require_evidence), "要求完成證據，請改用 complete_task");
+    check(!(to === "DONE" && t.status !== "DONE" && t.require_evidence), "要求完成證據，請改用 complete_task");
     check(to !== "IN_PROGRESS" || t.assignee != null && t.claimed_at != null, "尚未認領，請使用 claim_next_task");
     check(!(t.status === "TODO" && to === "BLOCKED" && !t.assignee), "未認領的 TODO 不能標記 BLOCKED");
+    if (t.status === "DONE" && to === "DONE" && typeof a.claimToken === "string" && a.claimToken.trim()) {
+      throw new BoardError("claim token 已失效", 403);
+    }
     if (["IN_PROGRESS", "BLOCKED"].includes(t.status)) await this.ownership(t, a.claimToken);
     if (t.status === to) return { task: taskDto(t), from: t.status, to, changed: false };
-    return this.transition(t, to, optional(a.note, "note"));
+    if (to === "IN_PROGRESS") {
+      const capacity = this.capacity(t.project_id, t.category, await this.tasks(t.project_id));
+      if (capacity?.full) throw new BoardError("此分類工作容量已滿", 409, "CAPACITY_FULL");
+    }
+    try {
+      return await this.transition(t, to, optional(a.note, "note"));
+    } catch (error) {
+      if (error.code === "CONFLICT" && to === "IN_PROGRESS") {
+        const capacity = this.capacity(t.project_id, t.category, await this.tasks(t.project_id));
+        if (capacity?.full) throw new BoardError("此分類工作容量已滿", 409, "CAPACITY_FULL");
+      }
+      throw error;
+    }
   }
   async reset_task_claim(a) {
     const t = await this.editableTask(a);
@@ -428,6 +451,9 @@ class BoardService {
   async complete_task(a) {
     const t = await this.editableTask(a);
     check(["IN_PROGRESS", "BLOCKED", "DONE"].includes(t.status), "未認領任務不能完成");
+    if (t.status === "DONE" && typeof a.claimToken === "string" && a.claimToken.trim()) {
+      throw new BoardError("claim token 已失效", 403);
+    }
     await this.ownership(t, a.claimToken);
     const summary = required(a.summary, "summary"), verifications = array(a.verificationResults, "verificationResults");
     check(verifications.length, "必須附上至少一筆 verificationResults");

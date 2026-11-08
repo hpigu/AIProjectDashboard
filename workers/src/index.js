@@ -1,6 +1,7 @@
 import { authenticate as defaultAuthenticate, AuthError } from './auth.js';
 import { handleMcp } from './mcp.js';
 import { BoardService } from './service.js';
+import { workerCapacity } from './capacity.js';
 
 const securityHeaders = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
@@ -70,7 +71,7 @@ export async function eventStream(request, service, { pollMs = 5000, heartbeatMs
   return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
 }
 
-export function createHandler({ serviceFactory = env => new BoardService(env.DB), authenticate = defaultAuthenticate, streamOptions } = {}) {
+export function createHandler({ serviceFactory = env => new BoardService(env.DB, workerCapacity(env)), authenticate = defaultAuthenticate, streamOptions } = {}) {
   return async function fetch(request, env, context) {
     let response;
     try {

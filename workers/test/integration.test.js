@@ -188,6 +188,33 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       assert.equal(serializedLogs.includes(claimToken), false);
     });
 
+    await t.test('capacity admission is atomic across concurrent D1 requests and lifecycle transitions', async () => {
+      const call = async (client, name, args) => domain(await client.callTool({ name, arguments: args }));
+      const p = (await call(first, 'create_project', { name: 'Capacity test' })).project.id;
+      await call(first, 'create_tasks', { projectId: p, tasks: [1, 2].map(i => ({ title: `frontend ${i}`, description: '', category: 'FRONTEND', dependsOnIndexes: [], dependsOnTaskIds: [] })) });
+      const claimArgs = { projectName: 'Capacity test', category: 'FRONTEND', assignee: 'worker' };
+      const claims = await Promise.all([first, second].map(c => call(c, 'claim_next_task', claimArgs)));
+      assert.deepEqual(claims.map(c => c.outcome).sort(), ['CAPACITY_FULL', 'CLAIMED']);
+      const owner = claims.find(c => c.claimed);
+      assert.equal(owner.capacity.inProgress, 1);
+      const listed = await call(first, 'list_tasks', { projectId: p, status: 'TODO', category: 'BACKEND' });
+      assert.equal(listed.tasks.length, 0);
+      assert.equal(listed.capacities.find(c => c.category === 'FRONTEND').inProgress, 1);
+      await call(first, 'block_task', { taskId: owner.task.id, claimToken: owner.claimToken, reasonType: 'TECHNICAL', detail: 'wait' });
+      const next = await call(second, 'claim_next_task', claimArgs);
+      assert.equal(next.outcome, 'CLAIMED');
+      const resume = await first.callTool({ name: 'update_task_status', arguments: { taskId: owner.task.id, status: 'IN_PROGRESS', claimToken: owner.claimToken } });
+      assert.equal(resume.isError, true);
+      assert.equal(JSON.parse(resume.content[0].text).code, 'CAPACITY_FULL');
+      await call(second, 'complete_task', { taskId: next.task.id, claimToken: next.claimToken, summary: 'done', verificationResults: [{ name: 'test', result: 'PASSED', detail: '' }] });
+      await call(first, 'update_task_status', { taskId: owner.task.id, status: 'IN_PROGRESS', claimToken: owner.claimToken });
+      const reopen = await second.callTool({ name: 'update_task_status', arguments: { taskId: next.task.id, status: 'IN_PROGRESS' } });
+      assert.equal(JSON.parse(reopen.content[0].text).code, 'CAPACITY_FULL');
+      const other = (await call(first, 'create_project', { name: 'Capacity other project' })).project.id;
+      await call(first, 'create_tasks', { projectId: other, tasks: [{ title: 'independent', description: '', category: 'FRONTEND', dependsOnIndexes: [], dependsOnTaskIds: [] }] });
+      assert.equal((await call(first, 'claim_next_task', { ...claimArgs, projectName: 'Capacity other project' })).outcome, 'CLAIMED');
+    });
+
     await t.test('authenticated browser DTOs and cross-worker committed SSE events', async () => {
       const boardResponse = await browser(`/api/projects/${projectId}/board`);
       assert.equal(boardResponse.status, 200);
@@ -246,7 +273,7 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       const restored = await db.prepare('SELECT id,status,assignee,claim_token_hash FROM task ORDER BY id').all();
       assert.deepEqual(restored.results, snapshot.results);
       assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM task_dependency').first()).n, 1);
-      assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM task_completion_evidence').first()).n, 1);
+      assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM task_completion_evidence WHERE task_id=?').bind(claimedTask).first()).n, 1);
       const client = await connect();
       domain(await client.callTool({ name: 'claim_next_task', arguments: {
         projectName: 'Workers integration', category: 'BACKEND', assignee: 'after-restart'
