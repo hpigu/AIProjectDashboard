@@ -49,17 +49,34 @@ TODO 的 assignee/claimed_at 必為 NULL，IN_PROGRESS 必有認領者，BLOCKED
 
 ## 分派模式
 
-主 session 擔任 leader，使用事件驅動排程而非同步波次。BACKEND、FRONTEND、TEST、
-INFRA、DOC 各有一把 live-agent 鎖：同角色同時最多一個 agent，每個 agent 只認領
-一件，完成提交與驗證後保持 IN_PROGRESS、回報 leader 並結束，不自行標 DONE 或
-認領下一件。
+主 session 是唯一 leader，依事件驅動排程，不用同步波次。容量單位是同專案同 category；
+以 `list_tasks` 的 `capacities` 與每次 claim 回傳的 `capacity` 快照為準。預設
+BACKEND=3、FRONTEND/TEST/INFRA/DOC 各 1；`OTHER` 是 leader 自行處理的類別，不占 worker
+槽。各專案分開計算容量，但共用環境變數設定。Java MCP 在文字結果附 `Snapshot[]`，
+Workers 回傳 JSON。快照欄位為 `{projectId, category, limit, inProgress, available, full}`；
+容量清單不受任務清單篩選影響。
 
-每筆任務從長期 `dev` 建立獨立 `task/<task-id>-<role>` branch/worktree。Leader
-表面驗收通過後以 `--no-ff` 合併 task branch 到 `dev`，成功後才將任務標 DONE；
-相依任務此時才解鎖。任一 agent 結束就重新盤點並填滿空閒角色，不等待其他角色。
-整個 batch 全部完成且無 unresolved BLOCKED 後，既有 reviewer 唯讀審查完整
-`main...dev`；reviewer 只回報，是否建立修正 task 由 leader 決定。Reviewer 無必修
-後才由 leader 以 `--no-ff` 合併 `dev` 到 `main`，不自動 push、部署或重啟服務。
+leader 將啟動預留與已認領 task 合併計算，避免同 task 重複計數，總和不得超過 category
+上限。平台總 session slots 包含 leader，依當前平台實際容量保留 leader 槽；例如總量為 4
+時最多三個 live worker，不將此數字推廣成所有環境的固定上限。先看相依與明顯檔案／資源
+衝突，不為湊滿上限啟動閒置 session。同角色可以同時有多個 worker instance；每個沿用同一
+roleName，由 leader 派發不超過 60 字的唯一 assignee（例如 `backend-t6-a`），每個只認領
+一件並於提交、驗證後保持 IN_PROGRESS、回報 leader 結束。leader 對同 category 的 claim
+握手短暫序列化：各可用槽依序挑第一筆尚未預留或認領的 eligible task；每次等前一 worker
+回報實際 taskId，再派不同候選；worker 仍自行呼叫
+`claim_next_task`。認領回來的 taskId 與預期不符時，worker 停止修改，leader 重新盤點並
+指派正確 task worktree。容量為 1 時沿用循序派工。
+
+每筆任務從最新 `dev` 建立獨立 `task/<task-id>-<role>` branch/worktree；開發埠、DB、log
+使用 task 或 instance 唯一標記，不能只用角色名。所有 `IN_PROGRESS` task（包括待整合、
+失聯）都占 category 容量；`BLOCKED` 不占，恢復前先確認容量。降低上限不會強停既有任務，
+超限時暫停新增派工。沒有可信的 session 存活偵測，不自動釋放失聯 claim；合法接手沿用
+原 task/branch/worktree，且該槽持續占用。dirty worktree 保留，不因異常或交接清理。
+Leader 表面驗收通過後以 `--no-ff` 合併 task branch 到 `dev`，成功後才將任務標 DONE；
+相依任務此時才解鎖。任一 agent 結束就重新盤點空閒槽，不等待其他角色。整個 batch 全部
+完成且無 unresolved BLOCKED 後，既有 reviewer 唯讀審查完整 `main...dev`；reviewer 只回報，
+是否建立修正 task 由 leader 決定。Reviewer 無必修後才由 leader 以 `--no-ff` 合併 `dev`
+到 `main`，不自動 push、部署或重啟服務。
 
 ## MCP 工具治理與授權
 
@@ -105,11 +122,11 @@ jar 在主工作區 `target/`。**任何 agent 都不得佔用或寫入這四者
 啟動應用或跑整合測試時一律帶入：
 
 ```bash
-BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-<role>' \
-BOARD_LOG_FILE='./logs/dev-<role>.log' ./mvnw test
+BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-<task-or-instance>' \
+BOARD_LOG_FILE='./logs/dev-<task-or-instance>.log' ./mvnw test
 ```
 
-`<role>` 用自己的角色名（backend/qa/infra…），避免多個 agent 互相覆蓋。
+`<task-or-instance>` 使用 task id 或 instance 唯一標記，不能只用角色名，避免同角色 worker 互相覆蓋。
 `./mvnw test` 會啟動 Spring context 與併發測試，即使不重啟正式看板也會寫入資料庫，
 因此這條規則沒有例外。
 
@@ -124,9 +141,9 @@ BOARD_LOG_FILE='./logs/dev-<role>.log' ./mvnw test
 - 啟動當下就記下確切 PID，之後只用這個 PID 收尾：
 
   ```bash
-  BOARD_PORT=8091 ./mvnw ... & echo $! > /tmp/<role>.pid
+  BOARD_PORT=8091 ./mvnw ... & echo $! > /tmp/<task-or-instance>.pid
   # 清理時
-  kill "$(cat /tmp/<role>.pid)"
+  kill "$(cat /tmp/<task-or-instance>.pid)"
   ```
 
 - 或不確定 PID 時，用自己實際綁定的埠號反查，絕不用行程名稱：

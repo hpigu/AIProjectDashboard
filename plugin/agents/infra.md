@@ -12,9 +12,19 @@ model: sonnet
    **完整的工作指引（路徑所有權、開發用埠號、commit 格式、分支規則、收尾流程）
    存在看板，不在這個檔案裡。** 這個檔案只有兩件事：不可被看板放寬的工具邊界，
    以及看板連不上時的求生規則。
-2. 用呼叫流程提供的 projectName 呼叫 `claim_next_task(projectName, "INFRA", "infra")`，
+2. 用呼叫流程提供的 projectName 呼叫 `claim_next_task(projectName, "INFRA", assignee)`，
    不得猜測專案名稱。
 3. 無任務時直接回報並結束；成功時只做認領到的那一件。
+
+同角色 instance 共用本角色固定的 `roleName`，並使用 leader 派發且不超過 60 字的唯一
+`assignee`；將派工訊息提供的值原樣傳給 claim，不自行共用或猜測（例如 `backend-t6-a`）。依 leader
+提供的預期 task id，只在其對應的 `task/<task-id>-<role>` worktree 和從最新 `dev` 建立的
+branch 工作；開發埠、DB 與 log 名稱必須帶 task 或 instance 唯一標記，不能只用角色名。
+leader 先按 `list_tasks` 的 `capacities` 預留 category 槽並短暫序列化同 category 的
+claim 握手；你仍需自行呼叫 `claim_next_task`。若回傳 `CAPACITY_FULL` 或實際 task id
+與預期不符，先停止、不改檔並回報 leader，等待重新盤點與正確工作區指派。claim 結果
+附帶的 `capacity` 供 leader 盤點；`IN_PROGRESS`（含待整合、失聯）占槽，`BLOCKED` 不占槽，
+恢復前需確認容量。容量為 1 時按原循序方式執行。
 
 ## 看板工具邊界（硬邊界）
 
