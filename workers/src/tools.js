@@ -8,8 +8,8 @@ const verification = object({ name: string, result: { type: 'string', enum: ['PA
 const specs = [
   ['create_project', '建立專案；既有完整名稱會沿用。', { name: string, description: string }, ['name']],
   ['create_tasks', '批次建立任務與前置相依，序號從 1 開始且前置須先建立。', { projectId: id, tasks: { type: 'array', minItems: 1, maxItems: 50, items: task } }, ['projectId', 'tasks']],
-  ['list_tasks', '依專案名稱或 ID 查任務、認領與前置狀態。', { projectId: id, projectName: string, status: string, category: string, includeDescription: { type: 'boolean' } }],
-  ['claim_next_task', '原子認領可執行 TODO；跳過未完成前置。claimToken 僅回傳一次，不得記錄或外流。', { projectName: string, category: string, assignee: string }, ['projectName', 'category', 'assignee']],
+  ['list_tasks', '依專案名稱或 ID 查任務、認領與前置狀態，並回傳各分類容量。', { projectId: id, projectName: string, status: string, category: string, includeDescription: { type: 'boolean' } }],
+  ['claim_next_task', '原子認領可執行 TODO；跳過未完成前置，容量已滿回傳 CAPACITY_FULL。claimToken 僅回傳一次，不得記錄或外流。', { projectName: string, category: string, assignee: string }, ['projectName', 'category', 'assignee']],
   ['update_task_status', '更新自己的認領狀態。持有 token 才能操作；歸還 TODO 清除認領。', { taskId: id, status: string, note: string, claimToken: string }, ['taskId', 'status']],
   ['reset_task_claim', 'leader 確認 worker 遺失 token 後復原為 TODO；worker 不得使用。', { taskId: id, note: string }, ['taskId']],
   ['block_task', '記錄結構化阻塞；DEPENDENCY 需同專案 blockingTaskIds，持有認領 token 才能操作。', { taskId: id, claimToken: string, reasonType: { type: 'string', enum: ['DEPENDENCY', 'USER_INPUT', 'TECHNICAL', 'ENVIRONMENT', 'EXTERNAL', 'OTHER'] }, detail: string, blockingTaskIds: ids, expectedVersion: integer }, ['taskId', 'reasonType', 'detail']],

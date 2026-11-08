@@ -70,7 +70,11 @@ export async function handleMcp(request, service, { maintenance = false } = {}) 
         const value = await service.execute(tool.name, args);
         result = { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value ?? null) }] };
         if (value && typeof value === 'object' && !Array.isArray(value) && version === '2025-06-18') result.structuredContent = value;
-      } catch {
+      } catch (error) {
+        if (error.name === 'BoardError' && error.code === 'CAPACITY_FULL') {
+          result = { isError: true, content: [{ type: 'text', text: JSON.stringify({ code: error.code, status: error.status, message: '此分類工作容量已滿' }) }] };
+          break;
+        }
         // Domain errors must never reflect arbitrary arguments, claim tokens, or SQL.
         result = { isError: true, content: [{ type: 'text', text: 'Operation rejected; check task state, version, dependencies, and claim credentials.' }] };
       }

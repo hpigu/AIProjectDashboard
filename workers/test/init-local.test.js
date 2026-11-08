@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const exec = promisify(execFile);
+const root = fileURLToPath(new URL('../', import.meta.url));
+const init = join(root, 'scripts/init-local.mjs');
+const cli = join(root, 'node_modules/wrangler/bin/wrangler.js');
+test('fresh-only local initialization preserves migrations and refuses existing paths', { timeout: 90000 }, async t => {
+  const tmp = await mkdtemp(join(tmpdir(), 'board-init-test-'));
+  t.after(() => rm(tmp, { recursive: true, force: true }));
+  const env = { ...process.env, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG_PATH: join(tmp, 'logs') };
+  for (const k of Object.keys(env)) if (k.startsWith('CLOUDFLARE_') || ['CF_API_KEY', 'CF_API_EMAIL', 'NODE_OPTIONS', 'WRANGLER_API_BASE_URL'].includes(k)) delete env[k];
+  const existing = join(tmp, 'existing');
+  await mkdir(existing);
+  await writeFile(join(existing, 'custom'), 'preserve');
+  await assert.rejects(exec(process.execPath, [init, existing], { cwd: root, env }));
+  assert.equal(await readFile(join(existing, 'custom'), 'utf8'), 'preserve');
+  const dest = join(tmp, 'fresh');
+  await exec(process.execPath, [init, dest], { cwd: root, env, timeout: 60000 });
+  const state = join(dest, 'state', 'd1-state');
+  const query = "SELECT (SELECT count(*) FROM d1_migrations) AS migrations, (SELECT count(*) FROM role WHERE instructions LIKE '%instanceAssignee%') AS updated, (SELECT count(*) FROM role) AS roles";
+  const { stdout } = await exec(process.execPath, [cli, 'd1', 'execute', 'DB', '--local', '--persist-to', state, '--config', join(root, 'wrangler.jsonc'), '--env', '', '--command', query, '--json'], { cwd: root, env, timeout: 25000 });
+  const rows = JSON.parse(stdout)[0].results;
+  assert.deepEqual(rows, [{ migrations: 1, updated: 5, roles: 5 }]);
+  const base = [cli, 'd1', 'execute', 'DB', '--local', '--persist-to', state, '--config', join(root, 'wrangler.jsonc'), '--env', ''];
+  await exec(process.execPath, [...base, '--command', "UPDATE role SET instructions='custom' WHERE name='qa'"], { cwd: root, env, timeout: 25000 });
+  await assert.rejects(exec(process.execPath, [init, dest], { cwd: root, env }));
+  const after = await exec(process.execPath, [...base, '--command', "SELECT instructions FROM role WHERE name='qa'", '--json'], { cwd: root, env, timeout: 25000 });
+  assert.equal(JSON.parse(after.stdout)[0].results[0].instructions, 'custom');
+});
+
+test('fresh seed applies only with an unchanged revision and preserves custom roles on refusal', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const schema = await readFile(join(root, 'migrations/0001_init.sql'), 'utf8');
+  const seed = await readFile(join(root, 'scripts/fresh-role-seed.sql'), 'utf8');
+  const db = new DatabaseSync(':memory:');
+  db.exec(schema);
+  db.exec('BEGIN'); db.exec(seed); db.exec('COMMIT');
+  assert.equal(db.prepare("SELECT count(*) AS n FROM role WHERE instructions LIKE '%instanceAssignee%'").get().n, 5);
+  db.exec("UPDATE role SET instructions='custom' WHERE name='qa'");
+  assert.throws(() => { db.exec('BEGIN'); try { db.exec(seed); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } });
+  assert.equal(db.prepare("SELECT instructions FROM role WHERE name='qa'").get().instructions, 'custom');
+  db.close();
+});
