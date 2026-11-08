@@ -238,6 +238,69 @@ class TaskClaimConcurrencyTest {
         }
     }
 
+    @Test
+    void threeWorkersClaimDistinctTasksAndExtraConcurrentRequestsStayWithinCapacity() throws Exception {
+        var project = projectService.createProject("three worker capacity", null).project();
+        taskService.createTasks(project.id(), java.util.stream.IntStream.range(0, 6)
+                .mapToObj(i -> new TaskService.TaskInput("task " + i, null, "BACKEND")).toList());
+        var ready = new CountDownLatch(6);
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(6)) {
+            var futures = java.util.stream.IntStream.range(0, 6)
+                    .mapToObj(i -> pool.submit(() -> claimAfterBarrier(ready, start, "three worker capacity", "worker-" + i)))
+                    .toList();
+            assertThat(ready.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            var results = new java.util.ArrayList<TaskService.ClaimNextTaskResult>();
+            for (var future : futures) results.add(future.get(30, java.util.concurrent.TimeUnit.SECONDS));
+            var winners = results.stream().filter(TaskService.ClaimNextTaskResult::claimed).toList();
+            assertThat(winners).hasSize(3);
+            assertThat(winners).extracting(c -> c.task().id()).doesNotHaveDuplicates();
+            assertThat(winners).extracting(c -> c.task().assignee()).doesNotHaveDuplicates();
+            assertThat(results).filteredOn(c -> c.outcome() == TaskService.ClaimOutcome.CAPACITY_FULL).hasSize(3);
+            assertThat(taskRepository.countByProjectIdAndCategoryAndStatus(project.id(), "BACKEND", TaskStatus.IN_PROGRESS)).isEqualTo(3);
+            // Waiting for review or a disconnected worker remains IN_PROGRESS until explicitly changed.
+            assertThat(taskService.claimNextTask("three worker capacity", "BACKEND", "replacement").outcome())
+                    .isEqualTo(TaskService.ClaimOutcome.CAPACITY_FULL);
+        }
+    }
+
+    @Test
+    void threeWorkersCompeteForOnlyOneTask() throws Exception {
+        var project = projectService.createProject("three one task", null).project();
+        taskService.createTasks(project.id(), List.of(new TaskService.TaskInput("only", null, "BACKEND")));
+        var ready = new CountDownLatch(3);
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(3)) {
+            var futures = java.util.stream.IntStream.range(0, 3)
+                    .mapToObj(i -> pool.submit(() -> claimAfterBarrier(ready, start, "three one task", "worker-" + i)))
+                    .toList();
+            assertThat(ready.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            var results = new java.util.ArrayList<TaskService.ClaimNextTaskResult>();
+            for (var future : futures) results.add(future.get(30, java.util.concurrent.TimeUnit.SECONDS));
+            assertThat(results).filteredOn(TaskService.ClaimNextTaskResult::claimed).hasSize(1);
+            assertThat(taskRepository.countByProjectIdAndCategoryAndStatus(project.id(), "BACKEND", TaskStatus.IN_PROGRESS)).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void anotherTasksTokenAndAssigneeCannotChangeOrCompleteClaim() {
+        var project = projectService.createProject("cross task ownership", null).project();
+        taskService.createTasks(project.id(), List.of(new TaskService.TaskInput("a", null, "BACKEND"),
+                new TaskService.TaskInput("b", null, "BACKEND")));
+        var a = taskService.claimNextTask("cross task ownership", "BACKEND", "same-assignee");
+        var b = taskService.claimNextTask("cross task ownership", "BACKEND", "same-assignee");
+        assertThatThrownBy(() -> taskService.updateStatus(b.task().id(), "TODO", null, a.claimToken()))
+                .isInstanceOf(dev.aiboard.common.BoardException.class);
+        assertThatThrownBy(() -> taskService.updateStatus(b.task().id(), "TODO", null, null))
+                .isInstanceOf(dev.aiboard.common.BoardException.class);
+        assertThatThrownBy(() -> taskCompleteService.completeTask(b.task().id(), a.claimToken(), "done",
+                List.of(new TaskCompleteService.VerificationInput("tests", "PASSED", null)), null, null, null))
+                .isInstanceOf(dev.aiboard.common.BoardException.class);
+        assertThat(taskRepository.findById(b.task().id()).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+    }
+
     private TaskService.ClaimNextTaskResult claimAfterBarrier(
             CountDownLatch ready, CountDownLatch start, String assignee) throws InterruptedException {
         return claimAfterBarrier(ready, start, "併發認領測試", assignee);
