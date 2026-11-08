@@ -23,6 +23,7 @@ AI Project Board 透過本機 MCP server 管理這個協作流程。Agent 原子
 分開，雲端資源仍需明確授權後才建立。免費額度與正式客戶端相容性須實際驗收。
 [架構與驗證計畫](docs/workers-architecture.md)記錄了移植範圍；原本的
 [VM＋Tunnel 方案](docs/cloud-deployment.md)保留作替代選項。
+之後的新功能如何同步到雲端、備份與回退，見[雲端更新流程](docs/workers-updates.md)。
 
 ## 核心能力
 

@@ -96,7 +96,7 @@ Leader 從最新 `dev` 建立 task branch/worktree，再依下表啟動對應角
 | FRONTEND | `frontend-dev` | `gpt-6.1-terra` | `medium` |
 | TEST | `qa` | `gpt-6.1-terra` | `high` |
 | INFRA | `infra` | `gpt-6.1-terra` | `high` |
-| DOC | `docs` | `gpt-5.6-luna` | `medium` |
+| DOC | `docs` | `gpt-6-luna` | `medium` |
 
 Codex 使用 `spawn_agent` 啟動一次性 agent，並設定 `fork_turns="none"`：派工訊息本身
 必須帶齊工作所需上下文，避免複製 leader 的完整歷史與推理成本。若環境不能直接指定 plugin 角色，就在

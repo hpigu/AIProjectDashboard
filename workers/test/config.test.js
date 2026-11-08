@@ -6,7 +6,10 @@ test('both local deployment configurations share D1 and enforce separate asset/a
   const read = async name => JSON.parse(await readFile(new URL('../' + name, import.meta.url), 'utf8'));
   const web = await read('wrangler.jsonc'), machine = await read('wrangler.mcp.jsonc');
   assert.equal(web.vars.BOARD_MODE, 'web');
+  assert.equal(web.vars.MCP_PUBLIC_URL, 'https://REPLACE_MCP_HOST/mcp');
+  assert.equal(machine.vars.MCP_PUBLIC_URL, undefined);
   assert.equal(machine.vars.BOARD_MODE, 'mcp');
+  assert.equal(machine.vars.BOARD_MAINTENANCE, 'false');
   assert.notEqual(web.name, machine.name);
   assert.deepEqual(web.d1_databases, machine.d1_databases);
   assert.equal(web.assets.run_worker_first, true);

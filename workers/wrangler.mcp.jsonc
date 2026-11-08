@@ -9,7 +9,7 @@
   "send_metrics": false,
   "observability": { "enabled": false },
   "dev": { "ip": "127.0.0.1", "port": 18788 },
-  "vars": { "BOARD_MODE": "mcp" },
+  "vars": { "BOARD_MODE": "mcp", "BOARD_MAINTENANCE": "false" },
   "d1_databases": [{
     "binding": "DB",
     "database_name": "ai-project-board",

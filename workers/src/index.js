@@ -10,6 +10,22 @@ const securityHeaders = {
 };
 const problem = (status, error) => Response.json({ error }, { status });
 
+function runtimeConfig(env, webOrigin) {
+  try {
+    const value = env.MCP_PUBLIC_URL;
+    if (typeof value !== 'string' || /[\s?#]/.test(value)) throw new Error();
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port
+        || url.pathname !== '/mcp' || url.origin === webOrigin
+        || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(url.hostname)
+        || /^[0-9.]+$/.test(url.hostname) || url.hostname.endsWith('.localhost')) throw new Error();
+    return Response.json({ mcpEndpoint: url.href });
+  } catch {
+    // Only validated, public connection metadata leaves the configured web Worker.
+    return problem(503, 'runtime_configuration_unavailable');
+  }
+}
+
 export async function eventStream(request, service, { pollMs = 5000, heartbeatMs = 15000, lifetimeMs = 50000 } = {}) {
   let cursor = await service.latestEventId();
   let timer, controller, closed = false, polling = false;
@@ -65,14 +81,17 @@ export function createHandler({ serviceFactory = env => new BoardService(env.DB)
       // Browser credentials have no write route, and machine credentials no read-only UI.
       if (mode === 'mcp') {
         if (request.headers.has('Origin') || url.pathname !== '/mcp') response = problem(403, 'forbidden_route');
-        else response = await handleMcp(request, serviceFactory(env));
+        else response = await handleMcp(request, serviceFactory(env), {
+          maintenance: env.BOARD_MAINTENANCE !== undefined && env.BOARD_MAINTENANCE !== 'false',
+        });
       } else if (!['GET', 'HEAD'].includes(request.method) || url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
         response = problem(403, 'forbidden_route');
       } else {
-        const service = serviceFactory(env);
         const path = url.pathname;
-        if (path === '/api/events') response = request.method === 'HEAD' ? new Response(null) : await eventStream(request, service, streamOptions);
-        else if (path === '/api/projects') response = Response.json(await service.listProjects(url.searchParams));
+        const service = path === '/api/runtime-config' ? null : serviceFactory(env);
+        if (path === '/api/runtime-config') response = runtimeConfig(env, url.origin);
+        else if (path === '/api/events') response = request.method === 'HEAD' ? new Response(null) : await eventStream(request, service, streamOptions);
+        else if (path === '/api/projects') response = Response.json(await service.listProjects(url.searchParams), { headers: { 'X-Board-Runtime': 'workers' } });
         else if (path === '/api/roles') response = Response.json(await service.listRoles(url.searchParams.get('projectName')));
         else if (['/api/health', '/api/health/live', '/api/health/ready'].includes(path)) {
           await service.latestEventId();

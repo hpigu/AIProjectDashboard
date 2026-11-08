@@ -186,6 +186,8 @@ and a `workers.dev` address. It shares the existing zero-build frontend, provide
 authenticated web and MCP endpoints, and requires its own deployment acceptance.
 The [architecture and validation plan](docs/workers-architecture.md) records the
 runtime and database differences. No cloud resources are created by local tests.
+The [cloud update guide](docs/workers-updates.md) covers feature parity, maintenance,
+backups, publishing and rollback for subsequent releases.
 
 An alternative VM deployment kit is available in
 [docs/cloud-deployment.md](docs/cloud-deployment.md), with the current client

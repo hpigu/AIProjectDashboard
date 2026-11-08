@@ -3,6 +3,8 @@ import { tools, validArguments } from './tools.js';
 export const PROTOCOLS = ['2025-03-26', '2025-06-18'];
 const json = (body, status = 200) => Response.json(body, { status });
 const failure = (id, code, message, status = 200) => json({ jsonrpc: '2.0', id, error: { code, message } }, status);
+// New tools stay paused unless explicitly classified as read-only.
+const readOnlyTools = new Set(['list_tasks', 'list_roles', 'get_role', 'preview_archive_project']);
 
 async function boundedBody(request) {
   const limit = 65536;
@@ -27,7 +29,7 @@ async function boundedBody(request) {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
-export async function handleMcp(request, service) {
+export async function handleMcp(request, service, { maintenance = false } = {}) {
   if (request.method !== 'POST') return new Response(null, { status: 405, headers: { Allow: 'POST' } });
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('Content-Type') || '')) return json({ error: 'unsupported_media_type' }, 415);
   const accept = request.headers.get('Accept') || '';
@@ -60,6 +62,10 @@ export async function handleMcp(request, service) {
       if (!tool) return failure(id, -32602, 'Unknown tool');
       const args = message.params.arguments ?? {};
       if (!validArguments(args, tool.inputSchema)) return failure(id, -32602, 'Invalid tool arguments');
+      if (maintenance && !readOnlyTools.has(tool.name)) {
+        result = { isError: true, content: [{ type: 'text', text: 'Maintenance mode: writes are paused. Retry after the owner finishes maintenance.' }] };
+        break;
+      }
       try {
         const value = await service.execute(tool.name, args);
         result = { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value ?? null) }] };

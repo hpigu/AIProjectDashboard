@@ -59,11 +59,49 @@ function relativeTime(isoString) {
   return t('relTime.daysAgo', { n: diffDay });
 }
 
+// Java does not advertise a separate MCP host, so it keeps its original URL and
+// request pattern. Only an authenticated Workers projects response opts in.
+const runtimeMcpConfig = ref({ endpoint: window.location.origin + '/mcp', errorStatus: null });
+let runtimeMcpConfigRequest = null;
+
+function loadRuntimeMcpConfig() {
+  if (runtimeMcpConfigRequest) return runtimeMcpConfigRequest;
+  runtimeMcpConfig.value = { endpoint: '', errorStatus: null };
+  runtimeMcpConfigRequest = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    let status = 503;
+    try {
+      const response = await fetch('/api/runtime-config', {
+        credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: controller.signal,
+      });
+      status = response.status;
+      if (!response.ok) throw new Error();
+      const config = await response.json();
+      const value = config.mcpEndpoint;
+      if (typeof value !== 'string' || /[\s?#]/.test(value)) throw new Error();
+      const endpoint = new URL(value);
+      if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.port
+          || endpoint.pathname !== '/mcp' || endpoint.origin === window.location.origin
+          || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(endpoint.hostname)
+          || /^[0-9.]+$/.test(endpoint.hostname) || endpoint.hostname.endsWith('.localhost')) throw new Error();
+      runtimeMcpConfig.value = { endpoint: endpoint.href, errorStatus: null };
+    } catch {
+      runtimeMcpConfig.value = { endpoint: '', errorStatus: status >= 400 ? status : 503 };
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  return runtimeMcpConfigRequest;
+}
+
 async function fetchJson(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) {
     throw new Error(t('error.apiError', { status: res.status, url }));
   }
+  if (typeof url === 'string' && url.split('?')[0] === '/api/projects'
+      && res.headers.get('X-Board-Runtime') === 'workers') loadRuntimeMcpConfig();
   return res.json();
 }
 
@@ -114,7 +152,11 @@ const LevelOne = {
     },
     // 不寫死埠號：使用者可能用 BOARD_PORT 換過埠號，寫死會給出錯誤的接線指令。
     mcpEndpoint() {
-      return window.location.origin + '/mcp';
+      return runtimeMcpConfig.value.endpoint;
+    },
+    mcpEndpointError() {
+      const status = runtimeMcpConfig.value.errorStatus;
+      return status ? this.t('error.apiError', { status, url: '/api/runtime-config' }) : '';
     },
   },
   created() {
@@ -164,8 +206,8 @@ const LevelOne = {
             <strong>{{ t('levelOne.step1Title') }}</strong>
             <span class="onboarding-hint">{{ t('levelOne.step1Hint') }}</span>
             <span class="onboarding-endpoint">
-              <code>{{ mcpEndpoint }}</code>
-              <button type="button" class="onboarding-copy" @click="copyEndpoint">{{ copyLabel }}</button>
+              <code>{{ mcpEndpoint || mcpEndpointError }}</code>
+              <button type="button" class="onboarding-copy" @click="copyEndpoint" :disabled="!mcpEndpoint">{{ copyLabel }}</button>
             </span>
           </li>
           <li>
@@ -252,6 +294,7 @@ const LevelOne = {
       this.filters = { query: '', status: 'ACTIVE', blocked: false, sort: 'UPDATED_DESC' };
     },
     async copyEndpoint() {
+      if (!this.mcpEndpoint) return;
       // navigator.clipboard 需要 secure context；localhost 算 secure，但使用者
       // 若透過區網 IP 開這一頁就不是，因此失敗時回到「請手動複製」而不是靜默無反應。
       try {

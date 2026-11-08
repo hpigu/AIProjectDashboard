@@ -253,6 +253,15 @@ Access Free 的實際開通頁要求付款資料、接受服務條款，並列�
 
 ## 備份、還原與更新
 
+日後新功能的發布步驟、Java/Workers 同步範圍、維護模式與備份工具，見
+[更新 Cloudflare 上的看板](workers-updates.md)。`maintenance.mjs` 預設本機，遠端
+必須明確指定並確認停寫；工具本身不發布、遷移、還原或刪除資料。
+
+空看板教學透過已驗證的 `/api/runtime-config` 取得獨立 MCP URL；正式 web 設定
+需提供 `MCP_PUBLIC_URL`，不能指向 web Worker 的 `/mcp`。未登入看不到此資訊。
+設定失敗時停用複製，不提供錯誤入口。Java 不帶 Workers runtime 標記，維持原
+本機入口與請求行為。
+
 不用 H2 backup 腳本操作 D1。D1 Time Travel Free 保留 7 天；另安排人工/外部排程
 定期將 SQL export 存到加密離機位置。未選備份位置前不宣稱已有離機備份，也不默默
 建立 R2。應保留 release/config/schema 對照、備份時間與 checksum，避免只保存資料。
