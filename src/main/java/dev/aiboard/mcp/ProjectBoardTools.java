@@ -134,21 +134,25 @@ public class ProjectBoardTools {
         if (!result.projectFound()) {
             return projectNotFoundMessage(projectName, result.availableProjects());
         }
+        String capacityInfo = result.capacity() == null ? "" : "\n容量：" + result.capacity();
+        if (result.outcome() == TaskService.ClaimOutcome.CAPACITY_FULL) {
+            return "CAPACITY_FULL：%s 容量已滿。%s".formatted(result.category(), capacityInfo);
+        }
         if (result.blockedByDependency()) {
             return ("%s 還有待辦任務，但全部都在等前置任務完成：\n%s\n\n"
                     + "請等前置任務標記 DONE 後再認領。")
                     .formatted(result.category(),
                             result.blockedCandidates().stream()
                                     .map(ProjectBoardTools::describeBlockedCandidate)
-                                    .collect(Collectors.joining("\n")));
+                                    .collect(Collectors.joining("\n"))) + capacityInfo;
         }
         if (result.contended()) {
             return ("%s 認領時發生競爭，三次 compare-and-swap 均未取得任務。"
                     + "請 leader 重新讀取看板，再決定是否重新派工。")
-                    .formatted(result.category());
+                    .formatted(result.category()) + capacityInfo;
         }
         if (!result.claimed()) {
-            return "%s 目前沒有待辦任務。".formatted(result.category());
+            return "%s 目前沒有待辦任務。".formatted(result.category()) + capacityInfo;
         }
 
         TaskService.TaskDto task = result.task();
@@ -158,7 +162,7 @@ public class ProjectBoardTools {
                 + "claimToken：%s（僅顯示這一次，操作此任務時請帶上，勿外流／勿記錄到自己的 log）")
                 .formatted(task.id(), task.title(), task.category(),
                         result.project().name(), result.project().id(), description,
-                        result.claimToken());
+                        result.claimToken()) + capacityInfo;
     }
 
     @Tool(name = "list_tasks",
@@ -195,6 +199,7 @@ public class ProjectBoardTools {
         StringBuilder sb = new StringBuilder();
         sb.append("## %s（#%d）\n".formatted(project.name(), project.id()));
         sb.append("進度：%d/%d 完成\n".formatted(doneCount, allTasks.size()));
+        sb.append("容量：%s\n".formatted(result.capacities()));
 
         var byStatus = filtered.stream()
                 .collect(Collectors.groupingBy(TaskService.TaskDto::status, java.util.LinkedHashMap::new, Collectors.toList()));
