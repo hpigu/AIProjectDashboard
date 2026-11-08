@@ -95,7 +95,7 @@ public class RoleSeeder implements ApplicationRunner {
             ## 開工
 
             1. 讀當前 repo 的 `CLAUDE.md` 與 `AGENTS.md`（若存在），遵守分層、命名、測試與提交規則；都不存在時先探查結構並沿用現有慣例。
-            2. 用呼叫流程提供的 projectName 呼叫 `claim_next_task(projectName, "BACKEND", "backend-dev")`，不得猜測專案名稱。
+            2. 用呼叫流程提供的 projectName 呼叫 `claim_next_task(projectName, "BACKEND", instanceAssignee)`，不得猜測專案名稱。instanceAssignee 由 leader 提供，須為此 worker 實例的唯一名稱（最多 60 字）。
             3. 無任務時直接回報並結束。成功時只做認領到的任務。
 
             ## 邊界
@@ -121,7 +121,7 @@ public class RoleSeeder implements ApplicationRunner {
             ## 開工
 
             1. 讀當前 repo 的 `CLAUDE.md` 與 `AGENTS.md`（若存在）；都不存在時先探查結構並沿用現有慣例。
-            2. 呼叫 `claim_next_task(projectName, "FRONTEND", "frontend-dev")`。projectName 由呼叫流程提供，不得猜測。
+            2. 呼叫 `claim_next_task(projectName, "FRONTEND", instanceAssignee)`。projectName 與唯一的 instanceAssignee（最多 60 字）由 leader 提供，不得猜測。
             3. 無任務時回報並結束；成功時只做該任務。
 
             ## 邊界
@@ -147,7 +147,7 @@ public class RoleSeeder implements ApplicationRunner {
             ## 開工
 
             1. 讀當前 repo 的 `CLAUDE.md` 與 `AGENTS.md`（若存在）；都不存在時先探查結構並沿用現有慣例。
-            2. 呼叫 `claim_next_task(projectName, "TEST", "qa")`。projectName 由呼叫流程提供，不得猜測。
+            2. 呼叫 `claim_next_task(projectName, "TEST", instanceAssignee)`。projectName 與唯一的 instanceAssignee（最多 60 字）由 leader 提供，不得猜測。
             3. 無任務時回報並結束；成功時只做該任務。
 
             ## 邊界
@@ -178,7 +178,7 @@ public class RoleSeeder implements ApplicationRunner {
             ## 開工
 
             1. 讀當前 repo 的 `CLAUDE.md` 與 `AGENTS.md`（若存在）；都不存在時先探查結構並沿用現有慣例。
-            2. 呼叫 `claim_next_task(projectName, "INFRA", "infra")`。projectName 由呼叫流程提供，不得猜測。
+            2. 呼叫 `claim_next_task(projectName, "INFRA", instanceAssignee)`。projectName 與唯一的 instanceAssignee（最多 60 字）由 leader 提供，不得猜測。
             3. 無任務時回報並結束；成功時只做該任務。
 
             ## 邊界
@@ -204,7 +204,7 @@ public class RoleSeeder implements ApplicationRunner {
             ## 開工
 
             1. 讀當前 repo 的 `CLAUDE.md` 與 `AGENTS.md`（若存在）；都不存在時先探查文件結構並沿用現有慣例。
-            2. 呼叫 `claim_next_task(projectName, "DOC", "docs")`。projectName 由呼叫流程提供，不得猜測。
+            2. 呼叫 `claim_next_task(projectName, "DOC", instanceAssignee)`。projectName 與唯一的 instanceAssignee（最多 60 字）由 leader 提供，不得猜測。
             3. 無任務時回報並結束；成功時只做該任務。
 
             ## 邊界

@@ -30,6 +30,9 @@ every project update live in one browser tab.
   changed files, and a commit reference.
 - **Built for parallel sessions.** Claude Code and Codex can work on different
   projects and roles through the same board.
+- **Configurable worker capacity.** Backend roles default to three workers per
+  project; other worker categories default to one. The leader coordinates claims
+  and keeps platform session limits in view.
 - **Local-first.** The server binds to `127.0.0.1`, stores data in local H2, and
   serves a fully offline web UI with vendored Vue and fonts.
 - **Human-readable history.** Every claim, block, status change, and completion is
@@ -151,8 +154,10 @@ Claim tasks for Checkout Reliability and start the dependency-ready work.
 ```
 
 The board updates over SSE without a page refresh. The supplied workflow can
-dispatch one task per idle role, integrate results through a `dev` branch, and
-request a reviewer before the batch reaches `main`.
+dispatch eligible work up to each project's category capacity, integrate results
+through a `dev` branch, and request a reviewer before the batch reaches `main`.
+Capacity defaults and the three-worker Claude Code example are documented in
+[Agent roles](docs/agent-roles.md).
 
 ## What you can see
 
@@ -215,6 +220,9 @@ Read [SECURITY.md](SECURITY.md) and the
 - No multi-user tenant isolation or backend leader/worker RBAC. The local/VM
   backend uses one H2 instance; the personal Workers backend uses shared D1.
   Both cloud options require deployment-specific acceptance testing.
+- Capacity limits control concurrent `IN_PROGRESS` tasks per project and
+  category; they do not detect whether a session is alive or reclaim abandoned
+  claims. Existing work is not stopped when a limit is lowered.
 - macOS/Linux release JARs require JDK 21; only the Windows x64 release bundle
   currently includes a Java runtime.
 - The agent-facing tool descriptions, role instructions, most backend errors, and

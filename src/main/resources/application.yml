@@ -32,6 +32,13 @@ server:
   port: ${BOARD_PORT:8080}
 
 board:
+  # Shared per-project worker limits. Invalid values fail validation; existing claims remain intact.
+  capacity:
+    backend: ${BOARD_CAPACITY_BACKEND:3}
+    frontend: ${BOARD_CAPACITY_FRONTEND:1}
+    test: ${BOARD_CAPACITY_TEST:1}
+    infra: ${BOARD_CAPACITY_INFRA:1}
+    doc: ${BOARD_CAPACITY_DOC:1}
   cloud:
     # Opt-in routing only. Both tunnel ingress rules MUST validate Access JWTs.
     enabled: ${BOARD_CLOUD_ENABLED:false}

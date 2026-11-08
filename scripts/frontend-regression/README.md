@@ -27,7 +27,7 @@ the relevant checks.
 
 ## Run
 
-Requirements: Chrome or Chromium and Node.js 18 or newer.
+Requirements: Chrome or Chromium and Node.js 22 or newer (the script uses the built-in WebSocket API).
 
 ```bash
 # Use an isolated development port and database. Never use 8080 or data/board.
@@ -52,6 +52,7 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 | Same-origin vendor assets | `OperationalSafetyConfigurationTest`, `FrontendStaticAssetsTest` | CSP violation listener | - |
 | API and vendor availability | `FrontendStaticAssetsTest` | - | - |
 | SSE content type and access | `SecurityHeadersFilterTest` | Reconnection state | Restart server manually |
+| Multiple worker cards, assignee filters, status events and counts | - | `checkMultipleWorkers()` with isolated fixture | - |
 | Responsive horizontal overflow | - | `checkNoHorizontalOverflow()` | Review extreme content |
 | Browser console errors | - | `checkNoConsoleErrors()` | - |
 | Escape closes drawer and restores focus | - | `checkEscapeReturnsFocus()` | Confirm focus order |
@@ -67,5 +68,6 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 
 ## Limits
 
+- The multiple-worker check mocks read responses and EventSource events in the browser; it does not exercise a live backend SSE connection or real concurrent claims.
 - DAG layout quality and extreme-content rendering still require visual review.
 - The script runs only when invoked manually.

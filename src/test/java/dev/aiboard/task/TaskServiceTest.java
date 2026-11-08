@@ -49,8 +49,11 @@ class TaskServiceTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(taskRepository.findProjectIdByTaskId(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(invocation -> taskRepository.findById(invocation.getArgument(0)).map(Task::getProjectId));
         taskService = new TaskService(taskRepository, taskLogRepository, taskDependencyRepository,
-                projectService, eventPublisher, claimTokenService);
+                projectService, eventPublisher, claimTokenService,
+                new dev.aiboard.config.WorkerCapacity("3", "1", "1", "1", "1"));
     }
 
     @Test

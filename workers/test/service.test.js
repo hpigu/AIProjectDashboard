@@ -257,3 +257,16 @@ test("creation normalizes absent, blank and unknown category to OTHER", async ()
   assert.deepEqual(created.map((t) => t.category), ["OTHER", "OTHER", "OTHER", "OTHER", "BACKEND"]);
   db.sql.close();
 });
+
+test('completed task rejects expired tokens and can reopen without one', async () => {
+  const { db, s } = setup();
+  const p = await project(s);
+  await tasks(s, p, [{ title: 'done', category: 'BACKEND' }]);
+  const c = await claim(s);
+  const args = { taskId: c.task.id, summary: 'done', verificationResults: [{ name: 'test', result: 'PASSED' }] };
+  await s.execute('complete_task', { ...args, claimToken: c.claimToken });
+  await assert.rejects(s.execute('complete_task', { ...args, claimToken: c.claimToken }), e => e.status === 403);
+  await assert.rejects(s.execute('update_task_status', { taskId: c.task.id, status: 'DONE', claimToken: c.claimToken }), e => e.status === 403);
+  assert.equal((await s.execute('update_task_status', { taskId: c.task.id, status: 'IN_PROGRESS' })).changed, true);
+  db.sql.close();
+});
