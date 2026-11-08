@@ -303,10 +303,67 @@ async function checkInterpolationRendersActualValues(session) {
   }
 }
 
+
+// Isolated browser fixture: the real UI consumes mock GET responses and simulated
+// EventSource events. No task or project is written to the running server.
+async function checkMultipleWorkers(session) {
+  const source = `(() => {
+    const originalFetch = window.fetch;
+    const tasks = [1, 2, 3].map(id => ({ id, title: 'Backend ' + id, category: 'BACKEND', assignee: 'backend-' + id, waitingFor: [] }));
+    window.testBoard = { name: 'Worker fixture', columns: { TODO: [], IN_PROGRESS: tasks, BLOCKED: [], DONE: [] } };
+    window.fetch = (url, options) => {
+      const path = String(url).split('?')[0];
+      if (path === '/api/projects/999/board') return Promise.resolve(new Response(JSON.stringify(window.testBoard), { headers: { 'Content-Type': 'application/json' } }));
+      if (path === '/api/projects') return Promise.resolve(new Response(JSON.stringify([{ id: 999, name: 'Worker fixture', status: 'ACTIVE', total: 3, counts: { TODO: 0, IN_PROGRESS: 3, BLOCKED: 0, DONE: 0 } }]), { headers: { 'Content-Type': 'application/json' } }));
+      return originalFetch(url, options);
+    };
+    window.EventSource = class extends EventTarget {
+      constructor() { super(); window.testEvents = this; }
+      close() {}
+    };
+  })();`;
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  try {
+    await session.setViewport(1440, 900);
+    await session.navigate(`${baseUrl}/index.html?project=999`);
+    await sleep(500);
+    const snapshot = () => session.eval(`(() => ({
+      cards: [...document.querySelectorAll('.task-card')].map(card => ({ id: card.querySelector('.task-id').textContent, assignee: card.querySelector('.task-assignee')?.textContent.trim(), status: [...card.classList].find(c => c.startsWith('st-')), color: getComputedStyle(card.querySelector('.task-assignee')).color, font: getComputedStyle(card.querySelector('.task-assignee')).fontFamily })),
+      counts: [...document.querySelectorAll('.column-count')].map(el => el.innerText.replace(/\\s+/g, ' ').trim()),
+      progress: document.querySelector('.board-progress')?.textContent.trim(),
+      muted: (() => { const el = document.createElement('span'); el.style.color = 'var(--muted)'; document.body.appendChild(el); const color = getComputedStyle(el).color; el.remove(); return color; })()
+    }))()`);
+    const initial = await snapshot();
+    const expected = ['#1', '#2', '#3'];
+    if (JSON.stringify(initial.cards.map(c => c.id)) !== JSON.stringify(expected) || initial.progress !== '0/3' || initial.counts[1] !== '3/ 3') throw new Error('初始卡片或統計不正確: ' + JSON.stringify(initial));
+    for (let i = 0; i < 3; i++) {
+      const card = initial.cards[i];
+      if (card.assignee !== '@backend-' + (i + 1) || card.status !== 'st-IN_PROGRESS' || card.color !== initial.muted || !card.font.includes('IBM Plex Mono')) throw new Error('工作者顯示或字體不正確: ' + JSON.stringify(card));
+      await session.eval(`(() => { const select = document.querySelector('.filter-advanced select'); select.value = 'backend-${i + 1}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+      await sleep(1200); // wait for filtered cards to leave the transition group
+      const filtered = await snapshot();
+      if (filtered.cards.length !== 1 || filtered.cards[0].id !== expected[i] || filtered.progress !== '0/3' || filtered.counts[1] !== '1/ 3') throw new Error('assignee 篩選或統計不正確: ' + JSON.stringify(filtered));
+    }
+    await session.eval(`(() => { const select = document.querySelector('.filter-advanced select'); select.value = ''; select.dispatchEvent(new Event('change', { bubbles: true })); const task = window.testBoard.columns.IN_PROGRESS.splice(1, 1)[0]; window.testBoard.columns.BLOCKED.push(task); window.testEvents.dispatchEvent(new MessageEvent('task.status_changed', { data: JSON.stringify({ projectId: 999, taskId: 2, from: 'IN_PROGRESS', to: 'BLOCKED' }) })); })()`);
+    await sleep(1200); // allow Vue transition-group removal to finish
+    const updated = await snapshot();
+    if (JSON.stringify(updated.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || updated.progress !== '0/3' || updated.counts[1] !== '2/ 2' || updated.counts[2] !== '1/ 1') throw new Error('狀態事件後卡片或統計不正確: ' + JSON.stringify(updated));
+    const blocked = updated.cards.find(c => c.id === '#2');
+    if (blocked.status !== 'st-BLOCKED' || blocked.assignee !== '@backend-2' || blocked.color !== initial.cards[1].color || blocked.font !== initial.cards[1].font) throw new Error('BLOCKED assignee 樣式或身分不正確: ' + JSON.stringify(blocked));
+    await session.eval(`(() => { const task = window.testBoard.columns.BLOCKED.pop(); window.testBoard.columns.IN_PROGRESS.push(task); window.testEvents.dispatchEvent(new MessageEvent('task.status_changed', { data: JSON.stringify({ projectId: 999, taskId: 2, from: 'BLOCKED', to: 'IN_PROGRESS' }) })); })()`);
+    await sleep(1200);
+    const restored = await snapshot();
+    if (JSON.stringify(restored.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || restored.progress !== '0/3' || restored.counts[1] !== '3/ 3' || restored.counts[2] !== '0/ 0') throw new Error('恢復後卡片或統計不正確: ' + JSON.stringify(restored));
+  } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
 async function main() {
   console.log(`目標: ${baseUrl}（CDP port ${cdpPort}）\n`);
   const session = await newCdpSession(cdpPort);
   try {
+    await check('多 Worker 顯示、篩選與狀態事件', () => checkMultipleWorkers(session));
     await check('RWD 三尺寸無水平溢出', () => checkNoHorizontalOverflow(session));
     await check('console 無錯誤/未捕捉例外', () => checkNoConsoleErrors(session));
     await check('無 CSP violation', () => checkNoCspViolations(session));
