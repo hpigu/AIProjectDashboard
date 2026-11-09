@@ -88,7 +88,7 @@ jobs:
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           ./scripts/release/posix-release-smoke.sh --version "$version" --platform linux-x64 \
             --jar "release-assets/ai-project-board-backend-linux-x64-${version}.jar"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-linux-x64
           path: release-assets/ai-project-board-backend-linux-x64-*.jar
@@ -129,7 +129,7 @@ jobs:
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           ./scripts/release/posix-release-smoke.sh --version "$version" --platform macos-arm64 \
             --jar "release-assets/ai-project-board-backend-macos-arm64-${version}.jar"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-macos-arm64
           path: release-assets/ai-project-board-backend-macos-arm64-*.jar
@@ -170,7 +170,7 @@ jobs:
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           ./scripts/release/posix-release-smoke.sh --version "$version" --platform macos-x64 \
             --jar "release-assets/ai-project-board-backend-macos-x64-${version}.jar"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-macos-x64
           path: release-assets/ai-project-board-backend-macos-x64-*.jar
@@ -224,7 +224,7 @@ jobs:
           Copy-Item "target\release\ai-project-board-backend-windows-x64-$version.zip" release-assets
           bash scripts/release/release-assets.sh validate-platform --version $version --platform windows-x64 --directory release-assets
           if ($LASTEXITCODE -ne 0) { throw 'shared release asset validation failed' }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-windows-x64
           path: release-assets/ai-project-board-backend-windows-x64-*.zip
