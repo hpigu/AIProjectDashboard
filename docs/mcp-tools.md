@@ -15,18 +15,45 @@ next section; the leader handles planning and global queries.
 |---|---|
 | `create_project(name, description?)` | Create a project. Names are trimmed and deduplicated case-insensitively. |
 | `create_tasks(projectId, tasks[])` | Create 1–50 tasks. Titles are limited to 300 characters. Dependencies can use `dependsOnIndexes` or `dependsOnTaskIds`. |
-| `list_tasks(projectId?/projectName?, status?, category?, includeDescription?)` | Read tasks and progress. Provide either project ID or exact case-insensitive name. Also returns all five worker-category capacity snapshots, unaffected by task filters. |
+| `list_tasks(projectId?/projectName?, status?, category?, includeDescription?)` | Read tasks and progress. Provide either project ID or exact case-insensitive name. |
 | `list_roles(projectName?)` | List generic roles, with project overrides replacing roles of the same name. |
 | `get_role(name, projectName?)` | Return the project override when present, otherwise the generic role. |
+
+## Project Git workflow
+
+Use the planning conversation once per project; reuse the approved configuration thereafter.
+The agent reads project rules, asks only unresolved decisions, saves a draft, and presents all seven fields and changes. A human owner approves through the isolated helper; the browser stays read-only.
+See [planning and approval](project-git-workflow.md).
+
+| Tool | Purpose |
+|---|---|
+| `get_project_workflow(projectName)` | Read active settings, draft, missing fields, questions, sources, differences, and approval metadata. Works without tasks. |
+| `prepare_project_workflow(projectName, expectedRevision, gitPolicy, sources, questions)` | Management-authorized draft preparation with optimistic revision checking; does not activate settings. |
+| `confirm_project_workflow(actor, payload, signature)` | Scoped PROJECT_POLICY owner approval of a complete, current draft and preview digest. A management credential cannot approve. |
+
+`GET /api/projects/{id}/workflow` provides the same read-only summary. Legacy policy events remain migration input and require reconfirmation.
 
 ## Worker lifecycle
 
 | Tool | Purpose |
 |---|---|
-| `claim_next_task(projectName, category, assignee)` | Atomically claim the first TODO task whose prerequisites are all DONE, subject to category capacity. Assignee is leader-provided and limited to 60 characters. |
+| `claim_next_task(projectName, category, assignee)` | Atomically claim the first TODO task whose prerequisites are all DONE. Assignee is leader-provided and limited to 60 characters. |
 | `block_task(taskId, claimToken?, reasonType, detail, blockingTaskIds?, expectedVersion?)` | Mark the worker's task BLOCKED with structured evidence. |
+| `report_implementation(taskId, claimToken?, summary, verificationResults, changedFiles?, commitRef?, expectedVersion?)` | Save implementation/self-test declarations without changing IN_PROGRESS/BLOCKED or unlocking dependencies. FAILED/NOT_RUN require detail. |
 | `complete_task(taskId, claimToken?, summary, verificationResults, changedFiles?, commitRef?, expectedVersion?)` | Complete an IN_PROGRESS or BLOCKED task with verification evidence. |
-| `update_task_status(taskId, status, note?, claimToken?)` | Compatibility status endpoint. Resume with IN_PROGRESS and release with TODO. Evidence-required tasks cannot use it to reach DONE. |
+| `update_task_status(taskId, status, note?, claimToken?)` | Compatibility status endpoint. Resume with IN_PROGRESS and release with TODO. All tasks must use complete_task to reach DONE. |
+
+## Signed acceptance
+
+| Tool | Purpose |
+|---|---|
+| `get_acceptance(taskId)` | Read current requirement/runner/review evidence, revision, digests, and closure blockers. |
+| `record_acceptance_event(actor, payload, signature)` | Append a scoped HMAC-signed event; only configured authorities may sign. No shell execution or artifact download. |
+
+These are separate from worker self-test declarations. Signers need independent
+keys and permissions; HMAC authenticates the configured signer, not the truth of
+its claims. See [acceptance protocol](acceptance-protocol.md) before configuring
+PROJECT_POLICY, CONTRACT, RUN, REVIEW, or exceptions.
 
 ## Leader-only operations
 
@@ -58,33 +85,13 @@ TODO --claim_next_task--> IN_PROGRESS --complete_task--> DONE
 Categories are `BACKEND`, `FRONTEND`, `TEST`, `INFRA`, `DOC`, and `OTHER`.
 Missing or unknown categories normalize to `OTHER`.
 
-## Worker capacity
+## Scheduling and claims
 
-Capacity is per project and category. Configure shared defaults with
-`BOARD_CAPACITY_BACKEND` (3), `BOARD_CAPACITY_FRONTEND` (1),
-`BOARD_CAPACITY_TEST` (1), `BOARD_CAPACITY_INFRA` (1), and `BOARD_CAPACITY_DOC`
-(1). Values must be ASCII decimal integers from 1 through 2147483647 without
-leading zeroes. Empty or invalid values fail initialization. `OTHER` is handled
-by the leader and has no worker capacity.
-
-`list_tasks` includes a `capacities` array for BACKEND, FRONTEND, TEST, INFRA,
-and DOC regardless of status/category filters. Each snapshot has
-`{projectId, category, limit, inProgress, available, full}`. A successful
-`claim_next_task` returns a snapshot in `capacity`; `OTHER` returns `null`.
-Java MCP renders snapshots as text (`Snapshot[]` for `list_tasks`), while the
-Workers MCP response returns JSON. These are observations for leader scheduling;
-the claim/status writes perform the actual capacity guards.
-
-Claim outcomes distinguish `CAPACITY_FULL` (eligible TODO work exists but the
-category is full), `BLOCKED_BY_DEPENDENCY` (all remaining TODO candidates await
-prerequisites), `NO_TASK` (no TODO candidates), and `CONTENDED` (a candidate was
-lost during concurrent claims; re-read state before dispatching again). Claims
-retain compare-and-swap and retry at most three times. Capacity admission counts
-`IN_PROGRESS` tasks, including work awaiting integration and interrupted claims.
-`BLOCKED` does not consume a slot; resuming it to `IN_PROGRESS` and reopening a
-`DONE` task are guarded. Repeating the current status does not take another slot.
-Lowering a configured limit does not stop existing tasks. The server cannot
-reliably detect live sessions and does not reclaim abandoned claims.
+Roles have no quotas within or across projects. The leader accounts for actual
+platform sessions, dependencies, and file/resource conflicts. Claims retain
+compare-and-swap and at most three retries. Distinguish dependency waiting,
+no TODO tasks, and contention. The server does not automatically reclaim claims
+from sessions that appear offline.
 
 - A TODO task must be claimed before it can become IN_PROGRESS or BLOCKED.
 - Returning a task to TODO clears `assignee` and `claimed_at`.
@@ -106,13 +113,13 @@ atomic compare-and-swap claim operation.
 
 ## Completion and blockers
 
-Tasks created through `create_tasks` set `require_evidence=true`. They must use
-`complete_task` with a non-empty summary and at least one verification result.
-Allowed results are `PASSED`, `FAILED`, and `NOT_RUN`; a `FAILED` result rejects
-completion.
-
-Older tasks with `require_evidence=false` retain the legacy direct-DONE path through
-`update_task_status`.
+All new completion operations, including legacy tasks, use `complete_task` and
+the signed acceptance gate. `update_task_status(..., DONE)` is disabled.
+Legacy DONE history is preserved as unverified history. Self-reported
+`verificationResults` do not substitute for signed RUN and independent REVIEW.
+A matching codeRef/commitRef and current project Git policy are required.
+See [acceptance protocol](acceptance-protocol.md) for scoped signing authorities,
+PROJECT_POLICY, event schemas, exceptions, and compatibility.
 
 `block_task` accepts these reason types:
 
@@ -137,15 +144,20 @@ task logs, or user-facing instructions.
 
 ## Client boundary
 
-The MCP server has no caller identity. Worker allowlists are client-side
-guardrails, not server authorization. Keep the server on localhost; do not expose
-`/mcp` before adding a real authentication boundary.
+Management tools, including archive preview and workflow draft preparation, are denied by default. Java
+requires a leader-only BOARD_MANAGEMENT_TOKEN Bearer credential (at least 32
+characters); Workers requires a verified deviceId listed in MANAGEMENT_DEVICE_IDS.
+Workers must not receive management credentials or acceptance signing keys.
+Authorization audit records attempts, not business success. These scoped
+boundaries are not general caller identity or company SSO; keep local MCP on
+localhost. See [authorization boundaries](authorization-boundaries.md).
 
 The five default workers receive only:
 
 - `get_role`
 - `claim_next_task`
 - `block_task`
+- `report_implementation`
 - `complete_task`
 - `update_task_status`
 
@@ -162,6 +174,7 @@ runtime tool list.
 | `GET /api/projects/{id}/dependencies` | Dependency graph nodes and edges |
 | `GET /api/projects/{id}/tasks/{taskId}` | Task detail |
 | `GET /api/projects/{id}/tasks/{taskId}/history` | Status history, blocker data, and completion evidence |
+| `GET /api/projects/{id}/tasks/{taskId}/acceptance` | Versioned acceptance summary, blockers, digests, and signed event history |
 | `GET /api/roles` | Role instructions; accepts `projectName` |
 | `GET /api/events` | Server-sent task and project events |
 | `GET /api/health` | Version, commit, registered tools, and start time |

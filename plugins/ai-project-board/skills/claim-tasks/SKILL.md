@@ -1,229 +1,62 @@
 ---
 name: claim-tasks
-description: 從 AI 專案看板認領並執行指定專案的任務。當使用者明示專案名稱並要求「認領任務」、「開工」、「繼續開發」或查詢尚可執行工作時使用；由主 thread 擔任 leader，以同專案 category 容量槽、獨立 task branch/worktree、dev 整合分支及整批 reviewer 流程派工。
+description: 使用者明示專案名稱並要求認領、開工、繼續開發或查詢可執行任務時使用。由 leader 依需求、相依、平台 session 上限與專案 Git policy 協調獨立 worker、QA 與 reviewer。
 ---
 
-# 認領專案任務
+# 認領與驗收專案任務
 
-主 thread 擔任 leader，只直接處理明確指定給 leader 的 OTHER；五個 worker
-角色必須交給對應 agent。不要讓 leader 假扮 worker，也不要讓 agent 自行連續認領。
+## 1. 確認需求與專案
 
-## 工具治理與授權邊界
+從使用者取得完整 projectName，不能從目錄或 remote 猜測。讀 repo 的 AGENTS.md、CLAUDE.md（若存在）、需求來源與版本、驗收條件、已確認流程卡及專案 Git policy。呼叫 list_tasks(projectName, includeDescription=true)，記錄本批 task IDs、基準版本與後續核准新增項目；不自行加入無關工作。
 
-以下是目前 server 實際註冊的任務生命週期名稱：`claim_next_task`、`block_task`、
-`complete_task`、`update_task_status`。沒有獨立的 `resume_task` 或 `release_task`；
-兩者皆由 `update_task_status` 處理（分別轉為 `IN_PROGRESS` 與 `TODO`）。
+分開記錄已確認規則、待決問題與代理推測。開工前查明遺漏、矛盾與歧義；先讀文件與環境能查明的部分，僅將真正業務決定交給人類需求負責人。影響行為的未決問題阻擋相關任務，無關工作繼續。
 
-派給五個 worker 時，只提供 `get_role` 與上述四個生命週期工具；不要提供
-`create_tasks`、`reset_task_claim`、`preview_archive_project`、`archive_project`、
-`restore_project`、`update_task_details`、`set_task_dependencies` 或 `upsert_role`。
-worker 發現任務規格、分類或前置相依需要調整時，只回報事實、風險與建議，由 leader
-處理；不可自行改規格或相依。`reset_task_claim` 也是 leader 處理遺失 token 的例外
-復原工具，worker 不得用它繞過 token 驗證。
+## 2. 檢查 Git 與隔離設定
 
-這是 client 工具白名單的第一階段邊界，不是 server-side 授權：MCP server 目前沒有
-caller identity，任何能連上 `/mcp` 的 client 都可能呼叫其獲得的工具。服務必須維持
-localhost；在有 server-side 身分驗證前，不得將 MCP 對外暴露。
+先呼叫 `get_project_workflow(projectName)`。有已核准且仍適用的 active 就沿用；未設定、只有 LEGACY 或需要修改時，先執行同 plugin 的 [plan-project-workflow](../plan-project-workflow/SKILL.md) 規劃對話：查文件、只問待決項、保存草稿、呈現七欄與差異，交人類 owner 環境核准後再讀回確認。只存草稿不算設定完成，不要求使用者手寫 JSON。
 
-`preview_archive_project`、`archive_project`、`restore_project`、`upsert_role` 只由
-leader 在使用者**目前對話中明確要求該項操作**後呼叫；「完成」、「收尾」、沉默或
-先前對話都不是授權。封存先做 preview；若 preview 有 `IN_PROGRESS`，封存前還要再
-取得一次明確確認。leader 不得要求使用者手動複製 claim token：worker 在工作上下文
-保留它，只在內部回報給 leader，且不得寫入檔案、commit 或 task log。
+依各專案設定的起始分支、整合目標、PR／MR、必要檢查、review 與合併權限建立工作區；未設定則列出缺項，不猜 main、dev 或自動 merge。個人專案既有流程也須明確登錄才沿用；公司規則由公司提供。commit、push、PR、部署與外部寫入依目前使用者授權；沒有授權就保留可審查 diff。
 
-## 1. 確認專案與規則
-
-從使用者訊息取得完整 `projectName`。取不到就詢問；不得從 cwd、資料夾或
-git remote 猜測。開始前完整讀取 repo 的 `AGENTS.md` 與 `CLAUDE.md`（若存在）。
-
-盤點全部狀態並取得 TODO 描述：
-
-```text
-list_tasks(projectName=<名稱>, includeDescription=true)
-```
-
-記錄本次 batch manifest：啟動時納入的 task IDs、基準 commit 與後續新增項目。
-
-- 納入：初始 IDs、QA 回報且 leader 建立的 production bug、使用者核准的修正、必要前置、
-  reviewer 的必修 task。
-- 不自動納入執行途中出現的不相關 task；詢問要放本批或下一批。
-- 全部 DONE 也不得自行封存專案；封存只接受使用者當前明確指示。
-
-## 2. 開工前檢查
-
-### Git 基準
-
-- `main` 有未提交修改時，列出變更並請使用者決定；不得自動 stash、commit 或丟棄。
-- 長期整合分支固定為 `dev`。不存在時從乾淨的 `main` 建立。
-- `dev` 若含上一批尚未合併的內容，先詢問如何處理，不開新 batch。
-- 每筆 task 從最新 `dev` 建立 `task/<task-id>-<role>` 與獨立 worktree。
-  不使用 `dev/task-*`：Git 不能同時保存 `dev` 與 `dev/...` refs。
-
-### 容量與既有執行中任務
-
-容量以同一專案、同一 category 為單位；目前預設 `BACKEND=3`，`FRONTEND`、`TEST`、
-`INFRA`、`DOC` 各為 1。每個專案分開計算容量，但使用共用環境變數設定。實際上限以
-`list_tasks` 回傳的 `capacities` 為準，不能從預設或舊任務推測設定。`OTHER` 是 leader 自己處理的工作，不是 worker category，也不占
-worker 容量。leader 是唯一協調者，不另開 leader worker。
-
-`list_tasks` 不論查詢篩選條件，`capacities` 都包含各 category 的容量快照：
-`{projectId, category, limit, inProgress, available, full}`。Java MCP 會以文字
-`Snapshot[]` 附在工具結果中，Workers 以 JSON 回傳。每個 worker 的 claim 結果也帶有
-`capacity` 快照。重新盤點時讀取最新快照；`available` 是看板狀態，不包含 leader 尚未
-登記的啟動預留，因此排程時要自行合併預留槽。
-
-每個 `IN_PROGRESS` task 都占一槽，包括 worker 尚未完成、等待 leader 整合及 agent
-失聯的任務；`BLOCKED` 不占槽。恢復 `BLOCKED` 任務到 `IN_PROGRESS` 前，先確認容量。
-降低容量不會中止或釋放既有工作；若 `inProgress > limit`，停止新增派工，待狀態下降。
-沒有可信的 session 存活偵測，不能因 agent 看似離線就自動釋放 claim。比對 task、agent、
-branch 與 worktree；合法接手沿用原 task 和工作區，直到狀態明確改變前該槽持續占用。
-
-leader 排程時將各 category 槽位分為「已認領」與「已預留未認領」兩類，兩類合計不得
-超過 `limit`，且同一 task 只能算一次。預留從決定啟動 worker 起計入；worker 回報實際
-claim 後，將同一預留轉為已認領，不重複加算。平台總 session slots 包含 leader，依當下
-環境回報的可用總量為準；啟動前同時檢查 category `available` 與平台剩餘 slots。例如總量
-為 4 時，leader 保留一槽，最多同時三個 live worker；既有 `IN_PROGRESS` 工作（含待整合
-與失聯）仍占 category 槽，但只有實際 live session 才占平台 session slot。這是平台實例
-限制，不代表所有平台固定只有四槽或可無限增加 worker。
-
+各 task 使用獨立可恢復工作區，開發埠、DB、log、PID 帶 task 或 instance 唯一標記。保留 dirty、未整合或狀態不明工作區；不因異常刪除。啟動時記下確切 PID，收尾只處理該 PID 或自己埠號反查的 PID。使用隔離資料，不接觸正式客戶資料。
 
 ## 3. 事件驅動排程
 
-不要使用同步 wave。每次開工、agent 結束、task 轉態或使用者回答後，重新執行：
+每次開工、agent 結束、任務轉態或人類回答後重新 list_tasks，依順序挑 eligible 且尚未預留／認領的 task。排除前置未 DONE、未決需求阻擋、明顯檔案或資源衝突及本批以外工作。沒有角色或專案配額；跨專案也只依平台實際 session 容量排隊補派。平台上限包含 leader，啟動前預留 leader 槽，不為填滿上限啟動閒置 agent。
 
-1. `list_tasks(..., includeDescription=true)`。
-2. 排除前置未 DONE、容量已滿、已預留／認領及不屬本 batch 的 task。
-3. category 每一個可用槽都依看板順序挑第一筆 eligible task，跳過已預留或認領的 task；
-   不得因難度或偏好跳題。
-4. 先依各 category 的 `available` 與 leader 預留計算可用槽；有競爭時比較候選 task，
-   依 `sort_order`／看板順序，task id 僅作同序 tie-breaker。只在依賴和明顯檔案／資源
-   衝突允許時啟動 worker，不為填滿容量啟動閒置 session。
-5. 任一 agent 結束就立即重排；不等待其他角色「湊齊一波」。
+同角色可啟動多個 instance，每個只有一件任務；角色 name 相同，assignee 由 leader 配發且最多 60 字。leader 對同專案同 category 的 claim 握手短暫序列化：分配預期 task id，等待 worker 自行 claim 回報實際 id 後再派下一件，避免重複預留。實際 id 不符就停止修改，重新對應工作區。保留 CAS 重試、token 與相依保護；區分無 TODO、相依等待與認領競爭。
 
-Agent 仍必須呼叫該角色的 `claim_next_task`。同 category 的並行 worker 可能同時看到相同
-首筆候選，因此認領握手短暫序列化：leader 一次只發出一個該 category 的 claim 指令，等待
-claim 結果的實際 `taskId` 後，再分配下一筆不同候選。每個 worker 仍由自己呼叫
-`claim_next_task`。若工具提供可查詢候選的 `list_tasks`，leader 可先依候選建立預期 task
-worktree，但同一候選不得分配給多個 worker。認領結果與預期 taskId 不同時，worker 停止
-修改並回報實際 taskId；leader 重新盤點，確保後續工作區與該 taskId 對應，不把已認領任務
-硬塞進錯誤 branch。`CAPACITY_FULL` 表示容量競爭，重新盤點後再排；沒有 TODO、候選皆受
-相依阻擋等結果維持各自原義。
+派工記錄包括 task、instance、工作區、基準版本、最後狀態與待接手事項，token 只留在內部上下文，不寫檔案、commit、task log 或應用 log。失聯先提示並盤點原 claim／工作區，不自動釋放可能仍執行的任務；接手沿用原任務並確認無重複執行。
 
-## 4. 建立 task 工作區並派工
+| category | worker |
+|---|---|
+| BACKEND | backend-dev |
+| FRONTEND | frontend-dev |
+| TEST | qa |
+| INFRA | infra |
+| DOC | docs |
 
-Leader 從最新 `dev` 建立 task branch/worktree，再依下表啟動對應角色 agent。模型與
-推理強度必須在 `spawn_agent` 明確指定，不得讓 worker 繼承 leader 的高成本設定：
+OTHER 由 leader 在範圍與授權明確時處理。環境無法啟動 subagent 時回報限制，不冒充另一個獨立驗收者。需求確認與驗收是明確責任，不要求每件任務常駐額外 session。
 
-| category | agent | model | reasoning_effort |
-|---|---|---|---|
-| BACKEND | `backend-dev` | `gpt-6.1-terra` | `high` |
-| FRONTEND | `frontend-dev` | `gpt-6.1-terra` | `medium` |
-| TEST | `qa` | `gpt-6.1-terra` | `high` |
-| INFRA | `infra` | `gpt-6.1-terra` | `high` |
-| DOC | `docs` | `gpt-6-luna` | `medium` |
+## 4. 實作、自測與獨立驗收
 
-Codex 使用 `spawn_agent` 啟動一次性 agent，並設定 `fork_turns="none"`：派工訊息本身
-必須帶齊工作所需上下文，避免複製 leader 的完整歷史與推理成本。若環境不能直接指定 plugin 角色，就在
-初始訊息中要求讀取本 plugin bundle 的 `agents/<role>.md` 並呼叫 `get_role`；在
-本 repo 開發時，這些薄殼位於 `plugins/ai-project-board/agents/`。使用
-`wait_agent` 收尾，必要時以 `followup_task` 讓原 agent 在原 branch 做一次返工。
-若 subagent 工具不可用，回報能力限制並停止該 worker 派工；不得由 leader 冒充角色。
-容量為 1 時循序派工；同角色每個 instance 仍只處理一件 task。
+worker 先 get_role，再 claim 一件，完成實作及相關自測後用 report_implementation 保存聲明，保持 IN_PROGRESS，回報版本、diff、實際結果、限制及內部 claim token。Leader 查核範圍與交接完整性，不能獨自解釋需求或取代 QA／reviewer。
 
-派工訊息必須包含：
+QA 從原始需求出發，讀文件與專案規則，在隔離環境探索真實畫面與程式，自行整理跨畫面流程；程式只能當線索。先做可查明部分，只詢問真正無法判斷的業務決定。流程卡保存在各工作專案版本控制，帶適用版本、依據、前置、步驟、結果、推測與待決事項；優先重用已確認流程，變更時更新。
 
-- `projectName`、預期 task id、branch/worktree 路徑與最新 `dev` 基準；開發埠、DB、log
-  使用 task 或 instance 唯一標記；同角色 instance
-   使用同一個 `roleName`，並使用 leader 配發、長度不超過 60 字的唯一 `assignee`（例如
-   `backend-t6-a`），不可自行共用或猜測 assignee。
-- 任務目標與必要背景；只提供完成本 task 需要的上下文，不貼整段無關對話。
-- 允許修改的檔案／模組，以及明確禁止修改的範圍。
-- leader 已決定的架構、資料格式、相容策略與其他不可由 worker 重新設計的事項。
-- 可觀察、可驗證的逐項驗收條件。
-- 必須執行的測試／檢查指令，以及開發埠號、資料庫等隔離設定。
-- 遇到需求歧義、需跨角色或超出範圍時的停止／BLOCKED 條件；不得自行猜測或擴張。
-- 只認領並處理一件；不得自行認領下一件。
-- 先呼叫 `get_role` 並遵守 repo 指引與角色邊界。
-- 驗證、commit、回報 changed files／commit／測試結果／完成摘要。
-- 完成時保持 `IN_PROGRESS`，不要自行標 `DONE`；若工具回傳 claim token，僅在回報
-  leader 時傳遞，不寫入檔案、commit、task_log 或 application log，也不要要求使用者
-  手動複製或轉交。
+對適用正常、錯誤、邊界、權限與失敗情境執行完整瀏覽器操作，檢查正確儲存、重新整理與下游使用；禁止操作需驗證請求被拒絕，不只看選單。保留可重跑步驟、實際結果、版本與必要截圖／操作紀錄。各專案自行選框架，看板接收證據；截圖或錄影不能單獨證明行為正確。Reviewer 獨立檢查完整已指定 diff、需求漏驗、測試有效性與安全風險，唯讀回報。
 
-## 5. Agent 回報與 leader 表面驗收
+## 5. 完成閘門與整合
 
-Agent 完成修改、驗證與 commit 後結束。Leader 只做表面 gate：
+逐需求追溯來源／版本 → 驗收條件 → 案例 → 實際證據 → 受測版本 → 獨立結論。代理填 PASSED 是自行聲明；可信證據由有身分的受控執行器／CI 取得，使用預先核准的執行方式、權限與隔離環境。不得直接執行代理任意提交的 shell 指令。角色文字與工具白名單不是 server 授權；驗收與管理寫入必須受後端保護。
 
-- 修改範圍與 task 驗收條件一致。
-- branch/worktree 沒有未交代的 dirty 檔案。
-- commit 存在且 task id 正確。
-- 測試／驗證有實際結果，BLOCKED 有完整原因。
+必要驗收失敗、未跑、版本不符或未決需求時不得 DONE。需求／程式版本變更即重查相關證據適用性；免驗或不適用需要理由與人類核准。舊紀錄保留為歷史聲明，不直接升級為可信證據。測試通過只代表已測案例，不代表完全符合需求。
 
-表面 gate 不取代 QA 或 reviewer。第一次未達時，交回原角色在原 branch 修正；第二次
-仍未達就停止並詢問使用者。純機械 merge conflict 也交回原角色，且優先於該角色的
-新 task；語意衝突則暫停相關 merge／下游並詢問使用者。無關工作繼續。
+實作完成、驗收完成、整合與發布分開記錄。依後端閘門與明確專案 policy 完成獨立驗收、必要檢查及整合要求後才 complete_task／DONE，此時才解鎖相依。未設定 Git policy 不自行 merge；發布仍須另外授權。
 
-通過後由 leader 執行 `git merge --no-ff` 將 task branch 合併到 `dev`。只有 merge
-成功後才以 `complete_task` 將 task 標成 `DONE`，並提交 agent 內部回報的 claim token、
-摘要與驗證證據。下游只在此時解鎖。
+## 工具與人類授權
 
-合併後確認 worktree 乾淨再移除 worktree，task branch 保留到整批進入 `main`。
+五個 worker 只取得 get_role、claim_next_task、block_task、report_implementation、complete_task、update_task_status。恢復／釋放用 update_task_status；reset_task_claim 僅 leader 確認 token 遺失後復原。worker 不取得規格／相依修改、建任務、封存或角色寫入工具；發現需要時回報 leader。
 
-## 6. BLOCKED、異常與提問
+preview_archive_project、archive_project、restore_project、upsert_role 僅在使用者目前對話明確要求對應操作後執行。封存先 preview；若有 IN_PROGRESS，實際封存前再次確認。不要求使用者複製 token。Java 管理工具須 leader 專用 BOARD_MANAGEMENT_TOKEN Bearer 憑證；Workers 須在 MANAGEMENT_DEVICE_IDS 核准清單的已驗證裝置。管理憑證與驗收簽署金鑰都不交給 worker。管理工具包含 preview 與流程草稿保存，預設拒絕未授權者；授權稽核只代表嘗試，不代表業務成功。此邊界不是通用 SSO，正式 MCP 仍維持 localhost，不對外公開。
 
-### BLOCKED
-
-- Agent 標記 `BLOCKED` 後結束並釋放 category 槽；保留 branch/worktree，不合併 `dev`。
-- 下游保持等待，無關 task 繼續。
-- `USER_INPUT`、需求或責任不明時，agent 回報事實、歧義、原因、選項與建議；
-  所有使用者問題由 leader 統一提出。
-- Leader 先查 repo、task 與歷史，仍不清楚才問。釐清次數不受返工上限限制。
-- 技術問題有明確解法就留在原 task；需要新設計或新 task 時先問使用者，只有 QA
-  發現 production bug 可依角色規則直接建 task。
-- 回答後優先讓原 agent／原 branch 接續；無法復用時由 leader 確認容量與原 claim 後，合法
-  接手原 task。不得因 session 失聯自行釋放 claim 或清除 dirty worktree。
-
-### Agent 異常結束
-
-任務仍 `IN_PROGRESS` 但 agent 消失時，檢查 branch、diff、commit 與最後回報，保留
-成果並派新的同角色 agent 接續原 branch。自動接手最多一次；再次異常就標記
-`BLOCKED` 並詢問使用者。接手期間該 `IN_PROGRESS` task 仍占 category 容量。
-
-### 認領競爭
-
-把 `CAPACITY_FULL`、CAS contention、無 TODO、前置阻擋分開處理。容量滿或 CAS contention 時重新盤點；不得將它們當成 category 已清空，也不得覆蓋原本「無待辦」或「等待前置」回覆。
-
-## 7. OTHER
-
-Leader 只直接處理描述明確指定給 leader、範圍清楚且已獲目前請求授權的 OTHER；
-一樣要 claim、使用 `task/<id>-leader`、驗證、commit、merge `dev` 後才 DONE。
-
-若實際應屬 worker role，不自行改分類或猜 owner，先詢問。部署、刪除、付款、外部寫入、
-新增權限與正式環境變更永遠需要相應明確授權。OTHER 一樣列入 batch manifest 與 reviewer。
-
-## 8. 暫停與取消
-
-使用者要求暫停或取消時，立即停止新認領。讓 live agent 在安全操作點保存並回報；
-保留已合併的 `dev`、未完成 branch/worktree 與看板狀態，不啟動 reviewer、不合併 main。
-恢復時沿用 manifest。取消不等於回滾或刪除；需要捨棄成果時另列精確範圍確認。
-
-## 9. 整批 reviewer 與 main 合併
-
-只有 manifest 內全部 task 都 DONE、沒有 unresolved BLOCKED，才叫既有 `reviewer`
-唯讀審查完整 `git diff main...dev`。Reviewer 使用 `gpt-6.1-sol`、`high`，並以
-`fork_turns="none"` 啟動；派工訊息提供 manifest、驗收條件、commit 清單、測試結果、
-完整 diff 範圍與 repo 規則，不讓它繼承 leader 的完整對話。
-純 DOC 也不跳過。
-
-Reviewer 只分「必須修／建議」並回報 leader；不得改檔、建 task 或合併。Leader 判斷
-是否建立修正 task、category、相依與分派；需求不明或超出範圍時詢問使用者。建議只
-彙整，不自動實作。
-
-必修完成後，啟動新的 reviewer instance 從頭審完整 diff。只允許一個完整修正／重審
-循環；第二次仍有必修就停止並把兩次結果交給使用者。
-
-Reviewer 無必修後，由 leader 執行 `git merge --no-ff dev` 合併到 `main`。不 push、
-不部署、不重啟服務。刪除已合併且狀態明確的 task branches，保留 `dev` 並同步到最新
-`main`；dirty、未合併或狀態不明的一律保留並回報。
-
-最後彙整完成、BLOCKED、返工、reviewer 建議與未納入本批的 task，附上看板網址
-`http://localhost:8080/`。
+暫停／取消時停止新派工，保存成果與狀態；取消不是刪除或回滾授權。人類決定業務歧義、接受例外、核准高風險操作與發布。最後只摘要已通過、失敗／未驗、待決事項及能否結案的理由，按需提供詳細證據，不用信心分數取代驗收。

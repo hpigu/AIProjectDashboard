@@ -1,6 +1,6 @@
 {
   "name": "ai-project-board",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "description": "Local AI task board integration for Codex: role agents, dependency-aware claiming, blockers, and completion evidence.",
   "author": {
     "name": "Daniel Huang"
@@ -27,6 +27,7 @@
       "Write"
     ],
     "defaultPrompt": [
+      "Plan or update the Git workflow for my named project",
       "Claim tasks for my project",
       "Show the dependency-ready tasks on the board",
       "Create a project and break it into role-based tasks"

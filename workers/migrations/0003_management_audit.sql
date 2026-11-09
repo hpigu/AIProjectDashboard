@@ -1,0 +1,7 @@
+CREATE TABLE management_authorization_audit (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ actor TEXT NOT NULL,
+ tool_name TEXT NOT NULL,
+ decision TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

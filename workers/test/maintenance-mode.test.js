@@ -9,12 +9,16 @@ function request(method, params = {}) {
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
 }
 const writes = {
+  prepare_project_workflow: {projectName:"project",expectedRevision:0},
+  confirm_project_workflow: {actor:"owner",payload:"{}",signature:"0".repeat(64)},
+  record_acceptance_event: { actor: "owner", payload: "{}", signature: "0".repeat(64) },
   create_project: { name: 'new project' },
   create_tasks: { projectId: 1, tasks: [{ title: 'task', description: '', category: 'TEST', dependsOnIndexes: [], dependsOnTaskIds: [] }] },
   claim_next_task: { projectName: 'project', category: 'TEST', assignee: 'worker' },
   update_task_status: { taskId: 1, status: 'TODO' },
   reset_task_claim: { taskId: 1 },
   block_task: { taskId: 1, reasonType: 'OTHER', detail: 'blocked' },
+  report_implementation: { taskId: 1, summary: "implemented", verificationResults: [{name:"self test",result:"FAILED",detail:"bug"}] },
   complete_task: { taskId: 1, summary: 'done', verificationResults: [{ name: 'check', result: 'PASSED', detail: 'ok' }] },
   update_task_details: { taskId: 1, expectedVersion: 0, title: 'new title' },
   set_task_dependencies: { taskId: 1, prerequisiteTaskIds: [], expectedVersion: 0 },
@@ -39,13 +43,13 @@ test('maintenance pauses every existing write tool before any service call', asy
 test('maintenance preserves discovery, ping and explicit read-only operations', async () => {
   const seen = [];
   const service = { execute: async name => { seen.push(name); return { ok: true }; } };
-  for (const [name, args] of Object.entries({ list_tasks: { projectId: 1 }, list_roles: {},
-    get_role: { name: 'qa' }, preview_archive_project: { projectName: 'project' } })) {
-    const body = await (await handleMcp(request('tools/call', { name, arguments: args }), service, { maintenance: true })).json();
+  for (const [name, args] of Object.entries({ get_project_workflow:{projectName:"project"}, list_tasks: { projectId: 1 }, list_roles: {},
+    get_acceptance: { taskId: 1 }, get_role: { name: 'qa' }, preview_archive_project: { projectName: 'project' } })) {
+    const body = await (await handleMcp(request('tools/call', { name, arguments: args }), service, { maintenance: true, managementAuthorized: true })).json();
     assert.notEqual(body.result.isError, true);
   }
-  assert.equal(seen.length, 4);
-  const discovery = await (await handleMcp(request('tools/list'), service, { maintenance: true })).json();
+  assert.equal(seen.length, 6);
+  const discovery = await (await handleMcp(request('tools/list'), service, { maintenance: true, managementAuthorized: true })).json();
   assert.equal(discovery.result.tools.length, Object.keys(writes).length + seen.length);
   assert.deepEqual((await (await handleMcp(request('ping'), service, { maintenance: true })).json()).result, {});
 });
@@ -53,7 +57,7 @@ test('maintenance preserves discovery, ping and explicit read-only operations', 
 test('normal operation resumes without credential replacement', async () => {
   let calls = 0;
   const service = { execute: async () => { calls++; return { ok: true }; } };
-  for (const options of [undefined, { maintenance: false }]) {
+  for (const options of [{ managementAuthorized:true }, { maintenance: false, managementAuthorized:true }]) {
     const body = await (await handleMcp(request('tools/call', { name: 'create_project', arguments: { name: 'project' } }), service, options)).json();
     assert.notEqual(body.result.isError, true);
   }
@@ -66,13 +70,13 @@ test('HTTP maintenance switch fails closed on malformed values and remains behin
   const handler = createHandler({ authenticate: async () => ({ deviceId: 'test' }), serviceFactory: () => service });
   for (const value of ['true', '', 'FALSE', 'typo', false]) {
     const response = await handler(request('tools/call', { name: 'create_project', arguments: { name: 'project' } }),
-      { BOARD_MODE: 'mcp', BOARD_MAINTENANCE: value });
+      { BOARD_MODE: 'mcp', MANAGEMENT_DEVICE_IDS: JSON.stringify(['test']), BOARD_MAINTENANCE: value });
     assert.equal((await response.json()).result.isError, true);
   }
   assert.equal(calls, 0);
   for (const value of [undefined, 'false']) {
     const response = await handler(request('tools/call', { name: 'create_project', arguments: { name: 'project' } }),
-      { BOARD_MODE: 'mcp', BOARD_MAINTENANCE: value });
+      { BOARD_MODE: 'mcp', MANAGEMENT_DEVICE_IDS: JSON.stringify(['test']), BOARD_MAINTENANCE: value });
     assert.notEqual((await response.json()).result.isError, true);
   }
   assert.equal(calls, 2);

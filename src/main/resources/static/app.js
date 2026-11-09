@@ -315,7 +315,74 @@ const LevelOne = {
   },
 };
 
+const ProjectWorkflow = {
+  props: ['projectId', 'projectName'],
+  data() { return { workflow: null, loading: false, error: null, controller: null, copyState: '' }; },
+  computed: {
+    fields() { return ['baseBranch', 'integrationTarget', 'pullRequestPolicy', 'requiredChecks', 'reviewPolicy', 'mergeAuthority', 'doneWhen']; },
+    prompt() { return this.workflow?.planningPrompt || this.t('workflow.prompt', { name: this.projectName || this.projectId }); },
+  },
+  created() {
+    this.load();
+    this.unsubscribe = window.__boardBus.on('project.workflow_changed', payload => { if (payload.projectId === this.projectId) this.load(); });
+    this.unsubscribeReconnect = window.__boardBus.on('tasks.created', payload => { if (payload.projectId === this.projectId) this.load(); });
+  },
+  beforeUnmount() { this.controller?.abort(); this.unsubscribe?.(); this.unsubscribeReconnect?.(); },
+  watch: { projectId() { this.workflow = null; this.copyState = ''; this.load(); } },
+  methods: {
+    async load() {
+      this.controller?.abort();
+      const controller = new AbortController();
+      this.controller = controller; this.loading = true; this.error = null;
+      try { this.workflow = await fetchJson(`/api/projects/${this.projectId}/workflow`, { signal: controller.signal }); }
+      catch (e) { if (e.name !== 'AbortError') this.error = e.message; }
+      finally { if (this.controller === controller) this.loading = false; }
+    },
+    workflowText(...parts) { const key = ['workflow', ...parts].join('.'); return this.t(key); },
+    value(value) { return value == null || value === '' ? this.t('workflow.missing') : (typeof value === 'object' ? JSON.stringify(value) : value); },
+    async copyPrompt() {
+      try { await navigator.clipboard.writeText(this.prompt); this.copyState = 'copied'; }
+      catch (_) { this.copyState = 'copyFailed'; }
+    },
+  },
+  template: `
+    <section class="workflow-panel" :aria-label="t('workflow.title')">
+      <div class="workflow-heading"><h3>{{ t('workflow.title') }}</h3>
+        <span v-if="workflow" class="workflow-state">{{ workflowText('status', workflow.status) }}</span>
+        <button type="button" class="back-btn" @click="load" :disabled="loading">{{ t('workflow.refresh') }}</button>
+      </div>
+      <p v-if="loading" role="status">{{ t('workflow.loading') }}</p>
+      <p v-if="error" role="alert">{{ t('workflow.loadError') }} {{ error }} <button type="button" @click="load">{{ t('workflow.retry') }}</button></p>
+      <template v-if="workflow && !error">
+        <p v-if="!workflow.active">{{ workflow.status === 'LEGACY' ? t('workflow.legacy') : t('workflow.notConfigured') }}</p>
+        <details v-if="workflow.active" class="workflow-details" open>
+          <summary>{{ t('workflow.active') }} · {{ workflow.active.version }}</summary>
+          <dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.active.gitPolicy[field]) }}</dd></template></dl>
+          <p>{{ t('workflow.approved') }}：{{ workflow.active.confirmedBy }} · {{ workflow.active.confirmedAt }}</p>
+          <p>{{ t('workflow.approvalRef') }}：{{ workflow.active.approvalRef }}</p>
+          <details><summary>{{ t('workflow.sources') }}</summary><ul><li v-for="(source, i) in workflow.active.sources" :key="i">{{ workflowText('fields', source.field) }} · {{ workflowText('sourceKind', source.kind) }} · {{ source.ref }} · {{ source.version }} — {{ source.detail }}</li></ul></details>
+        </details>
+        <details v-if="workflow.draft" class="workflow-details" open>
+          <summary>{{ t('workflow.draft') }} · {{ workflow.draft.version }}</summary>
+          <p>{{ workflow.draft.readyForConfirmation ? t('workflow.ready') : t('workflow.incomplete') }}</p>
+          <p v-if="workflow.active">{{ t('workflow.draftKeepsActive') }}</p>
+          <dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.draft.gitPolicy[field]) }}</dd></template></dl>
+          <p v-if="workflow.draft.missingFields.length">{{ t('workflow.missingFields') }}：{{ workflow.draft.missingFields.map(field => workflowText('fields', field)).join('、') }}</p>
+          <ul v-if="workflow.draft.questions.length"><li v-for="(question, i) in workflow.draft.questions" :key="i">{{ workflowText('fields', question.field) }}：{{ question.question }}</li></ul>
+          <details v-if="workflow.draft.changes.length"><summary>{{ t('workflow.changes') }}</summary><ul><li v-for="change in workflow.draft.changes" :key="change.field">{{ workflowText('fields', change.field) }}：{{ value(change.before) }} → {{ value(change.after) }}</li></ul></details>
+          <details><summary>{{ t('workflow.sources') }}</summary><ul><li v-for="(source, i) in workflow.draft.sources" :key="i">{{ workflowText('fields', source.field) }} · {{ workflowText('sourceKind', source.kind) }} · {{ source.ref }} · {{ source.version }} — {{ source.detail }}</li></ul></details>
+        </details>
+        <details v-if="workflow.legacy"><summary>{{ t('workflow.legacyTitle') }}</summary><dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.legacy.gitPolicy[field]) }}</dd></template></dl></details>
+      </template>
+      <p>{{ t('workflow.dialogHelp') }}</p>
+      <div class="workflow-prompt"><code>{{ prompt }}</code><button type="button" class="back-btn" @click="copyPrompt">{{ t('workflow.copy') }}</button></div>
+      <p v-if="copyState" role="status">{{ workflowText(copyState) }}</p>
+    </section>
+  `,
+};
+
 const LevelTwo = {
+  components: { ProjectWorkflow },
   props: ['projectId', 'projects', 'projectSummary'],
   emits: ['back', 'jump'],
   data() {
@@ -692,7 +759,10 @@ const LevelTwo = {
       try {
         const payload = await fetchJson(`/api/projects/${this.projectId}/tasks/${taskId}`);
         if (this.detailTaskId !== taskId) return;
-        this.detail = payload;
+        const acceptance = await fetchJson(`/api/projects/${this.projectId}/tasks/${taskId}/acceptance`)
+          .catch(() => ({ canClose: false, passedCases: [], blockers: [this.t('acceptance.unavailable')], events: [] }));
+        if (this.detailTaskId !== taskId) return;
+        this.detail = { ...payload, acceptance };
         await nextTick();
         if (preserveScroll && this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = previousScroll;
       } catch (e) {
@@ -764,6 +834,20 @@ const LevelTwo = {
       // 找不到對應翻譯就照後端原字串顯示，而不是把警示符號露在畫面上。
       return label.startsWith('⚠') ? reason : label;
     },
+    acceptanceContract(acceptance) { return (acceptance.events || []).filter(e => e.kind === 'CONTRACT').at(-1)?.body || {}; },
+    acceptanceCurrentEvents(acceptance) {
+      const contract = (acceptance.events || []).filter(e => e.kind === 'CONTRACT').at(-1);
+      return (acceptance.events || []).filter(e => contract && e.body.contractId === contract.eventId);
+    },
+    acceptanceRequirements(acceptance) {
+      const contract = this.acceptanceContract(acceptance);
+      return (contract.requirements || []).map(r => {
+        const cases = (contract.cases || []).filter(c => c.requirementIds.includes(r.id));
+        return { ...r, passed: r.state === 'CONFIRMED' && cases.length > 0 && cases.every(c => acceptance.passedCases.includes(c.id)) };
+      });
+    },
+    acceptanceDispatch(acceptance) { return (acceptance.events || []).filter(e => e.kind === 'DISPATCH').at(-1)?.body; },
+    dispatchStale(dispatch) { const timestamp = Date.parse(dispatch.lastSeen); return Number.isFinite(timestamp) && Date.now() - timestamp > 15 * 60000; },
     visibleVerifications(evidence) {
       const items = evidence && Array.isArray(evidence.verifications)
         ? evidence.verifications
@@ -791,6 +875,7 @@ const LevelTwo = {
           @click="$emit('jump', p.id)"
         >⚠ {{ p.name }}</button>
       </div>
+      <project-workflow :project-id="projectId" :project-name="board?.name || projectSummary?.name"></project-workflow>
       <div v-if="board" class="view-switch" role="tablist" :aria-label="t('levelTwo.viewSwitchLabel')">
         <button type="button" role="tab" :aria-selected="viewMode === 'kanban'" :class="{ selected: viewMode === 'kanban' }" @click="setViewMode('kanban')">{{ t('levelTwo.viewKanban') }}</button>
         <button type="button" role="tab" :aria-selected="viewMode === 'dependencies'" :class="{ selected: viewMode === 'dependencies' }" @click="setViewMode('dependencies')">{{ t('levelTwo.viewDependencies') }}</button>
@@ -984,6 +1069,20 @@ const LevelTwo = {
             <p v-else class="detail-empty">{{ t('levelTwo.none') }}</p>
           </section>
 
+          <section v-if="detail.acceptance" class="detail-section detail-acceptance">
+            <h3>{{ t('acceptance.title') }}</h3>
+            <p>{{ detail.acceptance.canClose ? t('acceptance.accepted') : t('acceptance.blocked') }}</p>
+            <p>{{ t('acceptance.passed') }}：{{ detail.acceptance.passedCases.join('、') || t('acceptance.none') }}</p>
+            <ul><li v-for="reason in detail.acceptance.blockers" :key="reason">{{ reason }}</li></ul>
+            <p>{{ t('acceptance.requirements') }}</p>
+            <ul><li v-for="r in acceptanceRequirements(detail.acceptance)" :key="r.id">{{ r.id }}：{{ r.passed ? t('acceptance.casePassed') : t('acceptance.unverified') }} — {{ r.acceptance }}</li></ul>
+            <div v-if="acceptanceContract(detail.acceptance).questions?.length"><p>{{ t('acceptance.decisions') }}</p><ul><li v-for="q in acceptanceContract(detail.acceptance).questions">{{ q }}</li></ul></div>
+            <div v-if="acceptanceContract(detail.acceptance).assumptions?.length"><p>{{ t('acceptance.assumptions') }}</p><ul><li v-for="q in acceptanceContract(detail.acceptance).assumptions">{{ q }}</li></ul></div>
+            <p>{{ t('acceptance.stages') }}：{{ detail.completionEvidence ? t('acceptance.implemented') : t('acceptance.notReported') }} · {{ acceptanceCurrentEvents(detail.acceptance).some(e => e.kind === 'INTEGRATION') ? t('acceptance.integrated') : t('acceptance.notIntegrated') }} · {{ acceptanceCurrentEvents(detail.acceptance).some(e => e.kind === 'RELEASE') ? t('acceptance.released') : t('acceptance.notReleased') }}</p>
+            <div v-if="acceptanceDispatch(detail.acceptance)"><p>{{ t('acceptance.dispatch') }}：{{ acceptanceDispatch(detail.acceptance).sessionId }} · {{ acceptanceDispatch(detail.acceptance).lastSeen }}</p><p v-if="dispatchStale(acceptanceDispatch(detail.acceptance))">{{ t('acceptance.stale') }}</p></div>
+            <p>{{ t('acceptance.unknown') }}</p>
+            <details><summary>{{ t('acceptance.details') }}</summary><pre class="detail-description">{{ JSON.stringify(detail.acceptance.events, null, 2) }}</pre></details>
+          </section>
           <section v-if="detail.completionEvidence" class="detail-section detail-evidence">
             <div class="section-title-row">
               <h3>{{ detail.status === 'DONE' ? t('levelTwo.completionEvidence') : t('levelTwo.lastCompletionEvidence') }}</h3>
@@ -991,7 +1090,7 @@ const LevelTwo = {
                 {{ detail.status === 'DONE' ? 'CURRENT' : 'HISTORICAL' }}
               </span>
             </div>
-            <p class="detail-description">{{ detail.completionEvidence.summary }}</p>
+            <p>{{ t('acceptance.declared') }}</p><p class="detail-description">{{ detail.completionEvidence.summary }}</p>
             <dl class="evidence-meta">
               <div><dt>{{ t('levelTwo.completedBy') }}</dt><dd>{{ detail.completionEvidence.completedBy ? '@' + detail.completionEvidence.completedBy : t('levelTwo.emptyValue') }}</dd></div>
               <div><dt>{{ t('levelTwo.completedAt') }}</dt><dd>{{ formatDate(detail.completionEvidence.completedAt) }}</dd></div>
@@ -1220,7 +1319,7 @@ const app = createApp({
         }, { once: true });
       };
 
-      ['project.created', 'tasks.created', 'task.status_changed'].forEach((type) => {
+      ['project.created', 'tasks.created', 'task.status_changed', 'project.workflow_changed'].forEach((type) => {
         eventSource.addEventListener(type, (e) => {
           const payload = JSON.parse(e.data);
           flashRail(payload.to || 'IN_PROGRESS');

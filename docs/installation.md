@@ -46,15 +46,17 @@ cd AIProjectDashboard
 
 Open <http://127.0.0.1:8080> when the launcher reports readiness.
 
-Worker capacity is configured on the server with `BOARD_CAPACITY_BACKEND`
-(default `3`) and `BOARD_CAPACITY_FRONTEND`, `BOARD_CAPACITY_TEST`,
-`BOARD_CAPACITY_INFRA`, `BOARD_CAPACITY_DOC` (default `1` each). For example,
-set the environment variable before starting `bin/board`; in PowerShell use
-`$env:BOARD_CAPACITY_BACKEND = "2"` before `.\bin\board.ps1 start`. Values must be
-ASCII decimal integers from 1 to 2147483647, without a leading zero; invalid or
-empty values prevent startup. The same settings apply across projects, while
-each project's usage is counted separately. See [Agent roles](agent-roles.md)
-for dispatch behavior and capacity limits.
+Worker roles have no per-project or cross-project quotas. The leader schedules
+against the platform's actual session limit, dependencies, and file/resource
+conflicts. See [Agent roles](agent-roles.md) and the
+[project workflow template](project-workflow-template.md) for Git policy and
+trusted acceptance setup; installing plugins does not update online roles.
+
+Management tools are denied until separately authorized. Configure a leader-only
+Java BOARD_MANAGEMENT_TOKEN (at least 32 characters) or a Workers verified-device
+allowlist; never provide those credentials to workers. Signed acceptance keys
+are separate. See [authorization boundaries](authorization-boundaries.md) before
+using project/task creation, archive preview, or role management.
 
 Useful lifecycle commands:
 
@@ -98,8 +100,8 @@ the source tree, so obtain a source checkout before running it:
 
 ```bash
 ./install/install.sh \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1" \
-  --version 3.2.1
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.3.0" \
+  --version 3.3.0
 
 ~/.ai-project-board/bin/board start
 ```
@@ -212,12 +214,12 @@ exact stable version.
 macOS/Linux source or installed server:
 
 ```bash
-bin/board update --version 3.2.1 \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1" \
+bin/board update --version 3.3.0 \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.3.0" \
   --check
 
-bin/board update --version 3.2.1 \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1"
+bin/board update --version 3.3.0 \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.3.0"
 ```
 
 Use `~/.ai-project-board/bin/board` instead when installed under the default
@@ -227,9 +229,9 @@ server.
 Windows updates use a downloaded ZIP and checksum list:
 
 ```powershell
-<install-root>\bin\board.ps1 update -Version 3.2.1 `
-  -ReleaseZip C:\path\ai-project-board-backend-windows-x64-3.2.1.zip `
-  -Checksums C:\path\ai-project-board-backend-3.2.1-SHA256SUMS.txt -Check
+<install-root>\bin\board.ps1 update -Version 3.3.0 `
+  -ReleaseZip C:\path\ai-project-board-backend-windows-x64-3.3.0.zip `
+  -Checksums C:\path\ai-project-board-backend-3.3.0-SHA256SUMS.txt -Check
 ```
 
 Remove `-Check` to apply the update. The updater verifies the artifact before

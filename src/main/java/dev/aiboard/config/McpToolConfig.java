@@ -21,10 +21,11 @@ public class McpToolConfig {
                                                                   RoleTools roleTools,
                                                                   TaskBlockTools taskBlockTools,
                                                                   TaskCompleteTools taskCompleteTools,
-                                                                  TaskEditTools taskEditTools) {
+                                                                  TaskEditTools taskEditTools, dev.aiboard.mcp.AcceptanceTools acceptanceTools,
+                                                                  dev.aiboard.mcp.ProjectWorkflowTools workflowTools) {
         return MethodToolCallbackProvider.builder()
                 .toolObjects(projectBoardTools, projectArchiveTools, roleTools, taskBlockTools, taskCompleteTools,
-                        taskEditTools)
+                        taskEditTools, acceptanceTools, workflowTools)
                 .build();
     }
 }

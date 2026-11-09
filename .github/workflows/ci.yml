@@ -58,6 +58,31 @@ jobs:
           path: target/surefire-reports/
           retention-days: 7
 
+  workers:
+    name: Workers 測試與隔離備份演練（Node 22）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+      - name: 安裝鎖定版本（不執行套件安裝腳本）
+        working-directory: workers
+        run: npm ci --ignore-scripts
+      - name: Workers 行為與本機 D1 還原測試
+        working-directory: workers
+        run: npm test
+      - name: 專案流程 owner 核准與協定安全測試
+        run: node --test scripts/project-workflow-check/*.test.mjs
+      - name: 加密備份與隔離還原安全測試
+        run: node --test scripts/backup-check/*.test.mjs
+
   scripts:
     name: 啟動腳本靜態檢查
     runs-on: ubuntu-latest

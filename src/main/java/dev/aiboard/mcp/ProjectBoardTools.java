@@ -134,25 +134,21 @@ public class ProjectBoardTools {
         if (!result.projectFound()) {
             return projectNotFoundMessage(projectName, result.availableProjects());
         }
-        String capacityInfo = result.capacity() == null ? "" : "\n容量：" + result.capacity();
-        if (result.outcome() == TaskService.ClaimOutcome.CAPACITY_FULL) {
-            return "CAPACITY_FULL：%s 容量已滿。%s".formatted(result.category(), capacityInfo);
-        }
         if (result.blockedByDependency()) {
-            return ("%s 還有待辦任務，但全部都在等前置任務完成：\n%s\n\n"
-                    + "請等前置任務標記 DONE 後再認領。")
+            return ("%s 還有待辦任務，但有未決需求或前置尚未通過驗收：\n%s\n\n"
+                    + "請先確認需求問題及前置的可信驗收結果；歷史 DONE 未驗證也不會解鎖。")
                     .formatted(result.category(),
                             result.blockedCandidates().stream()
                                     .map(ProjectBoardTools::describeBlockedCandidate)
-                                    .collect(Collectors.joining("\n"))) + capacityInfo;
+                                    .collect(Collectors.joining("\n")));
         }
         if (result.contended()) {
             return ("%s 認領時發生競爭，三次 compare-and-swap 均未取得任務。"
                     + "請 leader 重新讀取看板，再決定是否重新派工。")
-                    .formatted(result.category()) + capacityInfo;
+                    .formatted(result.category());
         }
         if (!result.claimed()) {
-            return "%s 目前沒有待辦任務。".formatted(result.category()) + capacityInfo;
+            return "%s 目前沒有待辦任務。".formatted(result.category());
         }
 
         TaskService.TaskDto task = result.task();
@@ -162,7 +158,7 @@ public class ProjectBoardTools {
                 + "claimToken：%s（僅顯示這一次，操作此任務時請帶上，勿外流／勿記錄到自己的 log）")
                 .formatted(task.id(), task.title(), task.category(),
                         result.project().name(), result.project().id(), description,
-                        result.claimToken()) + capacityInfo;
+                        result.claimToken());
     }
 
     @Tool(name = "list_tasks",
@@ -199,7 +195,6 @@ public class ProjectBoardTools {
         StringBuilder sb = new StringBuilder();
         sb.append("## %s（#%d）\n".formatted(project.name(), project.id()));
         sb.append("進度：%d/%d 完成\n".formatted(doneCount, allTasks.size()));
-        sb.append("容量：%s\n".formatted(result.capacities()));
 
         var byStatus = filtered.stream()
                 .collect(Collectors.groupingBy(TaskService.TaskDto::status, java.util.LinkedHashMap::new, Collectors.toList()));
@@ -243,6 +238,7 @@ public class ProjectBoardTools {
 
     /** 「- #12 標題（等待：#8 設定環境）」，讓認領者知道卡在哪。 */
     private static String describeBlockedCandidate(TaskService.BlockedCandidate candidate) {
+        if (!candidate.requirementIssues().isEmpty()) return "#"+candidate.task().id()+" "+String.join("；",candidate.requirementIssues());
         String waiting = candidate.waitingFor().stream()
                 .map(w -> "#%d %s".formatted(w.id(), w.title()))
                 .collect(Collectors.joining("、"));

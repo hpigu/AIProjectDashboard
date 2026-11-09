@@ -51,7 +51,7 @@ class TaskCompleteServiceTest {
     @BeforeEach
     void setUp() {
         service = new TaskCompleteService(taskRepository, taskLogRepository, evidenceRepository,
-                verificationRepository, projectService, eventPublisher, claimTokenService);
+                verificationRepository, projectService, eventPublisher, claimTokenService, org.mockito.Mockito.mock(dev.aiboard.acceptance.AcceptanceService.class));
     }
 
     private Task claimedTask(Long projectId, Long taskId, String title, String assignee) {

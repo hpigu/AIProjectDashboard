@@ -6,7 +6,10 @@
 [英文首頁](README.md) ·
 [最新版本](https://github.com/hpigu/AIProjectDashboard/releases/latest) ·
 [安裝指南](docs/installation.md) ·
-[MCP 工具參考](docs/mcp-tools.md)
+[MCP 工具參考](docs/mcp-tools.md) ·
+[需求驗收協定](docs/acceptance-protocol.md) ·
+[管理授權](docs/authorization-boundaries.md) ·
+[備份與還原](docs/backup-recovery.md)
 
 ![AI Project Board demo](docs/demo.gif)
 
@@ -29,12 +32,28 @@ AI Project Board 透過本機 MCP server 管理這個協作流程。Agent 原子
 
 - **避免重複工作**：並行認領使用 compare-and-swap，同一任務只會發給一個 agent。
 - **強制任務相依**：前置未完成的任務不會被發放，其他無相依工作仍可繼續。
-- **完成證據**：任務可保留驗證結果、變更檔案與 commit reference。
+- **結案閘門**：需求與證據綁定版本，受控執行紀錄、獨立審查及專案 Git policy 共同決定能否結案。
 - **跨 session 進度**：Claude Code 與 Codex 可對不同專案與角色共用同一看板。
-- **可設定 Worker 容量**：每個專案的 BACKEND 預設可同時執行 3 件，其餘 Worker
-  分類預設各 1 件，由 leader 協調認領並遵守平台 session 上限。
+- **角色不限配額**：跨專案依平台實際 session 上限、任務相依、檔案與資源衝突派工，槽位不足時排隊補派。
 - **本機優先**：預設只監聽 `127.0.0.1`，資料存在本機 H2，前端不依賴 CDN。
 - **可追溯歷史**：認領、阻塞、狀態變更與完成證據都會顯示在任務詳情。
+
+## 在對話設定專案 Git 流程
+
+對代理說「請為專案『名稱』規劃 Git 流程」。代理先讀文件、只問待決項，整理七欄與修改差異並保存草稿；你用獨立 owner 工具確認後生效。專案頁即使沒有任務也可查看有效設定、版本、核准紀錄與草稿。後續任務沿用，不必重填。詳見[操作與核准方式](docs/project-git-workflow.md)。
+
+## 驗收升級注意事項
+
+所有新完成操作（包含舊任務）都必須透過 `complete_task` 通過驗收閘門；
+`update_task_status(..., DONE)` 已取消。既有 DONE 保留歷史狀態，沒有新版驗收紀錄時
+仍標示未驗證，不能解鎖新的下游認領。使用前須配置專案範圍與最小權限的獨立簽署身分，並先登錄
+PROJECT_POLICY；代理自填 PASSED 無法結案。HMAC 只證明設定授權的簽署身分，
+不自動證明內容真實；CI 需要受測程式與開發代理都碰不到金鑰的隔離簽署邊界。
+預設沒有啟用任何可信身分。完整流程與相容性見[需求驗收協定](docs/acceptance-protocol.md)。
+
+隔離範例不代表真實公司系統、公司 Git flow 或 Amazon Bedrock 設定已驗證。
+修改 repo 內角色指引也不會同步既有線上角色。[備份與還原](docs/backup-recovery.md)
+提供隔離還原及可設定的加密離機匯出；本次尚未設定目的地或上傳離機備份。
 
 ## 從 source 啟動
 

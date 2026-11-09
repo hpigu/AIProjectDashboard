@@ -7,6 +7,19 @@ and [Semantic Versioning](https://semver.org/).
 
 No unreleased user-facing changes.
 
+## [3.3.0] — 2026-11-09
+
+### Added
+
+- Versioned project Git workflow planning, owner approval, and read-only board summaries.
+- Signed requirement contracts, controlled execution evidence, independent acceptance gates, and management authorization audits for Java and Workers.
+- QA flow-card guidance, browser verification fixtures, recovery tooling, and Workers CI.
+
+### Changed
+
+- Removed per-role and per-project worker quotas while preserving platform capacity, claims, dependencies, and resource conflict checks.
+- Implementation reports no longer imply accepted completion; legacy records remain historical declarations.
+
 ## [3.2.1] — 2026-08-13
 
 ### Fixed

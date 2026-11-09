@@ -19,10 +19,10 @@ test('stateless Streamable HTTP negotiates versions, lists all tools, returns en
     assert.equal(result.capabilities.tools.listChanged, false);
   }
   const listed = await (await handleMcp(post('tools/list'), service)).json();
-  assert.equal(listed.result.tools.length, 16);
+  assert.equal(listed.result.tools.length, 22);
   const complete = tools.find(tool => tool.name === 'complete_task');
   assert.ok(complete.inputSchema.properties.verificationResults.items.properties.detail);
-  const result = await (await handleMcp(post('tools/call', { name: 'create_project', arguments: { name: 'smoke' } }, { 'MCP-Protocol-Version': '2025-06-18' }), service)).json();
+  const result = await (await handleMcp(post('tools/call', { name: 'create_project', arguments: { name: 'smoke' } }, { 'MCP-Protocol-Version': '2025-06-18' }), service, { managementAuthorized: true })).json();
   assert.equal(result.result.structuredContent.action, 'create_project');
   assert.equal(JSON.parse(result.result.content[0].text).name, 'smoke');
   const notification = new Request('https://mcp.example.com/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });

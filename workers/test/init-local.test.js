@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +27,7 @@ test('fresh-only local initialization preserves migrations and refuses existing 
   const query = "SELECT (SELECT count(*) FROM d1_migrations) AS migrations, (SELECT count(*) FROM role WHERE instructions LIKE '%instanceAssignee%') AS updated, (SELECT count(*) FROM role) AS roles";
   const { stdout } = await exec(process.execPath, [cli, 'd1', 'execute', 'DB', '--local', '--persist-to', state, '--config', join(root, 'wrangler.jsonc'), '--env', '', '--command', query, '--json'], { cwd: root, env, timeout: 25000 });
   const rows = JSON.parse(stdout)[0].results;
-  assert.deepEqual(rows, [{ migrations: 1, updated: 5, roles: 5 }]);
+  assert.deepEqual(rows, [{ migrations: (await readdir(new URL("../migrations", import.meta.url))).filter(n => n.endsWith(".sql")).length, updated: 5, roles: 5 }]);
   const base = [cli, 'd1', 'execute', 'DB', '--local', '--persist-to', state, '--config', join(root, 'wrangler.jsonc'), '--env', ''];
   await exec(process.execPath, [...base, '--command', "UPDATE role SET instructions='custom' WHERE name='qa'"], { cwd: root, env, timeout: 25000 });
   await assert.rejects(exec(process.execPath, [init, dest], { cwd: root, env }));

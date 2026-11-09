@@ -7,7 +7,10 @@
 [Traditional Chinese 繁體中文](README.zh-TW.md) ·
 [Latest release](https://github.com/hpigu/AIProjectDashboard/releases/latest) ·
 [Installation guide](docs/installation.md) ·
-[MCP tools](docs/mcp-tools.md)
+[MCP tools](docs/mcp-tools.md) ·
+[Acceptance protocol](docs/acceptance-protocol.md) ·
+[Authorization boundaries](docs/authorization-boundaries.md) ·
+[Backup and recovery](docs/backup-recovery.md)
 
 ![AI Project Board demo](docs/demo.gif)
 
@@ -26,13 +29,12 @@ every project update live in one browser tab.
   agents cannot receive the same task.
 - **Dependencies are enforced.** Blocked tasks are skipped until every prerequisite
   is done; independent work can continue.
-- **Done means evidence.** Completion records can include verification results,
-  changed files, and a commit reference.
+- **Completion is gated.** Versioned requirements, signed execution reports,
+  independent review, and project Git policy determine whether work can close.
 - **Built for parallel sessions.** Claude Code and Codex can work on different
   projects and roles through the same board.
-- **Configurable worker capacity.** Backend roles default to three workers per
-  project; other worker categories default to one. The leader coordinates claims
-  and keeps platform session limits in view.
+- **Parallel roles without quotas.** The leader schedules across projects against
+  actual platform session limits, dependencies, and file/resource conflicts.
 - **Local-first.** The server binds to `127.0.0.1`, stores data in local H2, and
   serves a fully offline web UI with vendored Vue and fonts.
 - **Human-readable history.** Every claim, block, status change, and completion is
@@ -50,6 +52,27 @@ every project update live in one browser tab.
 
 This project is deliberately opinionated. It is a coordination layer for coding
 agents, not a general-purpose replacement for a human project-management suite.
+
+## Plan a project Git workflow
+
+Ask the agent to plan the Git workflow for your named project. It reads project rules, asks only unresolved decisions, saves a draft, and presents all seven settings and changes. A human owner approves using the isolated helper. The read-only project page shows active settings and drafts, even before tasks exist. Reuse approved settings for future work. See [planning and approval](docs/project-git-workflow.md).
+
+## Acceptance upgrade
+
+All new completion operations, including legacy tasks, must pass the acceptance
+gate through `complete_task`; direct `update_task_status(..., DONE)` is removed.
+Existing DONE history stays intact but is unverified without current acceptance
+records and cannot unlock new downstream claims. Configure scoped signing identities and a PROJECT_POLICY before
+acceptance; a self-reported PASSED result cannot close a task. HMAC identifies a
+configured signer, not the truth of its claims: CI needs an isolated signing
+boundary that development agents and tested code cannot access. No authorities
+are enabled by default. See the [protocol and compatibility details](docs/acceptance-protocol.md).
+
+This implementation and its isolated example do not verify a company system,
+company Git flow, or Amazon Bedrock settings. Source role changes do not update
+roles already stored in an online board. See [backup and recovery](docs/backup-recovery.md)
+for isolated restore and configurable encrypted offsite export; no destination
+has been configured or uploaded by this change.
 
 ## Quick start from source
 
@@ -153,11 +176,10 @@ Then, from the repository where the work should happen:
 Claim tasks for Checkout Reliability and start the dependency-ready work.
 ```
 
-The board updates over SSE without a page refresh. The supplied workflow can
-dispatch eligible work up to each project's category capacity, integrate results
-through a `dev` branch, and request a reviewer before the batch reaches `main`.
-Capacity defaults and the three-worker Claude Code example are documented in
-[Agent roles](docs/agent-roles.md).
+The board updates over SSE without a page refresh. The supplied workflow dispatches
+eligible work within the platform session limit, with no role or project quotas.
+Each project defines its own Git policy and signed acceptance contract; unset
+policies never imply a branch or permission to merge. See [Agent roles](docs/agent-roles.md).
 
 ## What you can see
 

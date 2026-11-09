@@ -1,7 +1,6 @@
 import { authenticate as defaultAuthenticate, AuthError } from './auth.js';
 import { handleMcp } from './mcp.js';
 import { BoardService } from './service.js';
-import { workerCapacity } from './capacity.js';
 
 const securityHeaders = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
@@ -71,18 +70,28 @@ export async function eventStream(request, service, { pollMs = 5000, heartbeatMs
   return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
 }
 
-export function createHandler({ serviceFactory = env => new BoardService(env.DB, workerCapacity(env)), authenticate = defaultAuthenticate, streamOptions } = {}) {
+function managementAuthorized(identity, env) {
+  if (typeof identity?.deviceId !== 'string' || typeof env.MANAGEMENT_DEVICE_IDS !== 'string') return false;
+  try {
+    const ids = JSON.parse(env.MANAGEMENT_DEVICE_IDS);
+    return Array.isArray(ids) && ids.every(id => typeof id === 'string' && id.trim()) && ids.includes(identity.deviceId);
+  } catch { return false; }
+}
+
+export function createHandler({ serviceFactory = env => new BoardService(env.DB, env), authenticate = defaultAuthenticate, streamOptions } = {}) {
   return async function fetch(request, env, context) {
     let response;
     try {
       const mode = env.BOARD_MODE;
       if (!['web', 'mcp'].includes(mode)) throw new AuthError(503);
-      await authenticate(request, env, mode);
+      const identity = await authenticate(request, env, mode);
       const url = new URL(request.url);
       // Browser credentials have no write route, and machine credentials no read-only UI.
       if (mode === 'mcp') {
         if (request.headers.has('Origin') || url.pathname !== '/mcp') response = problem(403, 'forbidden_route');
         else response = await handleMcp(request, serviceFactory(env), {
+          managementActor: identity.deviceId,
+          managementAuthorized: managementAuthorized(identity, env),
           maintenance: env.BOARD_MAINTENANCE !== undefined && env.BOARD_MAINTENANCE !== 'false',
         });
       } else if (!['GET', 'HEAD'].includes(request.method) || url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
@@ -98,12 +107,14 @@ export function createHandler({ serviceFactory = env => new BoardService(env.DB,
           await service.latestEventId();
           response = Response.json({ status: 'UP' });
         } else {
-          const match = /^\/api\/projects\/([1-9]\d*)\/(board|dependencies|tasks\/([1-9]\d*)(\/history)?)$/.exec(path);
+          const match = /^\/api\/projects\/([1-9]\d*)\/(board|dependencies|workflow|tasks\/([1-9]\d*)(\/(?:history|acceptance))?)$/.exec(path);
           if (match) {
             const projectId = Number(match[1]), taskId = Number(match[3]);
             if (!Number.isSafeInteger(projectId) || (match[3] && !Number.isSafeInteger(taskId))) response = problem(400, 'invalid_id');
             else if (match[2] === 'board') response = Response.json(await service.getBoard(projectId));
+            else if (match[2] === 'workflow') response = Response.json(await service.getProjectWorkflow(projectId));
             else if (match[2] === 'dependencies') response = Response.json(await service.getDependencies(projectId));
+            else if (match[4] === '/acceptance') response = Response.json(await service.getAcceptance(projectId, taskId));
             else if (match[4]) response = Response.json(await service.getHistory(projectId, taskId));
             else response = Response.json(await service.getTaskDetail(projectId, taskId));
           } else if (path.startsWith('/api/')) response = problem(404, 'not_found');

@@ -21,6 +21,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(BoardController.class)
 class BoardControllerTest {
 
+    @MockitoBean private dev.aiboard.acceptance.ManagementAuditService managementAudit;
+
     @Autowired
     private MockMvc mockMvc;
 

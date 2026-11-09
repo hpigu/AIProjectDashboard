@@ -48,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.jpa.hibernate.ddl-auto=validate",
         "logging.file.name=/tmp/ai-project-board-mcp-e2e-test.log",
         // 這個測試只驗協定層，不需要排程備份在背景寫檔。
+        "BOARD_MANAGEMENT_TOKEN=e2e-management-only-credential-1234567890",
         "board.backup.schedule.enabled=false"
 })
 class McpProtocolE2ETest {
@@ -61,6 +62,8 @@ class McpProtocolE2ETest {
     private static final List<String> EXPECTED_TOOLS = List.of(
             "archive_project", "block_task", "claim_next_task", "complete_task",
             "create_project", "create_tasks", "get_role", "list_roles", "list_tasks",
+            "get_acceptance", "record_acceptance_event", "report_implementation",
+            "get_project_workflow", "prepare_project_workflow", "confirm_project_workflow",
             "preview_archive_project", "reset_task_claim", "restore_project",
             "set_task_dependencies", "update_task_details", "update_task_status", "upsert_role");
 
@@ -71,6 +74,8 @@ class McpProtocolE2ETest {
 
     @Autowired
     private TestRestTemplate restTemplate;
+
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate auditDb;
 
     private String sessionId;
     private final AtomicInteger requestId = new AtomicInteger(1);
@@ -119,6 +124,16 @@ class McpProtocolE2ETest {
     }
 
     @Test
+    void managementCredentialIdentityIsAuditedWithoutClaimingBusinessSuccess() {
+        callTool("create_project",Map.of("name","audited local fixture"));
+        var entries=auditDb.queryForList("SELECT actor,decision FROM management_authorization_audit WHERE tool_name='create_project'");
+        assertThat(entries).anySatisfy(row -> {
+            assertThat(row.get("ACTOR")).isEqualTo("configured-management-credential");
+            assertThat(row.get("DECISION")).isEqualTo("AUTHORIZED_ATTEMPT");
+        });
+    }
+
+    @Test
     void toolsListExposesTheFullPublicToolContract() {
         JsonNode result = rpc("tools/list", Map.of());
 
@@ -132,6 +147,23 @@ class McpProtocolE2ETest {
 
         assertThat(names.stream().sorted().toList())
                 .containsExactlyElementsOf(EXPECTED_TOOLS.stream().sorted().toList());
+    }
+
+    @Test
+    void projectWorkflowPlanningThroughMcpAcceptsPartialFieldsAndDisplaysInReadonlyApi() {
+        callTool("create_project", Map.of("name", "workflow wire fixture"));
+        var initial = readTree(callTool("get_project_workflow", Map.of("projectName", "workflow wire fixture"))
+                .path("content").get(0).path("text").asText());
+        assertThat(initial.path("status").asText()).isEqualTo("UNCONFIGURED");
+        var prepared = callTool("prepare_project_workflow", Map.of("projectName", "workflow wire fixture", "expectedRevision", 0,
+                "gitPolicy", Map.of("baseBranch", "work"), "sources", List.of(), "questions", List.of()));
+        assertThat(prepared.path("isError").asBoolean()).isFalse();
+        var summary = readTree(prepared.path("content").get(0).path("text").asText());
+        assertThat(summary.path("draft").path("missingFields").size()).isEqualTo(6);
+        var read = readTree(restTemplate.getForObject("http://localhost:" + port + "/api/projects/"
+                + initial.path("projectId").asLong() + "/workflow", String.class));
+        assertThat(read.path("revision").asLong()).isEqualTo(1);
+        assertThat(read.path("draft").path("gitPolicy").path("baseBranch").asText()).isEqualTo("work");
     }
 
     @Test
@@ -260,6 +292,7 @@ class McpProtocolE2ETest {
     private ResponseEntity<String> post(Map<String, Object> body) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("Authorization", "Bearer e2e-management-only-credential-1234567890");
         // Streamable HTTP 要求客戶端同時接受兩種型別：伺服器可以回單一 JSON，
         // 也可以改用 SSE 串流回應，客戶端不能假設是哪一種。
         headers.set(HttpHeaders.ACCEPT, "application/json, text/event-stream");

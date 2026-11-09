@@ -4,7 +4,8 @@ export const PROTOCOLS = ['2025-03-26', '2025-06-18'];
 const json = (body, status = 200) => Response.json(body, { status });
 const failure = (id, code, message, status = 200) => json({ jsonrpc: '2.0', id, error: { code, message } }, status);
 // New tools stay paused unless explicitly classified as read-only.
-const readOnlyTools = new Set(['list_tasks', 'list_roles', 'get_role', 'preview_archive_project']);
+const managementTools = new Set(['prepare_project_workflow','create_project','create_tasks','reset_task_claim','update_task_details','set_task_dependencies','preview_archive_project','archive_project','restore_project','upsert_role']);
+const readOnlyTools = new Set(['get_project_workflow','get_acceptance', 'list_tasks', 'list_roles', 'get_role', 'preview_archive_project']);
 
 async function boundedBody(request) {
   const limit = 65536;
@@ -29,7 +30,7 @@ async function boundedBody(request) {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
-export async function handleMcp(request, service, { maintenance = false } = {}) {
+export async function handleMcp(request, service, { maintenance = false, managementAuthorized = false, managementActor = 'unverified-caller' } = {}) {
   if (request.method !== 'POST') return new Response(null, { status: 405, headers: { Allow: 'POST' } });
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('Content-Type') || '')) return json({ error: 'unsupported_media_type' }, 415);
   const accept = request.headers.get('Accept') || '';
@@ -66,15 +67,19 @@ export async function handleMcp(request, service, { maintenance = false } = {}) 
         result = { isError: true, content: [{ type: 'text', text: 'Maintenance mode: writes are paused. Retry after the owner finishes maintenance.' }] };
         break;
       }
+      if (managementTools.has(tool.name) && service.auditManagement) {
+        try { await service.auditManagement(managementAuthorized === true ? managementActor : 'unverified-caller', tool.name, managementAuthorized === true); }
+        catch { return failure(id, -32603, 'Authorization audit unavailable'); }
+      }
+      if (managementTools.has(tool.name) && managementAuthorized !== true) {
+        result = { isError: true, content: [{ type: 'text', text: 'Management operation requires an explicitly authorized device identity.' }] };
+        break;
+      }
       try {
-        const value = await service.execute(tool.name, args);
+        const value = await service.execute(tool.name, args, { managementActor: managementAuthorized === true ? managementActor : undefined });
         result = { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value ?? null) }] };
         if (value && typeof value === 'object' && !Array.isArray(value) && version === '2025-06-18') result.structuredContent = value;
       } catch (error) {
-        if (error.name === 'BoardError' && error.code === 'CAPACITY_FULL') {
-          result = { isError: true, content: [{ type: 'text', text: JSON.stringify({ code: error.code, status: error.status, message: '此分類工作容量已滿' }) }] };
-          break;
-        }
         // Domain errors must never reflect arbitrary arguments, claim tokens, or SQL.
         result = { isError: true, content: [{ type: 'text', text: 'Operation rejected; check task state, version, dependencies, and claim credentials.' }] };
       }

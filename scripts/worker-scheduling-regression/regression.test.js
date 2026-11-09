@@ -8,14 +8,14 @@ const { execFileSync } = require('node:child_process');
 
 // Executable reference model of the documented leader decisions; no client or board is invoked.
 class Leader {
-  constructor(tasks, limit = 3, slots = 4) {
+  constructor(tasks, slots = 4) {
     this.tasks = tasks.map(t => ({ status: 'TODO', deps: [], resources: [], ...t }));
-    this.limit = limit; this.slots = slots; this.reserved = new Set();
+    this.slots = slots; this.reserved = new Set();
     this.live = new Map(); this.pending = null; this.reconcile = false;
   }
   occupied() { return new Set([...this.reserved, ...this.tasks.filter(t => t.status === 'IN_PROGRESS').map(t => t.id)]).size; }
   reserve() {
-    if (this.pending || this.reconcile || this.occupied() >= this.limit || this.live.size >= this.slots - 1) return null;
+    if (this.pending || this.reconcile || this.live.size >= this.slots - 1) return null;
     const active = this.tasks.filter(t => t.status === 'IN_PROGRESS' || this.reserved.has(t.id));
     const candidate = this.tasks.find(t => t.status === 'TODO' && !this.reserved.has(t.id)
       && t.deps.every(id => this.tasks.find(x => x.id === id)?.status === 'DONE')
@@ -41,25 +41,21 @@ class Leader {
   end(id) { this.live.delete(id); }
   resume(id) {
     const t = this.tasks.find(x => x.id === id);
-    if (t.status !== 'BLOCKED' || this.occupied() >= this.limit) return false;
+    if (t.status !== 'BLOCKED') return false;
     t.status = 'IN_PROGRESS'; return true;
   }
 }
 const tasks = n => Array.from({ length: n }, (_, i) => ({ id: i + 1 }));
 
-test('three distinct instances, serial handshake, reservation and both capacity limits', () => {
-  const l = new Leader(tasks(4));
-  assert.equal(l.reserve(), 1); assert.equal(l.occupied(), 1);
-  assert.equal(l.reserve(), null); // handshake is outstanding
-  assert.deepEqual(l.claim(1), { edit: true, expected: 1, actual: 1 });
-  assert.equal(l.occupied(), 1); // conversion is not double-counted
-  assert.equal(l.reserve(), 2); l.claim(2);
-  assert.equal(l.reserve(), 3); l.claim(3);
-  assert.equal(new Set(l.live.values()).size, 3);
-  assert.equal(l.reserve(), null);
-  const platform = new Leader(tasks(4), 5, 4);
-  for (let i = 1; i <= 3; i++) { assert.equal(platform.reserve(), i); platform.claim(i); }
-  assert.equal(platform.reserve(), null);
+test('session slots include leader, handshake reservations count once, no role or project quotas', () => {
+  const l = new Leader(tasks(8), 7);
+  for (let i=1;i<=6;i++) {
+    assert.equal(l.reserve(),i); assert.equal(l.reserve(),null);
+    assert.deepEqual(l.claim(i),{edit:true,expected:i,actual:i});
+    assert.equal(l.occupied(),i);
+  }
+  assert.equal(l.reserve(),null); assert.equal(l.live.size,6);
+  l.end(1); assert.equal(l.reserve(),7); // pending integration retains claim but no session quota
 });
 
 test('dependency, resource conflict and shortage do not start idle workers', () => {
@@ -82,19 +78,14 @@ test('unexpected claim halts edits and dispatch until inventory is reconciled', 
   assert.equal(l.reserve(), 1);
 });
 
-test('capacity one, disconnected and pending integration, blocked resume, limit reduction', () => {
-  const l = new Leader(tasks(3), 1);
-  assert.equal(l.reserve(), 1); l.claim(1); l.end(1); // no live session: claim remains
-  assert.equal(l.reserve(), null); assert.equal(l.tasks[0].status, 'IN_PROGRESS');
-  l.tasks[0].status = 'BLOCKED'; assert.equal(l.occupied(), 0);
-  assert.equal(l.reserve(), 2); l.claim(2); assert.equal(l.resume(1), false);
-  l.end(2); assert.equal(l.reserve(), null); // pending integration still occupies capacity
-  l.tasks[1].status = 'DONE'; assert.equal(l.resume(1), true);
-  const over = new Leader(tasks(4));
-  for (let i=1; i<=3; i++) { over.reserve(); over.claim(i); }
-  over.limit = 1;
-  assert.equal(over.occupied(), 3); assert.equal(over.reserve(), null);
-  assert.equal(over.tasks.filter(t => t.status === 'IN_PROGRESS').length, 3);
+test('disconnected claims remain owned, and only real live session slots limit dispatch', () => {
+  const l = new Leader(tasks(4),2);
+  assert.equal(l.reserve(),1); l.claim(1); assert.equal(l.reserve(),null);
+  l.end(1); assert.equal(l.tasks[0].status,'IN_PROGRESS');
+  assert.equal(l.reserve(),2); l.claim(2); assert.equal(l.reserve(),null);
+  l.tasks[0].status='BLOCKED'; assert.equal(l.resume(1),true); // no role quota on resume
+  assert.equal(l.tasks[1].status,'IN_PROGRESS');
+  l.end(2); assert.equal(l.reserve(),3);
 });
 
 test('real isolated Git worktrees retain dirty work and gate completion on merge', () => {

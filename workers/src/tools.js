@@ -5,15 +5,22 @@ const ids = { type: 'array', items: id };
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const task = object({ title: string, description: string, category: string, dependsOnIndexes: ids, dependsOnTaskIds: ids }, ['title', 'description', 'category', 'dependsOnIndexes', 'dependsOnTaskIds']);
 const verification = object({ name: string, result: { type: 'string', enum: ['PASSED', 'FAILED', 'NOT_RUN'] }, detail: string }, ['name', 'result', 'detail']);
+const workflowFields = Object.fromEntries(['baseBranch','integrationTarget','pullRequestPolicy','requiredChecks','reviewPolicy','mergeAuthority','doneWhen'].map(f => [f,string]));
 const specs = [
+  ['get_project_workflow', '取得專案 Git 流程有效設定、草稿、缺項與確認封包。', { projectName:string }, ['projectName']],
+  ['prepare_project_workflow', 'leader 整理版本化草稿；不猜缺項，不授權 Git 操作。', { projectName:string,expectedRevision:integer,gitPolicy:object(workflowFields),sources:{type:'array',maxItems:100,items:object({field:string,kind:{type:'string',enum:['PROJECT_RULE','USER_DECISION','SUGGESTION']},ref:string,version:string,detail:string},['field','kind'])},questions:{type:'array',maxItems:100,items:object({field:string,question:string},['field','question'])} }, ['projectName','expectedRevision']],
+  ['confirm_project_workflow', '人類確認精確草稿後由 PROJECT_POLICY 簽署者核准；管理憑證不足以核准。', {actor:string,payload:string,signature:string}, ['actor','payload','signature']],
+  ['record_acceptance_event', '匯入受授權身分簽署的驗收事件；不執行任何指令。', { actor: string, payload: string, signature: string }, ['actor','payload','signature']],
+  ['get_acceptance', '取得版本化驗收摘要、阻擋原因與證據。', { taskId: id }, ['taskId']],
   ['create_project', '建立專案；既有完整名稱會沿用。', { name: string, description: string }, ['name']],
   ['create_tasks', '批次建立任務與前置相依，序號從 1 開始且前置須先建立。', { projectId: id, tasks: { type: 'array', minItems: 1, maxItems: 50, items: task } }, ['projectId', 'tasks']],
-  ['list_tasks', '依專案名稱或 ID 查任務、認領與前置狀態，並回傳各分類容量。', { projectId: id, projectName: string, status: string, category: string, includeDescription: { type: 'boolean' } }],
-  ['claim_next_task', '原子認領可執行 TODO；跳過未完成前置，容量已滿回傳 CAPACITY_FULL。claimToken 僅回傳一次，不得記錄或外流。', { projectName: string, category: string, assignee: string }, ['projectName', 'category', 'assignee']],
+  ['list_tasks', '依專案名稱或 ID 查任務、認領與前置狀態。', { projectId: id, projectName: string, status: string, category: string, includeDescription: { type: 'boolean' } }],
+  ['claim_next_task', '原子認領可執行 TODO；跳過未完成前置。claimToken 僅回傳一次，不得記錄或外流。', { projectName: string, category: string, assignee: string }, ['projectName', 'category', 'assignee']],
   ['update_task_status', '更新自己的認領狀態。持有 token 才能操作；歸還 TODO 清除認領。', { taskId: id, status: string, note: string, claimToken: string }, ['taskId', 'status']],
   ['reset_task_claim', 'leader 確認 worker 遺失 token 後復原為 TODO；worker 不得使用。', { taskId: id, note: string }, ['taskId']],
   ['block_task', '記錄結構化阻塞；DEPENDENCY 需同專案 blockingTaskIds，持有認領 token 才能操作。', { taskId: id, claimToken: string, reasonType: { type: 'string', enum: ['DEPENDENCY', 'USER_INPUT', 'TECHNICAL', 'ENVIRONMENT', 'EXTERNAL', 'OTHER'] }, detail: string, blockingTaskIds: ids, expectedVersion: integer }, ['taskId', 'reasonType', 'detail']],
-  ['complete_task', '完成任務並記錄證據，至少一項驗證，不接受 FAILED；NOT_RUN 需理由。', { taskId: id, claimToken: string, summary: string, verificationResults: { type: 'array', minItems: 1, items: verification }, changedFiles: string, commitRef: string, expectedVersion: integer }, ['taskId', 'summary', 'verificationResults']],
+  ['report_implementation', '記錄持有認領 token 的開發代理實作／自測聲明；允許附理由的 FAILED／NOT_RUN，維持任務狀態且不解鎖相依。', { taskId: id, claimToken: string, summary: string, verificationResults: { type: 'array', minItems: 1, items: verification }, changedFiles: string, commitRef: string, expectedVersion: integer }, ['taskId', 'summary', 'verificationResults']],
+  ['complete_task', '通過版本化契約、受授權執行證據與獨立審查後完成；代理自行聲明不足以結案。', { taskId: id, claimToken: string, summary: string, verificationResults: { type: 'array', minItems: 1, items: verification }, changedFiles: string, commitRef: string, expectedVersion: integer }, ['taskId', 'summary', 'verificationResults']],
   ['update_task_details', 'leader 修改 TODO/BLOCKED 規格；分類只允許 TODO，必須提供版本。', { taskId: id, title: string, description: string, category: string, expectedVersion: integer }, ['taskId', 'expectedVersion']],
   ['set_task_dependencies', 'leader 完整取代 TODO 前置，空清單清空；同專案、無循環且版本相符。', { taskId: id, prerequisiteTaskIds: ids, expectedVersion: integer }, ['taskId', 'prerequisiteTaskIds', 'expectedVersion']],
   ['preview_archive_project', 'leader 在目前對話獲明確授權後預覽封存；IN_PROGRESS 需再次確認。', { projectName: string }, ['projectName']],

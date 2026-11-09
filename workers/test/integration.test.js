@@ -1,3 +1,4 @@
+import { env as acceptanceEnv, attest, CODE_REF, signed, gitPolicy } from './acceptance-fixture.js';
 // Real local workerd + D1 emulation, with outbound networking disabled.
 // All credentials are generated in memory and never logged or saved.
 import test from 'node:test';
@@ -79,7 +80,7 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       mf = new Miniflare(convertV4MiniflareOptions({ host: '127.0.0.1', port: 0, inspectorPort: 0, cf: false,
         resourcePersistencePath: directory, workers: [
           { name: 'web', modules: true, script, compatibilityDate: '2026-11-04', compatibilityFlags: ['enable_request_signal'], outboundService,
-            d1Databases: { DB: 'integration-db' }, bindings: { BOARD_MODE: 'web',
+            d1Databases: { DB: 'integration-db' }, bindings: { ...acceptanceEnv, BOARD_MODE: 'web',
               CLOUDFLARE_ACCESS_TEAM: 'test-team', CLOUDFLARE_ACCESS_AUD: 'integration-audience',
               OWNER_EMAIL: owner }, serviceBindings: { ASSETS: async request => {
                 const path = new URL(request.url).pathname;
@@ -90,8 +91,8 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
                 });
               } } },
           { name: 'mcp', modules: true, script, compatibilityDate: '2026-11-04', compatibilityFlags: ['enable_request_signal'], outboundService,
-            d1Databases: { DB: 'integration-db' }, bindings: { BOARD_MODE: 'mcp',
-              MACHINE_TOKEN_HASHES: JSON.stringify({ 'integration-device': tokenHash }) } }
+            d1Databases: { DB: 'integration-db' }, bindings: { ...acceptanceEnv, BOARD_MODE: 'mcp',
+              MANAGEMENT_DEVICE_IDS: JSON.stringify(['integration-device']), MACHINE_TOKEN_HASHES: JSON.stringify({ 'integration-device': tokenHash }) } }
         ] }));
       return { web: await mf.getWorker('web'), machine: await mf.getWorker('mcp'),
         db: await mf.getD1Database('DB', 'mcp') };
@@ -128,7 +129,7 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       for (const name of await readdir(new URL('src/main/java/dev/aiboard/mcp/', projectRoot))) {
         if (name.endsWith('.java')) {
           const source = await readFile(new URL('src/main/java/dev/aiboard/mcp/' + name, projectRoot), 'utf8');
-          expected.push(...[...source.matchAll(/@Tool\(name = "([a-z_]+)"/g)].map(m => m[1]));
+          expected.push(...[...source.matchAll(/@Tool\(name\s*=\s*"([a-z_]+)"/g)].map(m => m[1]));
         }
       }
       assert.deepEqual(tools.map(x => x.name).sort(), expected.sort());
@@ -146,6 +147,28 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
         headers: { Authorization: 'Bearer ' + token } })).status, 200);
       assert.equal((await machine.fetch('https://mcp.example.test/mcp', { method: 'POST',
         headers: { Authorization: 'Bearer ' + token, Origin: 'https://web.example.test' } })).status, 403);
+    });
+
+    await t.test('project Git workflow planning, signed confirmation and reuse work through real MCP, D1 and read-only browser API', async () => {
+      const call = async (name, args) => domain(await first.callTool({ name, arguments: args }));
+      const project = (await call('create_project', { name:'Workflow planning integration' })).project;
+      let workflow = await call('get_project_workflow', { projectName:project.name });
+      assert.equal(workflow.status,'UNCONFIGURED');
+      workflow = await call('prepare_project_workflow',{ projectName:project.name,expectedRevision:0,gitPolicy:{baseBranch:'fixture/base'},sources:[{field:'baseBranch',kind:'PROJECT_RULE',ref:'AGENTS.md',version:'fixture-v1'}],questions:[{field:'integrationTarget',question:'整合目標？'}] });
+      assert.equal(workflow.draft.readyForConfirmation,false);
+      const invalid = await first.callTool({name:'confirm_project_workflow',arguments:signed('fixture-owner',{kind:'CONFIRM_PROJECT_WORKFLOW',projectId:project.id,draftId:workflow.draft.version,expectedRevision:workflow.revision,previewDigest:workflow.draft.previewDigest,approved:true,approvalRef:'explicit-owner-confirmation'})});
+      assert.equal(invalid.isError,true);
+      workflow = await call('prepare_project_workflow',{projectName:project.name,expectedRevision:workflow.revision,gitPolicy,questions:[]});
+      const ownerApproval = signed('fixture-owner',{...workflow.approvalPayload,approvalRef:'fixture://human-confirmation'});
+      workflow = await call('confirm_project_workflow',ownerApproval);
+      assert.equal(workflow.status,'CONFIRMED');assert.equal(workflow.active.version,3);
+      const response = await browser(`/api/projects/${project.id}/workflow`);
+      assert.equal(response.status,200);
+      assert.deepEqual((await response.json()).active.gitPolicy,gitPolicy);
+      assert.equal((await call('get_project_workflow',{projectName:project.name})).active.version,3);
+      assert.equal((await first.callTool({name:'confirm_project_workflow',arguments:ownerApproval})).isError,true);
+      const webWrite=await web.fetch(`https://web.example.test/api/projects/${project.id}/workflow`,{method:'POST',headers:{'Cf-Access-Jwt-Assertion':assertion()},body:'{}'});
+      assert.equal(webWrite.status,403);
     });
 
     let projectId;
@@ -188,34 +211,25 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       assert.equal(serializedLogs.includes(claimToken), false);
     });
 
-    await t.test('capacity admission is atomic across concurrent D1 requests and lifecycle transitions', async () => {
+    await t.test('frontend claims and resumes have no role quota or capacity payload', async () => {
       const call = async (client, name, args) => domain(await client.callTool({ name, arguments: args }));
-      const p = (await call(first, 'create_project', { name: 'Capacity test' })).project.id;
+      const p = (await call(first, 'create_project', { name: 'Unrestricted frontend' })).project.id;
       await call(first, 'create_tasks', { projectId: p, tasks: [1, 2].map(i => ({ title: `frontend ${i}`, description: '', category: 'FRONTEND', dependsOnIndexes: [], dependsOnTaskIds: [] })) });
-      const claimArgs = { projectName: 'Capacity test', category: 'FRONTEND', assignee: 'worker' };
+      const claimArgs = { projectName: 'Unrestricted frontend', category: 'FRONTEND', assignee: 'worker' };
       const claims = await Promise.all([first, second].map(c => call(c, 'claim_next_task', claimArgs)));
-      assert.deepEqual(claims.map(c => c.outcome).sort(), ['CAPACITY_FULL', 'CLAIMED']);
-      const owner = claims.find(c => c.claimed);
-      assert.equal(owner.capacity.inProgress, 1);
-      const listed = await call(first, 'list_tasks', { projectId: p, status: 'TODO', category: 'BACKEND' });
-      assert.equal(listed.tasks.length, 0);
-      assert.equal(listed.capacities.find(c => c.category === 'FRONTEND').inProgress, 1);
-      await call(first, 'block_task', { taskId: owner.task.id, claimToken: owner.claimToken, reasonType: 'TECHNICAL', detail: 'wait' });
-      const next = await call(second, 'claim_next_task', claimArgs);
-      assert.equal(next.outcome, 'CLAIMED');
-      const resume = await first.callTool({ name: 'update_task_status', arguments: { taskId: owner.task.id, status: 'IN_PROGRESS', claimToken: owner.claimToken } });
-      assert.equal(resume.isError, true);
-      assert.equal(JSON.parse(resume.content[0].text).code, 'CAPACITY_FULL');
-      await call(second, 'complete_task', { taskId: next.task.id, claimToken: next.claimToken, summary: 'done', verificationResults: [{ name: 'test', result: 'PASSED', detail: '' }] });
-      await call(first, 'update_task_status', { taskId: owner.task.id, status: 'IN_PROGRESS', claimToken: owner.claimToken });
-      const reopen = await second.callTool({ name: 'update_task_status', arguments: { taskId: next.task.id, status: 'IN_PROGRESS' } });
-      assert.equal(JSON.parse(reopen.content[0].text).code, 'CAPACITY_FULL');
-      const other = (await call(first, 'create_project', { name: 'Capacity other project' })).project.id;
-      await call(first, 'create_tasks', { projectId: other, tasks: [{ title: 'independent', description: '', category: 'FRONTEND', dependsOnIndexes: [], dependsOnTaskIds: [] }] });
-      assert.equal((await call(first, 'claim_next_task', { ...claimArgs, projectName: 'Capacity other project' })).outcome, 'CLAIMED');
+      assert.equal(claims.every(c => c.claimed), true);
+      assert.equal(new Set(claims.map(c => c.task.id)).size, 2);
+      assert.equal(Object.hasOwn(claims[0], 'capacity'), false);
+      const listed = await call(first, 'list_tasks', { projectId: p });
+      assert.equal(Object.hasOwn(listed, 'capacities'), false);
+      for (const claim of claims) {
+        await call(first, 'block_task', { taskId: claim.task.id, claimToken: claim.claimToken, reasonType: 'TECHNICAL', detail: 'wait' });
+        await call(first, 'update_task_status', { taskId: claim.task.id, status: 'IN_PROGRESS', claimToken: claim.claimToken });
+      }
+      assert.equal((await db.prepare("SELECT count(*) AS n FROM task WHERE project_id=? AND status='IN_PROGRESS'").bind(p).first()).n, 2);
     });
 
-    await t.test('three backend slots admit distinct workers and reject excess claims', async () => {
+    await t.test('six backend tasks admit distinct workers with bounded contention retries', async () => {
       const call = async (client, name, args) => domain(await client.callTool({ name, arguments: args }));
       const p = (await call(first, 'create_project', { name: 'Backend six racers' })).project.id;
       await call(first, 'create_tasks', { projectId: p, tasks: Array.from({ length: 6 }, (_, i) =>
@@ -229,13 +243,18 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       });
       release();
       const claims = await Promise.all(pending);
+      for (let i = 0; i < claims.length; i++) {
+        if (!claims[i].claimed) {
+          assert.equal(claims[i].outcome, 'CONTENDED');
+          claims[i] = await call(racers[i], 'claim_next_task', { projectName: 'Backend six racers', category: 'BACKEND', assignee: `worker-${i}` });
+        }
+      }
       const winners = claims.filter(c => c.claimed);
-      assert.equal(winners.length, 3);
-      assert.equal(new Set(winners.map(c => c.task.id)).size, 3);
-      assert.equal(new Set(winners.map(c => c.task.assignee)).size, 3);
-      assert.equal(claims.filter(c => c.outcome === 'CAPACITY_FULL').length, 3);
-      assert.equal((await db.prepare("SELECT count(*) AS n FROM task WHERE project_id=? AND status='IN_PROGRESS'").bind(p).first()).n, 3);
-      assert.equal((await call(first, 'claim_next_task', { projectName: 'Backend six racers', category: 'BACKEND', assignee: 'replacement' })).outcome, 'CAPACITY_FULL');
+      assert.equal(winners.length, 6);
+      assert.equal(new Set(winners.map(c => c.task.id)).size, 6);
+      assert.equal(new Set(winners.map(c => c.task.assignee)).size, 6);
+      assert.equal((await db.prepare("SELECT count(*) AS n FROM task WHERE project_id=? AND status='IN_PROGRESS'").bind(p).first()).n, 6);
+      assert.equal((await call(first, 'claim_next_task', { projectName: 'Backend six racers', category: 'BACKEND', assignee: 'replacement' })).outcome, 'NO_TASK');
       const [a, b] = winners;
       for (const [name, args] of [
         ['update_task_status', { taskId: b.task.id, status: 'TODO', claimToken: a.claimToken }],
@@ -246,7 +265,7 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       assert.equal((await db.prepare('SELECT status FROM task WHERE id=?').bind(b.task.id).first()).status, 'IN_PROGRESS');
     });
 
-    await t.test('two blocked workers compete for one released frontend slot', async () => {
+    await t.test('two blocked workers resume without role quota', async () => {
       const call = async (client, name, args) => domain(await client.callTool({ name, arguments: args }));
       const p = (await call(first, 'create_project', { name: 'Resume competition' })).project.id;
       await call(first, 'create_tasks', { projectId: p, tasks: [1, 2].map(i =>
@@ -265,9 +284,13 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       });
       release();
       const results = await Promise.all(pending);
-      assert.equal(results.filter(result => !result.isError).length, 1);
-      assert.equal(results.filter(result => result.isError && JSON.parse(result.content[0].text).code === 'CAPACITY_FULL').length, 1);
-      assert.equal((await db.prepare("SELECT count(*) AS n FROM task WHERE project_id=? AND status='IN_PROGRESS'").bind(p).first()).n, 1);
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].isError) {
+          results[i] = await first.callTool({ name: 'update_task_status', arguments: { taskId: claims[i].task.id, status: 'IN_PROGRESS', claimToken: claims[i].claimToken } });
+        }
+      }
+      assert.equal(results.every(result => !result.isError), true);
+      assert.equal((await db.prepare("SELECT count(*) AS n FROM task WHERE project_id=? AND status='IN_PROGRESS'").bind(p).first()).n, 2);
     });
 
     await t.test('three backend workers racing one task produce exactly one owner', async () => {
@@ -305,8 +328,9 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
       const buffered = { value: '' };
       try {
         assert.match(await frame(reader, buffered), /event: heartbeat/);
+        await attest(async (name,args) => domain(await first.callTool({name,arguments:args})), (await domain(await first.callTool({name:'list_tasks',arguments:{projectId}}))).tasks.find(t => t.id === claimedTask));
         domain(await first.callTool({ name: 'complete_task', arguments: { taskId: claimedTask,
-          summary: 'integration passed', changedFiles: 'workers/', commitRef: null, claimToken,
+          summary: 'integration passed', changedFiles: 'workers/', commitRef: CODE_REF, claimToken,
           verificationResults: [{ name: 'runtime integration', result: 'PASSED', detail: 'local workerd' }] } }));
         let event;
         for (let i = 0; i < 8; i++) {
@@ -317,6 +341,10 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
         assert.equal(event.includes(claimToken), false);
       } finally { await reader.cancel(); }
       assert.equal((await db.prepare('SELECT status FROM task WHERE id=?').bind(claimedTask).first()).status, 'DONE');
+      const acceptance = await (await browser(`/api/projects/${projectId}/tasks/${claimedTask}/acceptance`)).json();
+      assert.equal(acceptance.canClose, true);
+      assert.equal(acceptance.events.find(e => e.kind === 'RUN')._verifiedActor, 'fixture-runner');
+      assert.equal((await browser(`/api/projects/${projectId + 999}/tasks/${claimedTask}/acceptance`)).status, 404);
     });
 
     await t.test('the real D1 engine rolls back partial mutations and supports 50-task batches', async () => {

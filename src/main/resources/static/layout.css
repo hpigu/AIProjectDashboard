@@ -965,3 +965,19 @@ body.drawer-open { overflow: hidden; }
   .app-header { align-items: flex-start; flex-direction: column; }
   .detail-heading { align-items: flex-start; flex-direction: column; }
 }
+
+/* 唯讀 Git 流程：不依賴任務是否存在。 */
+.workflow-panel { border: 1px solid var(--line); padding: 16px; margin-bottom: 20px; border-radius: 6px; }
+.workflow-heading { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.workflow-heading h3 { margin: 0; font-size: 15px; }
+.workflow-panel p { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.workflow-state { font-size: 12px; color: var(--muted); }
+.workflow-details { margin-top: 12px; }
+.workflow-panel summary { cursor: pointer; font-size: 13px; }
+.workflow-fields { display: grid; grid-template-columns: minmax(100px, 130px) minmax(0, 1fr); gap: 8px 16px; font-size: 13px; }
+.workflow-fields dt { color: var(--muted); }
+.workflow-fields dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workflow-panel li { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.workflow-prompt { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.workflow-prompt code { flex: 1 1 240px; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .workflow-fields { grid-template-columns: 1fr; gap: 4px; } .workflow-fields dd { margin-bottom: 8px; } }
