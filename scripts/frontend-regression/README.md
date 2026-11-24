@@ -53,6 +53,7 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 | API and vendor availability | `FrontendStaticAssetsTest` | - | - |
 | SSE content type and access | `SecurityHeadersFilterTest` | Reconnection state | Restart server manually |
 | Multiple worker cards, assignee filters, status events and counts | - | `checkMultipleWorkers()` with isolated fixture | - |
+| Reconnect, archive/restore, edited task views, and delayed status events | - | Live-update browser fixtures | - |
 | Responsive horizontal overflow | - | `checkNoHorizontalOverflow()` | Review extreme content |
 | Browser console errors | - | `checkNoConsoleErrors()` | - |
 | Escape closes drawer and restores focus | - | `checkEscapeReturnsFocus()` | Confirm focus order |
@@ -68,6 +69,6 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 
 ## Limits
 
-- The multiple-worker check mocks read responses and EventSource events in the browser; it does not exercise a live backend SSE connection or real concurrent claims.
+- The multiple-worker and live-update checks mock read responses and EventSource events in the browser. They verify rendered state and reconnect request counts. Live backend SSE delivery and real concurrent claims have separate checks.
 - DAG layout quality and extreme-content rendering still require visual review.
 - The script runs only when invoked manually.
