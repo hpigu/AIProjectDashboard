@@ -590,9 +590,9 @@ const LevelTwo = {
     if (this.boardController) this.boardController.abort();
     if (this.graphController) this.graphController.abort();
     this._detailController?.abort();
-    clearTimeout(this._highlightTimer);
     document.body.classList.remove('drawer-open');
     this._liveSubscriptions.forEach(unsubscribe => unsubscribe());
+    clearTimeout(this._highlightTimer);
   },
   watch: {
     projectId() {
