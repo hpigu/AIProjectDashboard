@@ -161,25 +161,31 @@ The full client setup and update paths are documented in the
 
 ## Create your first board
 
-The UI is read-only by design; agents perform every write through MCP. Once the
-connector is enabled, ask your agent:
+The steps below use the current source server and matching plugin. For a release
+install, see the [version-specific guide](docs/installation.md#option-2-install-a-stable-release).
+
+The browser board is read-only. The default connector can read the board.
+`create_project` and `create_tasks` require a
+[dedicated leader connection](docs/installation.md#authorize-project-and-task-creation).
+
+Ask the authorized leader:
 
 ```text
-Create a project called Checkout Reliability, break it into backend, frontend,
-test, infrastructure, and documentation tasks, and record their prerequisites in
-AI Project Board.
+Create a project called Checkout Reliability and add one backend task to
+document what happens when a checkout request is retried.
 ```
 
-Then, from the repository where the work should happen:
+Open the project in the browser and check that the task appears in **TODO**.
+Before using `claim-tasks`, [plan and approve the project's Git workflow](docs/project-git-workflow.md).
+Then, from the work repository, ask:
 
 ```text
 Claim tasks for Checkout Reliability and start the dependency-ready work.
 ```
 
-The board updates over SSE without a page refresh. The supplied workflow dispatches
-eligible work within the platform session limit, with no role or project quotas.
-Each project defines its own Git policy and signed acceptance contract; unset
-policies never imply a branch or permission to merge. See [Agent roles](docs/agent-roles.md).
+The board updates over SSE without a page refresh. The leader schedules work
+within the platform session limit, accounting for prerequisites and file or
+resource conflicts. See [Agent roles](docs/agent-roles.md).
 
 ## What you can see
 
@@ -227,8 +233,8 @@ The default Java backend trusts processes on the same machine. Its protections
 and limitations are:
 
 - The server binds to `127.0.0.1` by default.
-- `/mcp` has **no server-side authentication**. Do not expose it directly to a
-  LAN or the public internet.
+- The local server checks a leader credential for
+  [management tools](docs/authorization-boundaries.md). Keep `/mcp` on loopback.
 - Host and Origin validation protects the loopback service against DNS rebinding.
 - Worker tool allowlists are client-side guardrails, not server authorization.
 - Startup, shutdown, and scheduled H2 backups are built in; restore is explicit
@@ -242,9 +248,8 @@ Read [SECURITY.md](SECURITY.md) and the
 - No multi-user tenant isolation or backend leader/worker RBAC. The local/VM
   backend uses one H2 instance; the personal Workers backend uses shared D1.
   Both cloud options require deployment-specific acceptance testing.
-- Capacity limits control concurrent `IN_PROGRESS` tasks per project and
-  category; they do not detect whether a session is alive or reclaim abandoned
-  claims. Existing work is not stopped when a limit is lowered.
+- The board cannot detect whether a session is alive and leaves abandoned
+  claims in place for a leader to investigate.
 - macOS/Linux release JARs require JDK 21; only the Windows x64 release bundle
   currently includes a Java runtime.
 - The agent-facing tool descriptions, role instructions, most backend errors, and
