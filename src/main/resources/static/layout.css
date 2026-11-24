@@ -690,6 +690,17 @@ body.drawer-open { overflow: hidden; }
   overflow-wrap: anywhere;
 }
 .detail-kicker { font-size: 12px; letter-spacing: .08em; }
+.detail-toolbar-actions { display: flex; align-items: center; gap: 8px; }
+.detail-link-feedback { color: var(--muted); font-size: 13px; }
+.detail-link-feedback:empty { margin: 0; }
+.detail-link-address {
+  width: 100%;
+  margin-bottom: 16px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: var(--ground);
+  color: var(--text);
+}
 .detail-close {
   flex: 0 0 auto;
   width: 38px;

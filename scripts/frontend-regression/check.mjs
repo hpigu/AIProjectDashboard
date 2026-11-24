@@ -304,6 +304,108 @@ async function checkInterpolationRendersActualValues(session) {
 }
 
 
+async function checkTaskLinks(session) {
+  const source = `(() => {
+    const originalFetch = window.fetch;
+    const task = { id: 1, title: 'First task', category: 'BACKEND', status: 'TODO', waitingFor: [] };
+    const nextTask = { ...task, id: 2, title: 'Second task' };
+    const state = window.taskLinksFixture = { copied: null, rejectCopy: false, detailReads: [] };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true, value: { async writeText(text) {
+        if (state.rejectCopy) throw new Error('Clipboard refused');
+        state.copied = text;
+      } },
+    });
+    window.fetch = (input, options) => {
+      const path = new URL(input, window.location.href).pathname;
+      if (path === '/api/projects') return Promise.resolve(Response.json([]));
+      if (path === '/api/projects/999/board') {
+        return Promise.resolve(Response.json({ name: 'Link fixture', columns: { TODO: [task, nextTask], IN_PROGRESS: [], BLOCKED: [], DONE: [] } }));
+      }
+      if (path.endsWith('/workflow')) return Promise.resolve(Response.json({ status: 'UNCONFIGURED' }));
+      if (path.endsWith('/acceptance')) return Promise.resolve(Response.json({ canClose: false, passedCases: [], blockers: [], events: [] }));
+      if (path.startsWith('/api/projects/999/tasks/')) {
+        const id = Number(path.split('/').at(-1));
+        state.detailReads.push(id);
+        if (id !== 1 && id !== 2) return Promise.resolve(new Response(null, { status: 404 }));
+        const detail = { ...(id === 1 ? task : nextTask), history: [], prerequisites: [], downstreamTasks: id === 1 ? [nextTask] : [] };
+        if (state.delayNext) {
+          state.delayNext = false;
+          return new Promise(resolve => { state.releaseOld = () => resolve(Response.json({ ...detail, title: 'Stale task' })); });
+        }
+        return Promise.resolve(Response.json(detail));
+      }
+      return originalFetch(input, options);
+    };
+  })();`;
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  const waitFor = async (expression, message) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (await session.eval(expression)) return;
+      await sleep(50);
+    }
+    throw new Error(message);
+  };
+  const click = selector => session.eval(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  const currentTask = id => `new URL(location.href).searchParams.get('task') === ${JSON.stringify(id)}`;
+  try {
+    await session.setViewport(1440, 900);
+    const base = baseUrl + '/index.html?project=999';
+    await session.navigate(base + '&taskQuery=First');
+    await waitFor('document.querySelector(".task-card")?.textContent.includes("First task")', '缺少第一張卡');
+    await click('.task-card');
+    await waitFor(currentTask('1'), '開啟第一張卡時沒有更新網址');
+    await waitFor('document.querySelector(".detail-title")?.textContent === "First task"', '缺少第一張卡詳情');
+
+    await click('.detail-copy-link');
+    await waitFor(`window.taskLinksFixture.copied === ${JSON.stringify(base + '&task=1')}`, '複製的連結應只包含專案及任務識別');
+    await session.eval('window.taskLinksFixture.rejectCopy = true');
+    await click('.detail-copy-link');
+    await waitFor('document.querySelector(".detail-link-feedback").textContent === window.__i18n.t("levelTwo.linkCopyFailed")', '剪貼簿拒絕時缺少複製提示');
+    await waitFor(`document.activeElement?.value === ${JSON.stringify(base + '&task=1')}`, '手動複製沒有選取同一份乾淨連結');
+
+    await click('.related-list button');
+    await waitFor(currentTask('2'), '從詳情開啟下游任務時沒有更新網址');
+    await waitFor('document.querySelector(".detail-title")?.textContent === "Second task"', '缺少下游任務詳情');
+    await click('.detail-close');
+    await waitFor(currentTask(null) + ' && !document.querySelector(".detail-drawer")', '關閉沒有回到原看板');
+    await waitFor('document.activeElement?.classList.contains("task-card") && new URL(location.href).searchParams.get("taskQuery") === "First"', '關閉後未恢復焦點或篩選');
+
+    await session.eval('history.forward()');
+    await waitFor('document.querySelector(".detail-title")?.textContent === "Second task"', '瀏覽器前進沒有還原任務');
+    await session.navigate(base + '&task=2');
+    await waitFor('document.querySelector(".detail-title")?.textContent === "Second task"', '直接開啟任務連結失敗');
+    await session.setViewport(375, 812);
+    await waitFor('document.querySelector(".detail-drawer").scrollWidth <= document.querySelector(".detail-drawer").clientWidth', '手機詳情出現水平溢出');
+    await click('.detail-close');
+    await waitFor(`location.href === ${JSON.stringify(base)} && !document.querySelector(".detail-drawer")`, '關閉直接開啟的連結時沒有留在同一專案');
+    await waitFor('document.activeElement === document.querySelector(".board-header .back-btn")', '關閉直接開啟的連結時焦點未返回看板');
+
+    await session.eval('window.taskLinksFixture.delayNext = true');
+    await click('.task-card');
+    await waitFor('Boolean(window.taskLinksFixture.releaseOld)', '未等待第一個任務請求');
+    await click('.detail-close');
+    await waitFor('!document.querySelector(".detail-drawer")', '任務讀取中不能關閉');
+    await session.eval('history.forward()');
+    await waitFor('document.querySelector(".detail-title")?.textContent === "First task"', '重新開啟同一任務後未載入新內容');
+    await session.eval('window.taskLinksFixture.releaseOld(); new Promise(resolve => requestAnimationFrame(resolve));');
+    if (await session.eval('document.querySelector(".detail-title")?.textContent') !== 'First task') {
+      throw new Error('較早的讀取覆寫了重新開啟的任務');
+    }
+
+    await session.navigate(base + '&task=789');
+    await waitFor('document.querySelector(".detail-error")?.textContent.includes("404")', '不存在的任務沒有顯示錯誤');
+    await waitFor('Boolean(document.getElementById(document.querySelector(".detail-drawer").getAttribute("aria-labelledby")))', '錯誤畫面的對話框沒有可存取名稱');
+    await session.navigate(base + '&task=-1');
+    await waitFor('Boolean(document.querySelector(".task-card"))', '無效連結沒有留在看板');
+    if (await session.eval('window.taskLinksFixture.detailReads.length || Boolean(document.querySelector(".detail-drawer"))')) {
+      throw new Error('無效任務識別不應送出詳情查詢或開啟抽屜');
+    }
+  } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
 // Isolated browser fixture: the real UI consumes mock GET responses and simulated
 // EventSource events. No task or project is written to the running server.
 async function checkMultipleWorkers(session) {
@@ -363,6 +465,7 @@ async function main() {
   console.log(`目標: ${baseUrl}（CDP port ${cdpPort}）\n`);
   const session = await newCdpSession(cdpPort);
   try {
+    await check('任務連結、剪貼簿、瀏覽歷程與手機詳情', () => checkTaskLinks(session));
     await check('多 Worker 顯示、篩選與狀態事件', () => checkMultipleWorkers(session));
     await check('RWD 三尺寸無水平溢出', () => checkNoHorizontalOverflow(session));
     await check('console 無錯誤/未捕捉例外', () => checkNoConsoleErrors(session));

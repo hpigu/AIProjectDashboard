@@ -37,8 +37,7 @@ public class TaskDetailService {
     public TaskDetail getTaskDetail(Long projectId, Long taskId) {
         TaskRepository.TaskDetailProjection task = taskRepository
                 .findDetailByProjectIdAndId(projectId, taskId)
-                .orElseThrow(() -> new BoardException(
-                        "找不到專案 #%d 中的任務 #%d".formatted(projectId, taskId)));
+                .orElseThrow(() -> new TaskNotFoundException(projectId, taskId));
 
         List<RelatedTask> prerequisites = taskDependencyRepository.findPrerequisites(taskId).stream()
                 .map(this::toRelatedTask)
@@ -100,6 +99,12 @@ public class TaskDetailService {
         }
         return new CompletionEvidence(first.getEvidenceId(), first.getSummary(), first.getChangedFiles(),
                 first.getCommitRef(), first.getCompletedBy(), first.getCompletedAt(), verifications);
+    }
+
+    public static class TaskNotFoundException extends BoardException {
+        public TaskNotFoundException(Long projectId, Long taskId) {
+            super("找不到專案 #%d 中的任務 #%d".formatted(projectId, taskId));
+        }
     }
 
     public record TaskDetail(Long id, Long projectId, String title, String description, String status,

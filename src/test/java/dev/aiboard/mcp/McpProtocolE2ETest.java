@@ -207,6 +207,33 @@ class McpProtocolE2ETest {
     }
 
     @Test
+    void taskDetailLinkRequiresTheTaskToBelongToTheRequestedProject() {
+        long projectId = createLinkFixtureProject("task link owner");
+        long otherProjectId = createLinkFixtureProject("task link other project");
+        var created = callTool("create_tasks", Map.of("projectId", projectId, "tasks", List.of(Map.of(
+                "title", "Shared task", "category", "BACKEND", "description", "Task detail",
+                "dependsOnIndexes", List.of(), "dependsOnTaskIds", List.of()))));
+        assertThat(created.path("isError").asBoolean()).isFalse();
+
+        String base = "http://localhost:" + port + "/api/projects/";
+        var board = readTree(restTemplate.getForObject(base + projectId + "/board", String.class));
+        long taskId = board.path("columns").path("TODO").get(0).path("id").asLong();
+        var ownTask = restTemplate.getForEntity(base + projectId + "/tasks/" + taskId, String.class);
+        assertThat(ownTask.getStatusCode().value()).isEqualTo(200);
+        assertThat(readTree(ownTask.getBody()).path("title").asText()).isEqualTo("Shared task");
+        assertThat(restTemplate.getForEntity(base + otherProjectId + "/tasks/" + taskId, String.class)
+                .getStatusCode().value()).isEqualTo(404);
+        assertThat(restTemplate.getForEntity(base + projectId + "/tasks/" + Long.MAX_VALUE, String.class)
+                .getStatusCode().value()).isEqualTo(404);
+    }
+
+    private long createLinkFixtureProject(String name) {
+        assertThat(callTool("create_project", Map.of("name", name)).path("isError").asBoolean()).isFalse();
+        return readTree(textContent(callTool("get_project_workflow", Map.of("projectName", name))))
+                .path("projectId").asLong();
+    }
+
+    @Test
     void businessRuleViolationsComeBackAsReadableToolErrorsNotTransportFailures() {
         // 不存在的專案。重點是 agent 拿得到「可讀的錯誤訊息」而不是 HTTP 500 或
         // 一個空回應——後者會讓 agent 無從判斷該怎麼修正。
