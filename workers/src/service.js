@@ -671,8 +671,24 @@ class BoardService {
     const blocked = params.get("blocked");
     check(blocked == null || ["true", "false"].includes(blocked), "blocked 必須是布林值");
     const prefix = (params.get("q") || "").trim().toLowerCase();
-    const rows = await this.all("SELECT p.*,max(t.updated_at) AS activity,count(t.id) AS total,sum(t.status='TODO') AS todo,sum(t.status='IN_PROGRESS') AS in_progress,sum(t.status='BLOCKED') AS blocked,sum(t.status='DONE') AS done FROM project p LEFT JOIN task t ON t.project_id=p.id GROUP BY p.id");
-    const result = rows.filter((p) => (status === "ALL" || p.status === status) && p.normalized_name.startsWith(prefix)).map((p) => ({ id: p.id, name: p.name, status: p.status, counts: {
+    const filters = [], args = [];
+    if (status !== "ALL") {
+      filters.push("p.status = ?");
+      args.push(status);
+    }
+    if (prefix) {
+      // instr matches a literal prefix, including characters that LIKE treats as wildcards.
+      filters.push("instr(p.normalized_name, ?) = 1");
+      args.push(prefix);
+    }
+    const where = filters.length ? "WHERE " + filters.join(" AND ") : "";
+    const rows = await this.all(`SELECT p.id, p.name, p.status, p.updated_at,
+      max(t.updated_at) AS activity, count(t.id) AS total, sum(t.status='TODO') AS todo,
+      sum(t.status='IN_PROGRESS') AS in_progress, sum(t.status='BLOCKED') AS blocked, sum(t.status='DONE') AS done
+      FROM project p LEFT JOIN task t ON t.project_id=p.id
+      ${where}
+      GROUP BY p.id`, ...args);
+    const result = rows.map((p) => ({ id: p.id, name: p.name, status: p.status, counts: {
       TODO: p.todo || 0,
       IN_PROGRESS: p.in_progress || 0,
       BLOCKED: p.blocked || 0,
