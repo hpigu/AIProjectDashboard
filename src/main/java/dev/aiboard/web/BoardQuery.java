@@ -41,13 +41,13 @@ public class BoardQuery {
                                     .toList()));
         }
 
-        return new BoardView(project.id(), project.name(), project.description(), columns);
+        return new BoardView(project.id(), project.name(), project.description(), project.status(), columns);
     }
 
     public record TaskCard(Long id, String title, String category, Integer sortOrder,
                            String assignee, List<Long> waitingFor) {
     }
 
-    public record BoardView(Long id, String name, String description, Map<String, List<TaskCard>> columns) {
+    public record BoardView(Long id, String name, String description, String status, Map<String, List<TaskCard>> columns) {
     }
 }

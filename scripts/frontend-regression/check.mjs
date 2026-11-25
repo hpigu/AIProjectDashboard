@@ -288,6 +288,136 @@ async function checkNoRawKeyFallbackVisibleInRenderedDom(session) {
   await session.eval(`window.localStorage.removeItem('board.locale')`);
 }
 
+async function checkArchivedClaimability(session) {
+  const source = `(() => {
+    const originalFetch = window.fetch;
+    const params = new URL(location.href).searchParams;
+    const fixture = window.archiveFixture = {
+      boardStatus: params.get('fixtureStatus'),
+      summaryStatus: params.get('fixtureSummaryStatus'),
+      delayGraph: params.has('delayGraph'),
+      graphRequests: 0,
+      graphAborted: false,
+    };
+    window.EventSource = class extends EventTarget {
+      constructor() { super(); fixture.events = this; }
+      close() {}
+    };
+    fixture.publishSummary = () => {
+      // Use an event understood by the base branch to request a new project summary.
+      fixture.events.dispatchEvent(new MessageEvent('project.created', { data: '{"projectId":1000}' }));
+    };
+    const task = { id: 5, title: 'Ready task', category: 'BACKEND', assignee: null, waitingFor: [] };
+    window.fetch = (input, options) => {
+      const path = new URL(input, location.href).pathname;
+      if (path === '/api/projects') {
+        return Promise.resolve(Response.json(fixture.summaryStatus
+          ? [{ id: 999, name: 'Archive fixture', status: fixture.summaryStatus }]
+          : []));
+      }
+      if (path === '/api/projects/999/board') {
+        const board = {
+          name: 'Archive fixture', status: fixture.boardStatus,
+          columns: { TODO: [task], IN_PROGRESS: [], BLOCKED: [], DONE: [] },
+        };
+        if (fixture.delayBoard) {
+          fixture.delayBoard = false;
+          return new Promise(resolve => {
+            fixture.releaseBoard = () => resolve(Response.json(board));
+            options.signal.addEventListener('abort', () => { fixture.boardAborted = true; }, { once: true });
+          });
+        }
+        return Promise.resolve(Response.json(board));
+      }
+      if (path === '/api/projects/999/dependencies') {
+        fixture.graphRequests++;
+        if (fixture.delayGraph) {
+          fixture.delayGraph = false;
+          return new Promise((resolve, reject) => {
+            options.signal.addEventListener('abort', () => {
+              fixture.graphAborted = true;
+              reject(new DOMException('Canceled in fixture', 'AbortError'));
+            }, { once: true });
+          });
+        }
+        return Promise.resolve(Response.json({ nodes: [{ ...task, status: 'TODO', claimable: true }], edges: [] }));
+      }
+      if (path.endsWith('/workflow')) return Promise.resolve(Response.json({ status: 'UNCONFIGURED' }));
+      return originalFetch(input, options);
+    };
+  })();`;
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  const count = selector => session.eval(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
+  const waitUntil = async (predicate, message) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (await predicate()) return;
+      await sleep(50);
+    }
+    throw new Error(message);
+  };
+  const waitFor = selector => waitUntil(() => count(selector), '看不到預期的畫面元素 ' + selector);
+
+  try {
+    const base = baseUrl + '/index.html?project=999';
+    await session.setViewport(1440, 900);
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&fixtureSummaryStatus=ACTIVE');
+    await waitFor('.task-card');
+    if (await count('.board-header .archive-badge') !== 1) throw new Error('看板回傳封存時不應被過期的進行中摘要蓋過');
+
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&taskClaimable=true');
+    await waitFor('.task-filters');
+    if (await count('.task-card')) throw new Error('可認領篩選包含了封存專案的卡片');
+
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&view=dependencies');
+    await waitFor('.dependency-node');
+    if (await count('.dependency-node .claimable-badge')) throw new Error('相依圖顯示了過期的可認領標章');
+
+    await session.navigate(base + '&fixtureStatus=ACTIVE&taskClaimable=true');
+    await waitFor('.task-card');
+    await session.eval('document.querySelector(".view-switch [role=tab]:last-child").click()');
+    await waitFor('.dependency-node .claimable-badge');
+
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&fixtureSummaryStatus=ARCHIVED&delayGraph&view=dependencies');
+    await waitFor('.view-switch [role=tab]:first-child');
+    await waitUntil(() => session.eval('window.archiveFixture.graphRequests === 1'), '未擱置原始相依圖查詢');
+    await session.eval('document.querySelector(".view-switch [role=tab]:first-child").click()');
+    await session.eval(`(() => {
+      const fixture = window.archiveFixture;
+      fixture.boardStatus = 'ACTIVE';
+      fixture.summaryStatus = 'ACTIVE';
+      fixture.publishSummary();
+    })()`);
+    await waitUntil(() => session.eval('window.archiveFixture.graphAborted && window.archiveFixture.graphRequests === 2'),
+      '專案還原時應取消背景中的舊圖請求並重新載入');
+    await session.eval('document.querySelector(".view-switch [role=tab]:last-child").click()');
+    await waitFor('.dependency-node .claimable-badge');
+
+    await session.navigate(base + '&fixtureStatus=ACTIVE&fixtureSummaryStatus=ACTIVE&taskClaimable=true');
+    await waitFor('.task-card');
+    await session.eval(`(() => {
+      const fixture = window.archiveFixture;
+      fixture.delayBoard = true;
+      fixture.boardStatus = 'ARCHIVED';
+      fixture.summaryStatus = 'ARCHIVED';
+      fixture.publishSummary();
+    })()`);
+    await waitUntil(() => session.eval('Boolean(window.archiveFixture.releaseBoard)'), '未擱置舊的封存看板回應');
+    await session.eval(`(() => {
+      const fixture = window.archiveFixture;
+      fixture.boardStatus = 'ACTIVE';
+      fixture.summaryStatus = 'ACTIVE';
+      fixture.publishSummary();
+    })()`);
+    await waitUntil(() => session.eval('window.archiveFixture.boardAborted'), '快速還原時應取消舊的封存看板請求');
+    await session.eval('window.archiveFixture.releaseBoard(); new Promise(resolve => requestAnimationFrame(resolve));');
+    if (await count('.board-header .archive-badge') || await count('.task-card') !== 1) {
+      throw new Error('較舊的封存回應覆寫了還原後的進行中看板');
+    }
+  } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
 async function checkInterpolationRendersActualValues(session) {
   // conn.connected / conn.reconnecting 不含插值，改驗證有插值語法的
   // relTime 系列在渲染後不殘留 {n} 字面樣板（透過 t() 直接呼叫驗證，
@@ -506,6 +636,7 @@ async function main() {
     await check('console 無錯誤/未捕捉例外', () => checkNoConsoleErrors(session));
     await check('無 CSP violation', () => checkNoCspViolations(session));
     await check('零跨 origin 請求', () => checkNoCrossOriginRequests(session));
+    await check('封存與還原的認領篩選和相依圖', () => checkArchivedClaimability(session));
     await check('i18n: 手動切換更新 html lang 並於 reload 後保留', () => checkManualSwitchUpdatesHtmlLangAndPersists(session));
     await check('i18n: 不支援的 stored locale fallback 到 zh-TW', () => checkUnsupportedStoredLocaleFallsBackToDefault(session));
     await check('i18n: 無 stored 偏好時依瀏覽器語言偵測（含 zh-CN fallback）', () => checkBrowserLanguageDetectionWithoutStoredPreference(session));
