@@ -38,6 +38,8 @@ class DependencyGraphServiceTest {
     @Test
     void getDependencyGraph_returnsClaimabilityFromTheSamePrerequisiteRuleAsClaiming() {
         Long projectId = 12L;
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "Graph fixture", null, "ACTIVE"));
         Task done = task(5L, "完成 schema", TaskStatus.DONE, "BACKEND", "backend-dev");
         Task ready = task(6L, "實作 API", TaskStatus.TODO, "BACKEND", null);
         Task waiting = task(7L, "實作頁面", TaskStatus.TODO, "FRONTEND", null);
@@ -59,7 +61,7 @@ class DependencyGraphServiceTest {
         assertThat(graph.edges()).containsExactly(
                 new DependencyGraphService.DependencyEdge(5L, 6L),
                 new DependencyGraphService.DependencyEdge(6L, 7L));
-        verify(projectService).assertExists(projectId);
+        verify(projectService).getById(projectId);
         verify(taskRepository).findByProjectIdOrderBySortOrderAsc(projectId);
         verify(dependencyRepository).findByProjectId(projectId);
         verifyNoMoreInteractions(taskRepository, dependencyRepository);
@@ -68,6 +70,8 @@ class DependencyGraphServiceTest {
     @Test
     void getDependencyGraph_whenThereAreNoDependencies_returnsAllNodesAndNoEdges() {
         Long projectId = 12L;
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "Graph fixture", null, "ACTIVE"));
         Task task = task(5L, "獨立任務", TaskStatus.TODO, "BACKEND", null);
         when(taskRepository.findByProjectIdOrderBySortOrderAsc(projectId)).thenReturn(List.of(task));
         when(dependencyRepository.findByProjectId(projectId)).thenReturn(List.of());
@@ -82,6 +86,8 @@ class DependencyGraphServiceTest {
     @Test
     void getDependencyGraph_whenStoredDependenciesFormACycle_returnsDiagnosticError() {
         Long projectId = 12L;
+        when(projectService.getById(projectId))
+                .thenReturn(new ProjectService.ProjectDto(projectId, "Graph fixture", null, "ACTIVE"));
         Task first = mock(Task.class);
         Task second = mock(Task.class);
         when(first.getId()).thenReturn(5L);

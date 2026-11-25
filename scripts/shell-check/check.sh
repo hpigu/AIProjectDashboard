@@ -165,7 +165,7 @@ rm -rf -- "$permission_work"
 echo ""
 echo '=== start 啟動後安全收尾 ==='
 
-# 用假的 Java 21 長時間行程啟動，再讓 PATH 中的 chmod 只拒絕 PID 檔。這正好落在
+# 用假的 Java 21 長時間行程啟動，再模擬 PID 檔權限過寬且 chmod 無法收斂。這正好落在
 # `$!` 已取得、但 PID 檔尚未安全收斂的窗口；bin/board 必須只用這個確切 PID 收尾，
 # 不得留下無法由 stop 管理的孤兒。fixture 所有路徑與 PID 都記在 mktemp 目錄內。
 fixture_root="$(mktemp -d)"
@@ -192,7 +192,7 @@ printf '%s\n' \
 printf '%s\n' \
   '#!/bin/sh' \
   'for arg do' \
-  '  if [ "$arg" = "${FAIL_CHMOD_PATH:?}" ]; then sleep 1; exit 1; fi' \
+  '  if [ "$arg" = "${FAIL_CHMOD_PATH:?}" ]; then /bin/chmod 644 "$arg" || exit 2; sleep 1; exit 1; fi' \
   'done' \
   'exec /bin/chmod "$@"' \
   > "$fixture_root/fake-bin/chmod"
