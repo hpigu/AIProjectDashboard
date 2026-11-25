@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 前端手動回歸驗證工具（#140）。純 Node.js 內建模組，不使用任何 npm 套件，
-// 不進 Maven 生命週期、不是 CI 必要條件。見同目錄 README.md。
+// 前端瀏覽器回歸驗證（#140）。可在本機或 CI 執行，只使用 Node.js 內建模組。
+// 見同目錄 README.md。
 //
 // 用法：
 //   node scripts/frontend-regression/check.mjs --base-url http://127.0.0.1:8091 [--cdp-port 9222]
@@ -226,8 +226,11 @@ async function checkManualSwitchUpdatesHtmlLangAndPersists(session) {
 async function checkUnsupportedStoredLocaleFallsBackToDefault(session) {
   await session.setViewport(1440, 900);
   await session.navigate(`${baseUrl}/index.html`);
-  // 塞入一個不支援的 locale（例如舊版本存過的值、或人為竄改），reload 後
-  // detectLocale() 必須忽略它並 fallback 到 DEFAULT_LOCALE（'zh-TW'）。
+  // 讓儲存偏好與瀏覽器語言都不受支援，才會落到預設語系。
+  await session.send('Emulation.setUserAgentOverride', {
+    userAgent: await session.eval('navigator.userAgent'),
+    acceptLanguage: 'fr-FR,fr',
+  });
   await session.eval(`window.localStorage.setItem('board.locale', 'fr-FR')`);
   await session.navigate(`${baseUrl}/index.html`);
   const locale = await session.eval('window.__i18n.state.locale');

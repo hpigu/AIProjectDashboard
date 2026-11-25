@@ -25,14 +25,16 @@ jobs:
       version: ${{ steps.release_ref.outputs.version }}
       commit: ${{ steps.release_ref.outputs.commit }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '21'
+          problem-matcher: true
           cache: maven
       - name: Verify stable tag, exact checkout, version, and thin plugin metadata
         id: release_ref
@@ -51,9 +53,7 @@ jobs:
           ./scripts/check-plugin-parity.sh
           grep -Fq '"source": "./plugin"' .claude-plugin/marketplace.json || { echo '::error::Claude marketplace no longer points at ./plugin'; exit 1; }
           grep -Fq '"path": "./plugins/ai-project-board"' .agents/plugins/marketplace.json || { echo '::error::Codex marketplace no longer points at ./plugins/ai-project-board'; exit 1; }
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "commit=${head_commit}" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\nversion=%s\ncommit=%s\n' "$tag" "$version" "$head_commit" >> "$GITHUB_OUTPUT"
 
   linux-x64:
     name: Linux x64 build and self-validate
@@ -65,19 +65,20 @@ jobs:
       BOARD_DB_URL: 'jdbc:h2:file:./data/release-linux;DB_CLOSE_ON_EXIT=FALSE'
       BOARD_LOG_FILE: './logs/release-linux.log'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.tag }}
-      - uses: actions/setup-java@v5
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.commit }}
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '21'
+          problem-matcher: true
           cache: maven
       - name: Test and package
         run: |
           set -euo pipefail
-          ./mvnw -B test
-          ./mvnw -B -DskipTests package
+          ./mvnw -B verify
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           mkdir release-assets
           cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-linux-x64-${version}.jar"
@@ -88,7 +89,7 @@ jobs:
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           ./scripts/release/posix-release-smoke.sh --version "$version" --platform linux-x64 \
             --jar "release-assets/ai-project-board-backend-linux-x64-${version}.jar"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-x64
           path: release-assets/ai-project-board-backend-linux-x64-*.jar
@@ -104,21 +105,22 @@ jobs:
       BOARD_DB_URL: 'jdbc:h2:file:./data/release-macos-arm64;DB_CLOSE_ON_EXIT=FALSE'
       BOARD_LOG_FILE: './logs/release-macos-arm64.log'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.tag }}
-      - uses: actions/setup-java@v5
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.commit }}
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '21'
+          problem-matcher: true
           cache: maven
       - name: Gate native runner architecture
         run: test "$(uname -m)" = arm64
       - name: Test and package
         run: |
           set -euo pipefail
-          ./mvnw -B test
-          ./mvnw -B -DskipTests package
+          ./mvnw -B verify
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           mkdir release-assets
           cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-macos-arm64-${version}.jar"
@@ -129,7 +131,7 @@ jobs:
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           ./scripts/release/posix-release-smoke.sh --version "$version" --platform macos-arm64 \
             --jar "release-assets/ai-project-board-backend-macos-arm64-${version}.jar"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos-arm64
           path: release-assets/ai-project-board-backend-macos-arm64-*.jar
@@ -145,21 +147,22 @@ jobs:
       BOARD_DB_URL: 'jdbc:h2:file:./data/release-macos-x64;DB_CLOSE_ON_EXIT=FALSE'
       BOARD_LOG_FILE: './logs/release-macos-x64.log'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.tag }}
-      - uses: actions/setup-java@v5
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.commit }}
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '21'
+          problem-matcher: true
           cache: maven
       - name: Gate native runner architecture
         run: test "$(uname -m)" = x86_64
       - name: Test and package
         run: |
           set -euo pipefail
-          ./mvnw -B test
-          ./mvnw -B -DskipTests package
+          ./mvnw -B verify
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           mkdir release-assets
           cp "target/ai-project-board-backend-${version}.jar" "release-assets/ai-project-board-backend-macos-x64-${version}.jar"
@@ -170,7 +173,7 @@ jobs:
           version="$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)"
           ./scripts/release/posix-release-smoke.sh --version "$version" --platform macos-x64 \
             --jar "release-assets/ai-project-board-backend-macos-x64-${version}.jar"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos-x64
           path: release-assets/ai-project-board-backend-macos-x64-*.jar
@@ -186,21 +189,23 @@ jobs:
       BOARD_DB_URL: 'jdbc:h2:file:./data/release-windows;DB_CLOSE_ON_EXIT=FALSE'
       BOARD_LOG_FILE: './logs/release-windows.log'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.tag }}
-      - uses: actions/setup-java@v5
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.commit }}
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '21'
+          problem-matcher: true
           cache: maven
       - name: Test, package, and Windows jlink smoke
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw "Windows x64 runner required; got $env:PROCESSOR_ARCHITECTURE" }
-          .\mvnw.cmd -B test
-          .\mvnw.cmd -B -DskipTests package
+          .\mvnw.cmd -B verify
           [xml]$pom = Get-Content pom.xml
           $version = $pom.project.version
           $jar = "target\ai-project-board-backend-$version.jar"
@@ -224,7 +229,7 @@ jobs:
           Copy-Item "target\release\ai-project-board-backend-windows-x64-$version.zip" release-assets
           bash scripts/release/release-assets.sh validate-platform --version $version --platform windows-x64 --directory release-assets
           if ($LASTEXITCODE -ne 0) { throw 'shared release asset validation failed' }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-x64
           path: release-assets/ai-project-board-backend-windows-x64-*.zip
@@ -235,13 +240,17 @@ jobs:
     needs: [preflight, linux-x64, macos-arm64, macos-x64, windows-x64]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    concurrency:
+      group: release-${{ needs.preflight.outputs.tag }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.tag }}
-      - uses: actions/download-artifact@v8
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.commit }}
+      - uses: actions/download-artifact@9000827c4b302e5dbc2d9c4e3fa4d86824a0b816 # v8.0.2
         with:
           pattern: release-*
           path: release-assets
@@ -276,6 +285,8 @@ jobs:
           COMMIT: ${{ needs.preflight.outputs.commit }}
         run: |
           set -euo pipefail
+          actual_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/refs/tags/${TAG}" --jq .sha)"
+          [ "$actual_commit" = "$COMMIT" ] || { echo "::error::tag ${TAG} moved after preflight"; exit 1; }
           gh release create "$TAG" --verify-tag --draft --title "$TAG" \
             --notes "Stable server release for tag ${TAG}, built from ${COMMIT}. Download the platform-specific server artifact and verify it against ai-project-board-backend-${VERSION}-SHA256SUMS.txt before installation. The included Claude and Codex plugins remain thin clients."
           gh release upload "$TAG" \
@@ -289,6 +300,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.preflight.outputs.tag }}
           VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
         run: |
           set -euo pipefail
           expected="$(printf '%s\n' \
@@ -299,4 +311,6 @@ jobs:
             "ai-project-board-backend-${VERSION}-SHA256SUMS.txt" | LC_ALL=C sort)"
           actual="$(gh release view "$TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
           [ "$actual" = "$expected" ] || { echo '::error::draft asset list is incomplete or contains unexpected files'; exit 1; }
+          actual_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/refs/tags/${TAG}" --jq .sha)"
+          [ "$actual_commit" = "$COMMIT" ] || { echo "::error::tag ${TAG} moved after preflight"; exit 1; }
           gh release edit "$TAG" --draft=false
