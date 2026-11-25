@@ -374,13 +374,13 @@ async function checkArchivedClaimability(session) {
 
     await session.navigate(base + '&fixtureStatus=ACTIVE&taskClaimable=true');
     await waitFor('.task-card');
-    await session.eval('document.querySelector(".view-switch [role=tab]:last-child").click()');
+    await session.eval('document.querySelector(".view-switch button:last-child").click()');
     await waitFor('.dependency-node .claimable-badge');
 
     await session.navigate(base + '&fixtureStatus=ARCHIVED&fixtureSummaryStatus=ARCHIVED&delayGraph&view=dependencies');
-    await waitFor('.view-switch [role=tab]:first-child');
+    await waitFor('.view-switch button:first-child');
     await waitUntil(() => session.eval('window.archiveFixture.graphRequests === 1'), '未擱置原始相依圖查詢');
-    await session.eval('document.querySelector(".view-switch [role=tab]:first-child").click()');
+    await session.eval('document.querySelector(".view-switch button:first-child").click()');
     await session.eval(`(() => {
       const fixture = window.archiveFixture;
       fixture.boardStatus = 'ACTIVE';
@@ -389,7 +389,7 @@ async function checkArchivedClaimability(session) {
     })()`);
     await waitUntil(() => session.eval('window.archiveFixture.graphAborted && window.archiveFixture.graphRequests === 2'),
       '專案還原時應取消背景中的舊圖請求並重新載入');
-    await session.eval('document.querySelector(".view-switch [role=tab]:last-child").click()');
+    await session.eval('document.querySelector(".view-switch button:last-child").click()');
     await waitFor('.dependency-node .claimable-badge');
 
     await session.navigate(base + '&fixtureStatus=ACTIVE&fixtureSummaryStatus=ACTIVE&taskClaimable=true');
@@ -465,25 +465,27 @@ async function checkMultipleWorkers(session) {
     }))()`);
     const initial = await snapshot();
     const expected = ['#1', '#2', '#3'];
-    if (JSON.stringify(initial.cards.map(c => c.id)) !== JSON.stringify(expected) || initial.progress !== '0/3' || initial.counts[1] !== '3/ 3') throw new Error('初始卡片或統計不正確: ' + JSON.stringify(initial));
+    if (JSON.stringify(initial.cards.map(c => c.id)) !== JSON.stringify(expected) || initial.progress !== '0/3' || initial.counts[1] !== '3') throw new Error('初始卡片或統計不正確: ' + JSON.stringify(initial));
+    await session.eval(`document.querySelector('.advanced-trigger').click()`);
     for (let i = 0; i < 3; i++) {
       const card = initial.cards[i];
       if (card.assignee !== '@backend-' + (i + 1) || card.status !== 'st-IN_PROGRESS' || card.color !== initial.muted || !card.font.includes('IBM Plex Mono')) throw new Error('工作者顯示或字體不正確: ' + JSON.stringify(card));
       await session.eval(`(() => { const select = document.querySelector('.filter-advanced select'); select.value = 'backend-${i + 1}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-      await sleep(1200); // wait for filtered cards to leave the transition group
+      await waitForBrowserState(session, 'document.querySelectorAll(".task-card").length === 1',
+        '篩選後的離場動畫仍未結束');
       const filtered = await snapshot();
-      if (filtered.cards.length !== 1 || filtered.cards[0].id !== expected[i] || filtered.progress !== '0/3' || filtered.counts[1] !== '1/ 3') throw new Error('assignee 篩選或統計不正確: ' + JSON.stringify(filtered));
+      if (filtered.cards.length !== 1 || filtered.cards[0].id !== expected[i] || filtered.progress !== '0/3' || filtered.counts[1] !== '1 / 3') throw new Error('assignee 篩選或統計不正確: ' + JSON.stringify(filtered));
     }
     await session.eval(`(() => { const select = document.querySelector('.filter-advanced select'); select.value = ''; select.dispatchEvent(new Event('change', { bubbles: true })); const task = window.testBoard.columns.IN_PROGRESS.splice(1, 1)[0]; window.testBoard.columns.BLOCKED.push(task); window.testEvents.dispatchEvent(new MessageEvent('task.status_changed', { data: JSON.stringify({ projectId: 999, taskId: 2, from: 'IN_PROGRESS', to: 'BLOCKED' }) })); })()`);
     await sleep(1200); // allow Vue transition-group removal to finish
     const updated = await snapshot();
-    if (JSON.stringify(updated.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || updated.progress !== '0/3' || updated.counts[1] !== '2/ 2' || updated.counts[2] !== '1/ 1') throw new Error('狀態事件後卡片或統計不正確: ' + JSON.stringify(updated));
+    if (JSON.stringify(updated.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || updated.progress !== '0/3' || updated.counts[1] !== '2' || updated.counts[2] !== '1') throw new Error('狀態事件後卡片或統計不正確: ' + JSON.stringify(updated));
     const blocked = updated.cards.find(c => c.id === '#2');
     if (blocked.status !== 'st-BLOCKED' || blocked.assignee !== '@backend-2' || blocked.color !== initial.cards[1].color || blocked.font !== initial.cards[1].font) throw new Error('BLOCKED assignee 樣式或身分不正確: ' + JSON.stringify(blocked));
     await session.eval(`(() => { const task = window.testBoard.columns.BLOCKED.pop(); window.testBoard.columns.IN_PROGRESS.push(task); window.testEvents.dispatchEvent(new MessageEvent('task.status_changed', { data: JSON.stringify({ projectId: 999, taskId: 2, from: 'BLOCKED', to: 'IN_PROGRESS' }) })); })()`);
     await sleep(1200);
     const restored = await snapshot();
-    if (JSON.stringify(restored.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || restored.progress !== '0/3' || restored.counts[1] !== '3/ 3' || restored.counts[2] !== '0/ 0') throw new Error('恢復後卡片或統計不正確: ' + JSON.stringify(restored));
+    if (JSON.stringify(restored.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || restored.progress !== '0/3' || restored.counts[1] !== '3' || restored.counts[2] !== '0') throw new Error('恢復後卡片或統計不正確: ' + JSON.stringify(restored));
   } finally {
     await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
   }

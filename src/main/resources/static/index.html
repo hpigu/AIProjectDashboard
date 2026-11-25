@@ -14,7 +14,7 @@
     <div class="rail" :class="railFlashClass"></div>
     <div class="app-shell">
       <header class="app-header">
-        <h1 class="app-title">{{ t('app.title') }}</h1>
+        <h1 class="app-title"><span class="app-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>{{ t('app.title') }}</h1>
         <div class="header-tools">
           <div class="lang-switch" role="group" :aria-label="t('lang.label')">
             <button
@@ -39,28 +39,31 @@
             <span class="notify-dot" aria-hidden="true"></span>
             <span>{{ notifyLabel }}</span>
           </button>
-          <div class="conn-status">
+          <div class="conn-status" role="status">
             <span class="conn-dot" :class="sseConnected ? 'connected' : 'reconnecting'"></span>
             <span>{{ sseConnected ? t('conn.connected') : t('conn.reconnecting') }}</span>
           </div>
         </div>
       </header>
 
-      <level-one
-        v-if="currentProjectId === null"
-        :projects="projects"
-        @select="selectProject"
-      ></level-one>
+      <main ref="mainContent">
+        <level-one
+          v-if="currentProjectId === null"
+          :projects="projects"
+          :projects-available="projectsAvailable"
+          @select="selectProject"
+        ></level-one>
 
-      <level-two
-        v-else
-        :key="currentProjectId"
-        :project-id="currentProjectId"
-        :projects="projects"
-        :project-summary="selectedProject"
-        @back="showProjectList"
-        @jump="selectProject"
-      ></level-two>
+        <level-two
+          v-else
+          :key="currentProjectId"
+          :project-id="currentProjectId"
+          :projects="projects"
+          :project-summary="selectedProject"
+          @back="showProjectList"
+          @jump="selectProject"
+        ></level-two>
+      </main>
     </div>
   </div>
 
