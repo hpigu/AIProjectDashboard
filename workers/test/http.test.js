@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHandler, eventStream } from '../src/index.js';
+import { createHandler } from '../src/index.js';
+import { eventStream } from '../src/events.js';
 
 const trusted = async () => ({ email: 'owner@example.com' });
 const mockService = {
@@ -119,5 +120,29 @@ test('SSE abort and reader cancellation clear polling timers', async () => {
     if (abort) controller.abort(); else await reader.cancel();
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(calls, 0);
+  }
+});
+
+test('SSE expires even if a database poll is still pending', async () => {
+  let finishPoll;
+  const pending = new Promise(resolve => { finishPoll = resolve; });
+  let calls = 0;
+  const response = await eventStream(new Request('https://board.example.com/api/events'), {
+    latestEventId: async () => 0,
+    eventsAfter: () => { calls++; return pending; },
+  }, { pollMs: 5, lifetimeMs: 35 });
+  const reader = response.body.getReader();
+  try {
+    assert.equal((await reader.read()).done, false);
+    const deadline = AbortSignal.timeout(1000);
+    const ended = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => deadline.addEventListener('abort', () => reject(deadline.reason), { once: true })),
+    ]);
+    assert.equal(ended.done, true);
+    assert.equal(calls, 1);
+  } finally {
+    finishPoll([]);
+    await reader.cancel();
   }
 });

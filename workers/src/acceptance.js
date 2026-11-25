@@ -99,7 +99,13 @@ export async function recordAcceptance(s, { actor, payload, signature }) {
     else text(b,'ref');
   } else for (const f of ['sessionId','worktree','branch','baseRef','lastSeen','handoff']) text(b,f);
   const eventId = text(e,'eventId'); require(eventId.length <= 100 && !(await s.first('SELECT event_id FROM acceptance_event WHERE event_id=?',eventId)), '重複驗收事件');
-  await s.commit([s.stmt('UPDATE task SET version=version+1 WHERE id=? AND version=?',t.id,t.version), ...s.assertChanged(), s.stmt('INSERT INTO acceptance_event(event_id,project_id,task_id,actor,kind,payload) VALUES(?,?,?,?,?,?)',eventId,t.project_id,t.id,actor,e.kind,payload)]);
+  await s.commit([
+    s.stmt('UPDATE task SET version=version+1 WHERE id=? AND version=?',t.id,t.version),
+    ...s.assertChanged(),
+    s.stmt('INSERT INTO acceptance_event(event_id,project_id,task_id,actor,kind,payload) VALUES(?,?,?,?,?,?)',
+      eventId,t.project_id,t.id,actor,e.kind,payload),
+    s.event('task.acceptance_changed', { projectId: t.project_id, taskId: t.id }),
+  ]);
   return acceptanceSummary(s,t.id);
 }
 export async function assertCompletable(s, taskId, codeRef) {

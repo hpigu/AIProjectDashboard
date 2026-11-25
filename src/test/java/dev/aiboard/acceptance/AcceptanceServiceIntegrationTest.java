@@ -1,5 +1,6 @@
 package dev.aiboard.acceptance;
 
+import dev.aiboard.event.BoardEvent;
 import dev.aiboard.task.*;
 import dev.aiboard.project.ProjectService;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +10,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import tools.jackson.databind.json.JsonMapper;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -20,6 +23,7 @@ import static org.assertj.core.api.Assertions.*;
 /** Real H2 journal + signed identities, never a mocked acceptance gate. */
 @SpringBootTest(properties = {"spring.datasource.url=jdbc:h2:mem:acceptance-signed;DB_CLOSE_DELAY=-1",
     "spring.jpa.hibernate.ddl-auto=validate", "logging.file.name=/tmp/ai-board-acceptance-signed.log"})
+@RecordApplicationEvents
 public class AcceptanceServiceIntegrationTest {
     static final String REF = "a".repeat(40);
     static final String SECRET = "isolated-fixture-key-32-characters-minimum";
@@ -63,6 +67,7 @@ public class AcceptanceServiceIntegrationTest {
     @Autowired TaskCompleteService completion;
     @Autowired TaskRepository repository;
     @Autowired JdbcTemplate db;
+    @Autowired ApplicationEvents applicationEvents;
     long projectId, taskId;
     String token, contractId;
     Map<String, Object> contract;
@@ -176,6 +181,9 @@ public class AcceptanceServiceIntegrationTest {
         assertThat(event.path("_verifiedActor").asText()).isEqualTo("owner");
         assertThat(event.path("_receivedAt").asText()).isNotBlank();
         assertThat(acceptance.summary(taskId).revision()).isEqualTo(1);
+        assertThat(applicationEvents.stream(BoardEvent.class)
+                .filter(boardEvent -> boardEvent.type().equals("task.acceptance_changed")))
+                .containsExactly(BoardEvent.taskAcceptanceChanged(projectId, taskId));
     }
     @Test void unresolvedContractSkipsOnlyAffectedWorkAndAllowsUnrelatedClaim() throws Exception {
         tasks.updateStatus(taskId, "BLOCKED", "待確認", token);
@@ -206,10 +214,10 @@ public class AcceptanceServiceIntegrationTest {
     @Test void sharedKeysAndRunnerMixedPrivilegesFailClosed() {
         var scoped=List.of(Long.toString(projectId));
         String shared=JSON.writeValueAsString(Map.of("a",Map.of("secret",SECRET,"projectIds",scoped,"permissions",List.of("CONTRACT")),"b",Map.of("secret",SECRET,"projectIds",scoped,"permissions",List.of("REVIEW"))));
-        var duplicate=new AcceptanceService(db,repository,projects,shared);
+        var duplicate=new AcceptanceService(db,repository,projects,shared, event -> {});
         assertThatThrownBy(() -> duplicate.record("a","{}","0".repeat(64))).hasMessageContaining("不可共用");
         String mixed=JSON.writeValueAsString(Map.of("runner",Map.of("secret",SECRET,"projectIds",scoped,"permissions",List.of("RUN","REVIEW"))));
-        var conflicting=new AcceptanceService(db,repository,projects,mixed);
+        var conflicting=new AcceptanceService(db,repository,projects,mixed, event -> {});
         assertThatThrownBy(() -> conflicting.record("runner","{}","0".repeat(64))).hasMessageContaining("不得兼任");
     }
     @Test void authorWithOwnerPermissionStillCannotGrantOwnException() throws Exception {

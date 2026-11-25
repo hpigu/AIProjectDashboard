@@ -338,7 +338,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(candidate));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L)))
                 .thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
@@ -367,7 +367,7 @@ class TaskServiceTest {
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO))
                 .thenReturn(List.of(first, second), List.of(second));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(any())).thenReturn(List.of());
+        when(taskDependencyRepository.findPrerequisitesForTasks(any())).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
                 any(String.class)))
@@ -398,7 +398,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(blocked, free));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L, 15L)))
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L, 15L)))
                 .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
@@ -423,7 +423,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(blocked));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L)))
                 .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
 
         TaskService.ClaimNextTaskResult result =
@@ -683,7 +683,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(candidate));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L))).thenReturn(List.of());
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L))).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
                 any(String.class)))
@@ -776,10 +776,10 @@ class TaskServiceTest {
                 .hasMessageContaining("不能標記為 BLOCKED");
     }
 
-    /** 組出 findUnfinishedPrerequisites 的投影列：taskId 還在等 prerequisite。 */
-    private static TaskDependencyRepository.UnfinishedPrerequisite prerequisiteOf(
+    /** 組出 findPrerequisitesForTasks 的投影列：taskId 還在等 prerequisite。 */
+    private static TaskDependencyRepository.Prerequisite prerequisiteOf(
             Long taskId, Task prerequisite) {
-        return new TaskDependencyRepository.UnfinishedPrerequisite() {
+        return new TaskDependencyRepository.Prerequisite() {
             @Override
             public Long getTaskId() {
                 return taskId;

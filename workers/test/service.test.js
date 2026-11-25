@@ -81,6 +81,25 @@ test("projects deduplicate full names case-insensitively and seeded full roles p
   assert.equal(await s.latestEventId(), 1);
   db.sql.close();
 });
+test('project summary SQL filters treat percentage, underscore and Unicode as literal prefixes', async () => {
+  const { db, s } = setup();
+  try {
+    const expected = await s.execute('create_project', { name: '看板 QA%_ Active' });
+    const archived = await s.execute('create_project', { name: '看板 QA%_ Archived' });
+    await s.execute('create_project', { name: '看板 QA12 Not a literal match' });
+    await s.execute('archive_project', { projectName: archived.project.name, reason: 'fixture' });
+    const query = new URLSearchParams({ q: '  看板 qa%_  ' });
+    const active = await s.listProjects(query);
+    assert.deepEqual(active.map(p => [p.id, p.total]), [[expected.project.id, 0]]);
+    query.set('status', 'ARCHIVED');
+    assert.deepEqual((await s.listProjects(query)).map(p => p.id), [archived.project.id]);
+    query.set('status', 'ALL');
+    query.set('blocked', 'true');
+    assert.deepEqual(await s.listProjects(query), []);
+  } finally {
+    db.sql.close();
+  }
+});
 test("batch validation is atomic, enforces earlier indexes/same project, 50 tasks and dependency skip", async () => {
   const { db, s } = setup();
   const p = await project(s);

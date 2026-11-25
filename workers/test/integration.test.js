@@ -84,7 +84,7 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
               CLOUDFLARE_ACCESS_TEAM: 'test-team', CLOUDFLARE_ACCESS_AUD: 'integration-audience',
               OWNER_EMAIL: owner }, serviceBindings: { ASSETS: async request => {
                 const path = new URL(request.url).pathname;
-                if (!['/', '/index.html', '/app.js', '/tokens.css'].includes(path)) return new Response('', { status: 404 });
+                if (!['/', '/index.html', '/app.js', '/live-updates.js', '/tokens.css'].includes(path)) return new Response('', { status: 404 });
                 return new Response(await readFile(new URL('src/main/resources/static' +
                   (path === '/' ? '/index.html' : path), projectRoot)), {
                   headers: { 'content-type': path.endsWith('.js') ? 'application/javascript' : 'text/html' }
@@ -133,12 +133,13 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
         }
       }
       assert.deepEqual(tools.map(x => x.name).sort(), expected.sort());
-      for (const path of ['/', '/app.js', '/api/projects', '/api/events']) {
+      for (const path of ['/', '/app.js', '/live-updates.js', '/api/projects', '/api/events']) {
         assert.equal((await web.fetch('https://web.example.test' + path)).status, 401);
       }
       assert.equal((await browser('/')).status, 200);
       assert.equal(certRequests, 1, 'Certificate cache avoids per-asset upstream fetches');
       assert.equal((await browser('/app.js')).status, 200);
+      assert.equal((await browser('/live-updates.js')).status, 200);
       assert.equal((await browser('/api/projects', assertion({ email: 'other@example.test' }))).status, 401);
       assert.equal((await browser('/api/projects', assertion({ aud: ['wrong-app'] }))).status, 401);
       assert.equal((await browser('/api/projects', assertion({ exp: 1 }))).status, 401);
@@ -332,13 +333,18 @@ test('real Workers runtime: MCP SDK, D1 atomicity, authenticated UI/SSE, persist
         domain(await first.callTool({ name: 'complete_task', arguments: { taskId: claimedTask,
           summary: 'integration passed', changedFiles: 'workers/', commitRef: CODE_REF, claimToken,
           verificationResults: [{ name: 'runtime integration', result: 'PASSED', detail: 'local workerd' }] } }));
-        let event;
-        for (let i = 0; i < 8; i++) {
-          event = await frame(reader, buffered);
-          if (event.includes('event: task.status_changed')) break;
+        const observed = new Set();
+        for (let i = 0; i < 8 && observed.size < 2; i++) {
+          const event = await frame(reader, buffered);
+          assert.equal(event.includes(claimToken), false);
+          if (event.includes('event: task.acceptance_changed')) {
+            const data = event.split('\n').find(line => line.startsWith('data: '));
+            assert.deepEqual(JSON.parse(data.slice(6)), { projectId, taskId: claimedTask });
+            observed.add('acceptance');
+          }
+          if (event.includes('event: task.status_changed')) observed.add('status');
         }
-        assert.match(event, /event: task.status_changed/);
-        assert.equal(event.includes(claimToken), false);
+        assert.deepEqual(observed, new Set(['acceptance', 'status']));
       } finally { await reader.cancel(); }
       assert.equal((await db.prepare('SELECT status FROM task WHERE id=?').bind(claimedTask).first()).status, 'DONE');
       const acceptance = await (await browser(`/api/projects/${projectId}/tasks/${claimedTask}/acceptance`)).json();

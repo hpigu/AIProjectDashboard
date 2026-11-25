@@ -308,8 +308,13 @@ class BoardService {
       t.id
     ) ?? [] })), doneCount: allTasks.filter((t) => t.status === "DONE").length, totalCount: allTasks.length };
   }
-  async waiting(projectId) {
-    const rows = await this.all("SELECT d.task_id,t.* FROM task_dependency d JOIN task t ON t.id=d.depends_on_task_id WHERE t.project_id=? ORDER BY t.sort_order,t.id", projectId);
+  async waiting(projectId, candidateCategory) {
+    const candidateFilter = candidateCategory ? "AND candidate.category=? AND candidate.status='TODO'" : "";
+    const params = candidateCategory ? [projectId, candidateCategory] : [projectId];
+    const rows = await this.all(`SELECT d.task_id,t.* FROM task candidate
+      JOIN task_dependency d ON d.task_id=candidate.id
+      JOIN task t ON t.id=d.depends_on_task_id
+      WHERE candidate.project_id=? ${candidateFilter} ORDER BY t.sort_order,t.id`, ...params);
     const result = new Map(), acceptance = new Map();
     for (const t of rows) {
       let summary = null;
@@ -319,9 +324,37 @@ class BoardService {
         if (summary.canClose) continue;
       }
       const prerequisite = summary ? { ...taskDto(t), acceptanceUnverified:true, reason:summary.blockers.join("；") } : taskDto(t);
-      result.set(t.task_id, [...result.get(t.task_id) ?? [], prerequisite]);
+      if (!result.has(t.task_id)) result.set(t.task_id, []);
+      result.get(t.task_id).push(prerequisite);
     }
     return result;
+  }
+  async claimCandidates(projectId, category) {
+    return this.all("SELECT * FROM task WHERE project_id=? AND category=? AND status='TODO' ORDER BY sort_order,id", projectId, category);
+  }
+  async selectClaimCandidate(candidates, waiting) {
+    const issues = new Map();
+    for (const task of candidates) {
+      const blockers = await workBlockers(this, task);
+      if (blockers.length) issues.set(task.id, blockers);
+      else if (!waiting.has(task.id)) return { candidate: task, issues };
+    }
+    return { candidate: null, issues };
+  }
+  blockedClaim(category, candidates, waiting, issues) {
+    return {
+      projectFound: true,
+      category,
+      outcome: issues.size ? "BLOCKED_BY_REQUIREMENT" : "BLOCKED_BY_DEPENDENCY",
+      claimed: false,
+      blockedByDependency: candidates.some(task => waiting.has(task.id)),
+      blockedByRequirement: issues.size > 0,
+      blockedCandidates: candidates.map(task => ({
+        task: taskDto(task),
+        waitingFor: waiting.get(task.id) ?? [],
+        requirementIssues: issues.get(task.id) ?? []
+      }))
+    };
   }
   async claim_next_task(a) {
     const category = enumeration(a.category, CATEGORIES, "category"), assignee = required(a.assignee, "assignee", 60);
@@ -332,23 +365,13 @@ class BoardService {
       const p2 = await this.namedProject(a.projectName, false);
       if (!p2) return this.missingProject();
       this.active(p2);
-      const allTasks = await this.tasks(p2.id);
-      const candidates = allTasks.filter((t) => t.category === category && t.status === "TODO");
-      const waiting2 = await this.waiting(p2.id), issues = new Map();
-      for (const t of candidates) { const blockers = await workBlockers(this,t); if (blockers.length) issues.set(t.id,blockers); }
-      const candidate = candidates.find((t) => !waiting2.has(t.id) && !issues.has(t.id));
+      const candidates = await this.claimCandidates(p2.id, category);
       if (!candidates.length) return { projectFound: true, project: projectDto(p2), category, outcome: contended ? "CONTENDED" : "NO_TASK", claimed: false, contended };
+      const waiting = await this.waiting(p2.id, category);
+      const { candidate, issues } = await this.selectClaimCandidate(candidates, waiting);
       if (!candidate) return {
-        projectFound: true,
+        ...this.blockedClaim(category, candidates, waiting, issues),
         project: projectDto(p2),
-        category,
-        outcome: issues.size ? "BLOCKED_BY_REQUIREMENT" : "BLOCKED_BY_DEPENDENCY",
-        claimed: false,
-        blockedByDependency: waiting2.size > 0,
-        blockedByRequirement: issues.size > 0,
-        blockedCandidates: candidates.map((t) => ({ task: taskDto(t), requirementIssues: issues.get(t.id) ?? [], waitingFor: waiting2.get(
-          t.id
-        ) }))
       };
       const token = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join(
         ""
@@ -370,14 +393,13 @@ class BoardService {
         contended = true;
       }
     }
-    const p = await this.namedProject(a.projectName), waiting = await this.waiting(p.id), allTasks = await this.tasks(p.id), remaining = allTasks.filter((t) => t.status === "TODO" && t.category === category);
-    const issues = new Map();
-    for (const t of remaining) { const blockers = await workBlockers(this,t); if (blockers.length) issues.set(t.id,blockers); }
-    if (remaining.length && remaining.every(t => waiting.has(t.id) || issues.has(t.id))) return {
-      projectFound: true, category, outcome: issues.size ? "BLOCKED_BY_REQUIREMENT" : "BLOCKED_BY_DEPENDENCY", claimed: false,
-      blockedByDependency: waiting.size > 0, blockedByRequirement: issues.size > 0,
-      blockedCandidates: remaining.map(t => ({ task: taskDto(t), waitingFor: waiting.get(t.id) ?? [], requirementIssues: issues.get(t.id) ?? [] }))
-    };
+    const p = await this.namedProject(a.projectName);
+    const remaining = await this.claimCandidates(p.id, category);
+    if (remaining.length) {
+      const waiting = await this.waiting(p.id, category);
+      const { candidate, issues } = await this.selectClaimCandidate(remaining, waiting);
+      if (!candidate) return this.blockedClaim(category, remaining, waiting, issues);
+    }
     return { projectFound: true, category, outcome: "CONTENDED", claimed: false, contended: true };
   }
   async transition(t, to, note, extra = [], blockId = null) {
@@ -671,8 +693,21 @@ class BoardService {
     const blocked = params.get("blocked");
     check(blocked == null || ["true", "false"].includes(blocked), "blocked 必須是布林值");
     const prefix = (params.get("q") || "").trim().toLowerCase();
-    const rows = await this.all("SELECT p.*,max(t.updated_at) AS activity,count(t.id) AS total,sum(t.status='TODO') AS todo,sum(t.status='IN_PROGRESS') AS in_progress,sum(t.status='BLOCKED') AS blocked,sum(t.status='DONE') AS done FROM project p LEFT JOIN task t ON t.project_id=p.id GROUP BY p.id");
-    const result = rows.filter((p) => (status === "ALL" || p.status === status) && p.normalized_name.startsWith(prefix)).map((p) => ({ id: p.id, name: p.name, status: p.status, counts: {
+    const filters = [], bindings = [];
+    if (status !== "ALL") {
+      filters.push("p.status=?");
+      bindings.push(status);
+    }
+    if (prefix) {
+      filters.push("instr(p.normalized_name,?)=1");
+      bindings.push(prefix);
+    }
+    const where = filters.length ? "WHERE " + filters.join(" AND ") : "";
+    const rows = await this.all(`SELECT p.id,p.name,p.status,p.updated_at,
+      max(t.updated_at) AS activity,count(t.id) AS total,sum(t.status='TODO') AS todo,
+      sum(t.status='IN_PROGRESS') AS in_progress,sum(t.status='BLOCKED') AS blocked,sum(t.status='DONE') AS done
+      FROM project p LEFT JOIN task t ON t.project_id=p.id ${where} GROUP BY p.id`, ...bindings);
+    const result = rows.map((p) => ({ id: p.id, name: p.name, status: p.status, counts: {
       TODO: p.todo || 0,
       IN_PROGRESS: p.in_progress || 0,
       BLOCKED: p.blocked || 0,
