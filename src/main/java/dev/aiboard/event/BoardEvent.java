@@ -49,6 +49,10 @@ public record BoardEvent(String type, Map<String, Object> payload) {
         return new BoardEvent("task.updated", payload);
     }
 
+    public static BoardEvent taskAcceptanceChanged(Long projectId, Long taskId) {
+        return new BoardEvent("task.acceptance_changed", Map.of("projectId", projectId, "taskId", taskId));
+    }
+
     public static BoardEvent projectStatusChanged(Long projectId, String from, String to, String at) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("projectId", projectId);

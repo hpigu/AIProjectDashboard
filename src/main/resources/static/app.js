@@ -3,7 +3,6 @@ const { t, setLocale, state: i18nState, SUPPORTED_LOCALES } = window.__i18n;
 
 const STATUS_ORDER = ['DONE', 'IN_PROGRESS', 'BLOCKED', 'TODO'];
 const PROJECT_LIST_EVENTS = ['project.created', 'project.status_changed', 'tasks.created', 'task.updated', 'task.status_changed'];
-const SSE_RECONNECTED = 'sse.reconnected';
 const RAIL_FLASH_CLASS = {
   'TODO': 'flash-todo',
   'IN_PROGRESS': 'flash-progress',
@@ -67,7 +66,7 @@ const runtimeMcpConfig = ref({ endpoint: window.location.origin + '/mcp', errorS
 let runtimeMcpConfigRequest = null;
 
 function loadRuntimeMcpConfig() {
-  if (runtimeMcpConfigRequest) return runtimeMcpConfigRequest;
+  if (runtimeMcpConfigRequest && !runtimeMcpConfig.value.errorStatus) return runtimeMcpConfigRequest;
   runtimeMcpConfig.value = { endpoint: '', errorStatus: null };
   runtimeMcpConfigRequest = (async () => {
     const controller = new AbortController();
@@ -98,17 +97,31 @@ function loadRuntimeMcpConfig() {
 }
 
 async function fetchJson(url, options) {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    throw new Error(t('error.apiError', { status: res.status, url }));
+  const upstream = options?.signal;
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  const timer = setTimeout(() => controller.abort(new Error(t('error.apiTimeout'))), 10_000);
+  if (upstream?.aborted) cancel();
+  else upstream?.addEventListener('abort', cancel, { once: true });
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    if (!res.ok) throw new Error(t('error.apiError', { status: res.status, url }));
+    if (typeof url === 'string' && url.split('?')[0] === '/api/projects'
+        && res.headers.get('X-Board-Runtime') === 'workers') loadRuntimeMcpConfig();
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+    upstream?.removeEventListener('abort', cancel);
   }
-  if (typeof url === 'string' && url.split('?')[0] === '/api/projects'
-      && res.headers.get('X-Board-Runtime') === 'workers') loadRuntimeMcpConfig();
-  return res.json();
+}
+
+function projectSummariesChanged(changes) {
+  return changes === null || changes.some(({ type }) =>
+    PROJECT_LIST_EVENTS.includes(type));
 }
 
 const LevelOne = {
-  props: ['projects'],
+  props: ['projects', 'projectsLoading', 'projectsError'],
   emits: ['select'],
   data() {
     const params = new URLSearchParams(window.location.search);
@@ -121,7 +134,6 @@ const LevelOne = {
       },
       filteredProjects: [],
       loading: false,
-      loaded: false,
       error: null,
       searchTimer: null,
       requestController: null,
@@ -140,7 +152,13 @@ const LevelOne = {
       }[this.copyState]);
     },
     activeProjects() {
-      return this.loaded ? this.filteredProjects : this.projects;
+      return this.hasFilters ? this.filteredProjects : this.projects.filter(p => p.status === 'ACTIVE');
+    },
+    listLoading() {
+      return this.hasFilters ? this.loading : this.projectsLoading;
+    },
+    listError() {
+      return this.hasFilters ? this.error : this.projectsError;
     },
     hasFilters() {
       return this.filters.query || this.filters.status !== 'ACTIVE' || this.filters.blocked || this.filters.sort !== 'UPDATED_DESC';
@@ -163,14 +181,15 @@ const LevelOne = {
   },
   created() {
     this.loadProjects();
-    this._liveSubscriptions = [...PROJECT_LIST_EVENTS, SSE_RECONNECTED]
-      .map(event => window.__boardBus.on(event, () => this.loadProjects()));
+    this._unsubscribe = window.__boardBus.on('board.refresh', changes => {
+      if (this.hasFilters && projectSummariesChanged(changes)) this.loadProjects();
+    });
   },
   beforeUnmount() {
     if (this.searchTimer) clearTimeout(this.searchTimer);
     if (this.copyTimer) clearTimeout(this.copyTimer);
     if (this.requestController) this.requestController.abort();
-    this._liveSubscriptions.forEach(unsubscribe => unsubscribe());
+    this._unsubscribe();
   },
   watch: {
     'filters.query'() { this.scheduleLoad(); },
@@ -196,8 +215,8 @@ const LevelOne = {
         </label>
         <button type="button" class="filter-clear" @click="clearFilters" :disabled="!hasFilters">{{ t('levelOne.clearFilters') }}</button>
       </section>
-      <div v-if="error" class="empty-state">{{ error }}</div>
-      <section v-else-if="!loading && activeProjects.length === 0 && isFirstRun" class="onboarding" :aria-label="t('levelOne.onboardingLabel')">
+      <div v-if="listError" class="empty-state">{{ listError }}</div>
+      <section v-else-if="!listLoading && activeProjects.length === 0 && isFirstRun" class="onboarding" :aria-label="t('levelOne.onboardingLabel')">
         <h2 class="onboarding-title">{{ t('levelOne.onboardingTitle') }}</h2>
         <p class="onboarding-lead">
           {{ t('levelOne.onboardingLead') }}
@@ -222,7 +241,7 @@ const LevelOne = {
         </ol>
         <p class="onboarding-foot">{{ t('levelOne.onboardingFoot') }}</p>
       </section>
-      <div v-else-if="!loading && activeProjects.length === 0" class="empty-state">
+      <div v-else-if="!listLoading && activeProjects.length === 0" class="empty-state">
         {{ t('levelOne.noMatch') }}
         <button type="button" class="filter-clear" @click="clearFilters" :disabled="!hasFilters">{{ t('levelOne.clearFilters') }}</button>
       </div>
@@ -275,6 +294,7 @@ const LevelOne = {
     async loadProjects() {
       this.syncFiltersToUrl();
       if (this.requestController) this.requestController.abort();
+      if (!this.hasFilters) return;
       const controller = new AbortController();
       this.requestController = controller;
       this.loading = true;
@@ -284,7 +304,6 @@ const LevelOne = {
       if (this.filters.blocked) params.set('blocked', 'true');
       try {
         this.filteredProjects = await fetchJson('/api/projects?' + params.toString(), { signal: controller.signal });
-        this.loaded = true;
       } catch (e) {
         if (e.name !== 'AbortError') this.error = e.message;
       } finally {
@@ -325,10 +344,12 @@ const ProjectWorkflow = {
   },
   created() {
     this.load();
-    this.unsubscribe = window.__boardBus.on('project.workflow_changed', payload => { if (payload.projectId === this.projectId) this.load(); });
-    this.unsubscribeReconnect = window.__boardBus.on(SSE_RECONNECTED, () => this.load());
+    this.unsubscribe = window.__boardBus.on('board.refresh', changes => {
+      if (changes === null || changes.some(({ type, payload }) =>
+        type === 'project.workflow_changed' && payload.projectId === this.projectId)) this.load();
+    });
   },
-  beforeUnmount() { this.controller?.abort(); this.unsubscribe?.(); this.unsubscribeReconnect?.(); },
+  beforeUnmount() { this.controller?.abort(); this.unsubscribe?.(); },
   watch: { projectId() { this.workflow = null; this.copyState = ''; this.load(); } },
   methods: {
     async load() {
@@ -571,17 +592,21 @@ const LevelTwo = {
       if (this.detailTaskId !== null) this.dismissDetail();
     };
     window.addEventListener('popstate', this._popstateHandler);
-    this._liveSubscriptions = ['task.status_changed', 'tasks.created', 'task.updated'].map(type =>
-      window.__boardBus.on(type, (payload) => {
-        if (payload.projectId !== this.projectId) return;
-        this.refreshTaskViews(type === 'task.status_changed' ? payload.taskId : undefined);
-        if (type === 'task.status_changed') {
-          this.highlightedTaskId = payload.taskId;
-          clearTimeout(this._highlightTimer);
-          this._highlightTimer = setTimeout(() => { this.highlightedTaskId = null; }, 900);
-        }
-      }));
-    this._liveSubscriptions.push(window.__boardBus.on(SSE_RECONNECTED, () => this.refreshTaskViews()));
+    this._unsubscribe = window.__boardBus.on('board.refresh', changes => {
+      const relevant = changes?.filter(({ payload }) => payload.projectId === this.projectId);
+      if (changes !== null && !relevant.length) return;
+      const statusChanges = relevant?.filter(({ type }) => type === 'task.status_changed');
+      const taskIds = statusChanges?.length === relevant?.length
+        ? statusChanges?.map(({ payload }) => payload.taskId)
+        : undefined;
+      this.refreshTaskViews(taskIds);
+      const status = statusChanges?.at(-1);
+      if (status) {
+        this.highlightedTaskId = status.payload.taskId;
+        clearTimeout(this._highlightTimer);
+        this._highlightTimer = setTimeout(() => { this.highlightedTaskId = null; }, 900);
+      }
+    });
     this._resizeHandler = () => {
       if (window.matchMedia('(min-width: 701px)').matches) this.advancedOpen = true;
       this.graphVertical = window.matchMedia('(max-width: 700px)').matches;
@@ -596,9 +621,9 @@ const LevelTwo = {
     if (this.boardController) this.boardController.abort();
     if (this.graphController) this.graphController.abort();
     this._detailController?.abort();
-    document.body.classList.remove('drawer-open');
-    this._liveSubscriptions.forEach(unsubscribe => unsubscribe());
     clearTimeout(this._highlightTimer);
+    document.body.classList.remove('drawer-open');
+    if (this._unsubscribe) this._unsubscribe();
   },
   watch: {
     projectId() {
@@ -632,10 +657,10 @@ const LevelTwo = {
     'filters.claimable'() { this.syncFiltersToUrl(); },
   },
   methods: {
-    refreshTaskViews(statusChangedTaskId) {
+    refreshTaskViews(statusChangedTaskIds) {
       this.loadBoard();
       if (this.graph || this.viewMode === 'dependencies') this.loadGraph();
-      if (this.detailTaskId !== null && this.isOpenDetailAffected(statusChangedTaskId)) {
+      if (this.detailTaskId !== null && (!statusChangedTaskIds || statusChangedTaskIds.some(id => this.isOpenDetailAffected(id)))) {
         this.loadDetail(this.detailTaskId, true);
       }
     },
@@ -785,27 +810,27 @@ const LevelTwo = {
       this._detailController?.abort();
       const controller = new AbortController();
       this._detailController = controller;
-      const { signal } = controller;
-      const url = `/api/projects/${this.projectId}/tasks/${taskId}`;
+      const options = { signal: controller.signal };
       const panel = this.$refs.detailPanel;
       const previousScroll = preserveScroll && panel ? panel.scrollTop : 0;
       if (!preserveScroll) this.detailLoading = true;
       this.detailError = null;
       try {
-        const payload = await fetchJson(url, { signal });
-        if (signal.aborted) return;
-        const acceptance = await fetchJson(url + '/acceptance', { signal }).catch(error => {
-          if (signal.aborted) throw error;
-          return { canClose: false, passedCases: [], blockers: [this.t('acceptance.unavailable')], events: [] };
-        });
-        if (signal.aborted) return;
+        const path = `/api/projects/${this.projectId}/tasks/${taskId}`;
+        const [payload, acceptance] = await Promise.all([
+          fetchJson(path, options),
+          fetchJson(path + '/acceptance', options).catch(() => ({
+            canClose: false, passedCases: [], blockers: [this.t('acceptance.unavailable')], events: [],
+          })),
+        ]);
+        if (controller.signal.aborted) return;
         this.detail = { ...payload, acceptance };
         await nextTick();
-        if (!signal.aborted && preserveScroll && this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = previousScroll;
+        if (!controller.signal.aborted && preserveScroll && this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = previousScroll;
       } catch (e) {
-        if (!signal.aborted) this.detailError = e.message;
+        if (!controller.signal.aborted) this.detailError = e.message;
       } finally {
-        if (!signal.aborted) this.detailLoading = false;
+        if (!controller.signal.aborted) this.detailLoading = false;
       }
     },
     closeDetail() {
@@ -1195,12 +1220,14 @@ const app = createApp({
     const initialProject = Number(new URLSearchParams(window.location.search).get('project'));
     const currentProjectId = ref(Number.isSafeInteger(initialProject) && initialProject > 0 ? initialProject : null);
     const projects = ref([]);
-    const sseConnected = ref(false);
+    const projectsLoading = ref(true);
+    const projectsError = ref(null);
+    const connectionState = ref('reconnecting');
     const railFlashClass = ref('');
     let railFlashTimer = null;
-    let eventSource = null;
-    let projectsRequest = null;
+    let projectListRequest;
     let projectsRefreshPending = false;
+    let stopLiveUpdates;
 
     const notifySupported = notificationsAvailable();
     const notifyPermission = ref(notifySupported ? Notification.permission : 'unsupported');
@@ -1288,22 +1315,26 @@ const app = createApp({
     }
 
     async function loadProjects() {
-      // Workers may deliver an event after a REST snapshot already includes its change.
-      // Coalesce events during a fetch into one trailing snapshot, without applying deltas.
-      if (projectsRequest) {
+      if (projectListRequest) {
         projectsRefreshPending = true;
         return;
       }
       const controller = new AbortController();
-      projectsRequest = controller;
+      projectListRequest = controller;
+      projectsLoading.value = true;
       try {
-        const nextProjects = await fetchJson('/api/projects?status=ALL&sort=UPDATED_DESC', { signal: controller.signal });
-        if (!controller.signal.aborted) projects.value = nextProjects;
+        const summaries = await fetchJson('/api/projects?status=ALL&sort=UPDATED_DESC', { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          projects.value = summaries;
+          projectsError.value = null;
+        }
       } catch (e) {
-        if (!controller.signal.aborted) console.error(e);
+        if (!controller.signal.aborted) projectsError.value = e.message;
       } finally {
-        projectsRequest = null;
-        if (projectsRefreshPending && !controller.signal.aborted) {
+        projectListRequest = null;
+        if (controller.signal.aborted) return;
+        projectsLoading.value = false;
+        if (projectsRefreshPending) {
           projectsRefreshPending = false;
           loadProjects();
         }
@@ -1340,40 +1371,6 @@ const app = createApp({
       railFlashTimer = setTimeout(() => { railFlashClass.value = ''; }, 600);
     }
 
-    function connectSse() {
-      eventSource = new EventSource('/api/events');
-
-      let resyncOnOpen = false;
-      eventSource.onopen = () => {
-        sseConnected.value = true;
-        if (!resyncOnOpen) return;
-        // EventSource 自動重連，重連成功後只同步一次，補上斷線期間的變更。
-        resyncOnOpen = false;
-        loadProjects();
-        window.__boardBus.emit(SSE_RECONNECTED);
-      };
-      eventSource.onerror = () => {
-        sseConnected.value = false;
-        resyncOnOpen = true;
-      };
-
-      [...PROJECT_LIST_EVENTS, 'project.workflow_changed'].forEach((type) => {
-        eventSource.addEventListener(type, (e) => {
-          const payload = JSON.parse(e.data);
-          flashRail(payload.to || 'IN_PROGRESS');
-          if (type !== 'project.workflow_changed') loadProjects();
-          if (type === 'task.status_changed' && payload.to === 'BLOCKED') {
-            notifyBlocked(payload);
-          }
-          window.__boardBus.emit(type, payload);
-        });
-      });
-
-      eventSource.addEventListener('heartbeat', () => {
-        sseConnected.value = true;
-      });
-    }
-
     // 權限可能在別的分頁或站台設定裡被改動。回到這個分頁時重新讀一次，
     // 否則按鈕會一直顯示上次載入時的狀態。
     const syncNotifyPermission = () => {
@@ -1382,14 +1379,24 @@ const app = createApp({
 
     onMounted(() => {
       loadProjects();
-      connectSse();
+      stopLiveUpdates = window.startBoardLiveUpdates({
+        onState: state => { connectionState.value = state; },
+        onEvent(type, payload) {
+          flashRail(payload.to || 'IN_PROGRESS');
+          if (type === 'task.status_changed' && payload.to === 'BLOCKED') notifyBlocked(payload);
+        },
+        onRefresh(changes) {
+          if (projectSummariesChanged(changes)) loadProjects();
+          window.__boardBus.emit('board.refresh', changes);
+        },
+      });
       window.addEventListener('popstate', syncProjectFromUrl);
       document.addEventListener('visibilitychange', syncNotifyPermission);
     });
 
     onBeforeUnmount(() => {
-      if (eventSource) eventSource.close();
-      projectsRequest?.abort();
+      stopLiveUpdates?.();
+      projectListRequest?.abort();
       clearTimeout(railFlashTimer);
       window.removeEventListener('popstate', syncProjectFromUrl);
       document.removeEventListener('visibilitychange', syncNotifyPermission);
@@ -1398,8 +1405,8 @@ const app = createApp({
     const locale = computed(() => i18nState.locale);
 
     return {
-      currentProjectId, projects, selectedProject, selectProject, showProjectList,
-      sseConnected, railFlashClass,
+      currentProjectId, projects, projectsLoading, projectsError, selectedProject, selectProject, showProjectList,
+      connectionState, railFlashClass,
       notifySupported, notifyPermission, notifyOn, notifyLabel, notifyHint,
       toggleBlockedNotifications,
       locale, setLocale, supportedLocales: SUPPORTED_LOCALES,

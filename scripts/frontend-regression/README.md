@@ -51,14 +51,14 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 | CSP headers | `SecurityHeadersFilterTest` | - | - |
 | Same-origin vendor assets | `OperationalSafetyConfigurationTest`, `FrontendStaticAssetsTest` | CSP violation listener | - |
 | API and vendor availability | `FrontendStaticAssetsTest` | - | - |
-| SSE content type and access | `SecurityHeadersFilterTest` | Reconnection state | Restart server manually |
+| SSE content type and access | `SecurityHeadersFilterTest` | `checkSseRecovery()` with the real local SSE endpoint and fixture project responses | Restart server manually |
 | Multiple worker cards, assignee filters, status events and counts | - | `checkMultipleWorkers()` with isolated fixture | - |
 | Reconnect, archive/restore, edited task views, and delayed status events | - | Live-update browser fixtures | - |
 | Responsive horizontal overflow | - | `checkNoHorizontalOverflow()` | Review extreme content |
 | Browser console errors | - | `checkNoConsoleErrors()` | - |
 | Escape closes drawer and restores focus | - | - | Confirm focus order |
 | Filter URL round trip | - | - | Reload the complete filtered URL |
-| Initial API call counts | - | - | Inspect the first page load in Network |
+| Initial API call count and event coalescing | - | `checkSseRecovery()`, `checkMultipleWorkers()` | - |
 | Dependency graph quality | - | - | Visual review |
 | Claimability of archived projects | Java MCP E2E and Workers service tests | `checkArchivedClaimability()` with isolated fixture | - |
 | i18n dictionary and placeholders | `I18nDictionaryTest` | - | Copy review |

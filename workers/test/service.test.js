@@ -85,21 +85,22 @@ test("project search matches literal normalized prefixes and aggregates selected
   const { db, s } = setup();
   t.after(() => db.sql.close());
   const create = async (name) => (await s.execute("create_project", { name })).project.id;
-  const archived = await create("Queue_% Archived");
-  const active = await create("Queue_% Active");
-  const empty = await create("Queue_% Empty");
-  const excluded = await create("Queue_X Different");
+  const archived = await create("看板 Queue_% Archived");
+  const active = await create("看板 Queue_% Active");
+  const empty = await create("看板 Queue_% Empty");
+  const excluded = await create("看板 Queue_X Different");
   await tasks(s, archived, [{ title: "archived task" }]);
   await tasks(s, active, [{ title: "active task" }]);
   await tasks(s, excluded, [{ title: "different task" }, { title: "another task" }]);
-  await s.execute("archive_project", { projectName: "Queue_% Archived", reason: "fixture" });
+  await s.execute("archive_project", { projectName: "看板 Queue_% Archived", reason: "fixture" });
 
-  const find = (status, q = "  QUEUE_%  ") => s.listProjects(new URLSearchParams({ status, q, sort: "NAME" }));
+  const find = (status, q = "  看板 QUEUE_%  ") => s.listProjects(new URLSearchParams({ status, q, sort: "NAME" }));
   const matching = await find("ACTIVE");
   assert.deepEqual(matching.map(row => [row.id, row.total, row.counts.TODO]), [[active, 1, 1], [empty, 0, 0]]);
   assert.deepEqual((await find("ARCHIVED")).map(row => row.id), [archived]);
   assert.deepEqual((await find("ALL")).map(row => row.id), [active, archived, empty]);
   assert.deepEqual(await find("ALL", "not a match"), []);
+  assert.deepEqual(await s.listProjects(new URLSearchParams({ status: "ALL", q: "看板 Queue_%", blocked: "true" })), []);
 });
 test("batch validation is atomic, enforces earlier indexes/same project, 50 tasks and dependency skip", async () => {
   const { db, s } = setup();

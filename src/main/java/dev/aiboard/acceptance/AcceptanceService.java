@@ -1,6 +1,8 @@
 package dev.aiboard.acceptance;
 
 import dev.aiboard.common.BoardException;
+import dev.aiboard.event.BoardEvent;
+import dev.aiboard.event.BoardEventPublisher;
 import dev.aiboard.task.TaskRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -21,14 +23,16 @@ public class AcceptanceService {
     private final TaskRepository tasks;
     private final dev.aiboard.project.ProjectService projects;
     private final AcceptanceAuthority authority;
+    private final BoardEventPublisher events;
     private dev.aiboard.workflow.ProjectWorkflowService workflows;
     @org.springframework.beans.factory.annotation.Autowired
     public void configureWorkflows(dev.aiboard.workflow.ProjectWorkflowService workflows) { this.workflows = workflows; }
     private final JsonMapper json = JsonMapper.builder().build();
     public AcceptanceService(JdbcTemplate db, TaskRepository tasks, dev.aiboard.project.ProjectService projects,
-            @Value("${BOARD_ACCEPTANCE_AUTHORITIES:}") String config) {
+            @Value("${BOARD_ACCEPTANCE_AUTHORITIES:}") String config, BoardEventPublisher events) {
         this.db = db; this.tasks = tasks; this.projects=projects;
         this.authority = new AcceptanceAuthority(config);
+        this.events = events;
     }
     private void require(boolean ok, String message) { if (!ok) throw new BoardException(message); }
     private String text(JsonNode n, String key) {
@@ -97,6 +101,7 @@ public class AcceptanceService {
         require(db.update("UPDATE task SET version=version+1 WHERE id=? AND version=?", taskId, task.getVersion()) == 1, "任務已更新，請重試");
         db.update("INSERT INTO acceptance_event(event_id,project_id,task_id,actor,kind,payload) VALUES(?,?,?,?,?,?)",
                 eventId, task.getProjectId(), taskId, actor, kind, payload);
+        events.publish(BoardEvent.taskAcceptanceChanged(task.getProjectId(), taskId));
         return summary(taskId);
     }
     private boolean immutableCodeRef(String value) {
