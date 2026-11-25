@@ -86,7 +86,9 @@ export async function recordAcceptance(s, { actor, payload, signature }) {
     require(text(b,'codeRef') === contract.body.codeRef, '受測程式版本不符');
     if (e.kind === 'RUN') {
       require(actor !== contract.body.implementationActor, '開發代理不能自行簽署執行證據');
-      require(key.runnerProfiles?.includes(text(b,'runnerProfile')), '未核准的執行器');
+      const profile = text(b, 'runnerProfile');
+      require(Array.isArray(key.runnerProfiles) && key.runnerProfiles.every(p => typeof p === 'string' && p.trim())
+        && key.runnerProfiles.includes(profile), '未核准的執行器');
       for (const f of ['caseId','runId','result','artifactUri','artifactSha256','steps','actual','environment']) text(b,f);
       require(/^[a-f0-9]{64}$/.test(b.artifactSha256), '證據必須有 SHA-256');
       require(['PASSED','FAILED','NOT_RUN'].includes(b.result), '未知執行結果'); require(b.environment === 'ISOLATED', '僅接受隔離測試環境');

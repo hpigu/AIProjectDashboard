@@ -79,7 +79,7 @@ public class AcceptanceService {
             require(text(body, "codeRef").equals(contract.path("body").path("codeRef").asText()), "受測程式版本不符");
             if (kind.equals("RUN")) {
                 require(!actor.equals(contract.path("body").path("implementationActor").asText()), "開發代理聲明不屬受控執行器證據");
-                require(contains(key.path("runnerProfiles"), text(body, "runnerProfile")), "未核准的執行器");
+                require(approvedRunner(key.path("runnerProfiles"), text(body, "runnerProfile")), "未核准的執行器");
                 for (String field : List.of("caseId", "runId", "result", "artifactUri", "artifactSha256", "steps", "actual", "environment")) text(body, field);
                 require(body.path("artifactSha256").asText().matches("[a-f0-9]{64}"), "證據必須有 SHA-256");
                 require(Set.of("PASSED", "FAILED", "NOT_RUN").contains(body.path("result").asText()), "未知執行結果");
@@ -106,6 +106,15 @@ public class AcceptanceService {
     }
     private boolean immutableCodeRef(String value) {
         return value != null && value.matches("(?:[a-f0-9]{40}|[a-f0-9]{64}|sha256:[a-f0-9]{64})");
+    }
+    static boolean approvedRunner(JsonNode profiles, String requested) {
+        if (!profiles.isArray()) return false;
+        boolean matched = false;
+        for (JsonNode profile : profiles) {
+            if (!profile.isTextual() || profile.asText().isBlank()) return false;
+            if (profile.asText().equals(requested)) matched = true;
+        }
+        return matched;
     }
     private boolean contains(JsonNode items, String value) { for (JsonNode item : items) if (item.asText().equals(value)) return true; return false; }
     private void validateContract(JsonNode b, long taskId) {

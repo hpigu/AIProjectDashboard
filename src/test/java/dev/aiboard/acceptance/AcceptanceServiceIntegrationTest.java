@@ -135,6 +135,12 @@ public class AcceptanceServiceIntegrationTest {
     @Test void failedAndNotRunCannotCompleteEvenWithIndependentApproval() throws Exception {
         contract(); run("FAILED"); review(); denied(); run("NOT_RUN"); review(); denied();
     }
+    @Test void runnerAllowlistRequiresAnArrayOfNames() {
+        for (Object profiles : List.of("isolated-browser", Map.of("name","isolated-browser"),
+                List.of("isolated-browser", 1), List.of("isolated-browser", " "))) {
+            assertThat(AcceptanceService.approvedRunner(JSON.valueToTree(profiles), "isolated-browser")).isFalse();
+        }
+    }
     @Test void wrongCodeRefAndUnapprovedRunnerAreRejected() throws Exception {
         contract(); var body=runBody("PASSED"); body.put("codeRef","b".repeat(40));
         assertThatThrownBy(() -> record("ci","RUN",body)).hasMessageContaining("受測程式版本不符");
