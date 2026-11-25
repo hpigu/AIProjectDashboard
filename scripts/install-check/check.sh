@@ -19,7 +19,7 @@ assert_eq() { [ "$1" = "$2" ] && pass "$3" || fail "$3 (expected $1, got $2)"; }
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64|Darwin:aarch64) platform=macos-arm64; java_arch=arm64 ;;
