@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { openSync, closeSync, fstatSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createCredentialStore, main } from '../scripts/device-credential.mjs';
 
@@ -71,35 +75,52 @@ test('rejects injection, malformed credentials, non-macOS and ambiguous paths', 
   }
 });
 
-test('headers emits exactly one JSON object to private pipe with no status output', async () => {
-  const { store, calls } = fakeStore([{ code: 0, stdout: `${token}\n` }]);
-  let output = '';
-  let status = '';
-  const code = await main(['headers', 'ai-board.production', 'mac-codex'], {
-    store,
-    stdout: { isTTY: false, write: text => { output += text; } },
-    stderr: { write: text => { status += text; } }
-  });
-  assert.equal(code, 0);
-  assert.equal(output, `${JSON.stringify({ Authorization: `Bearer ${token}` })}\n`);
-  assert.equal(status, '');
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0][0].includes('-w'), true);
-  assert.equal(JSON.stringify(calls[0][0]).includes(token), false);
+// Exercise the same stdout descriptor that a client gives its helper process.
+const helper = new URL('../scripts/device-credential.mjs', import.meta.url).href;
+function captureHeaders(stdio, result) {
+  const script = `import { main, createCredentialStore } from ${JSON.stringify(helper)};
+    const store = createCredentialStore({ platform: 'darwin', home: '/Users/Test',
+      runner: async () => {
+        if (!${Boolean(result)}) throw Error('Unexpected Keychain read');
+        return ${JSON.stringify(result ?? null)};
+      } });
+    try { await main(['headers', 'service', 'account'], { store }); }
+    catch (error) { console.error(error.message); process.exitCode = 1; }`;
+  return spawnSync(process.execPath, ['--input-type=module', '-e', script], { stdio, encoding: 'utf8' });
+}
+
+test('headers emits a single header to the client capture pipe and fails closed on Keychain errors', () => {
+  const stdio = ['ignore', 'pipe', 'pipe'];
+  const ok = captureHeaders(stdio, { code: 0, stdout: token });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.deepEqual(JSON.parse(ok.stdout), { Authorization: `Bearer ${token}` });
+  assert.equal(ok.stderr, '');
+  for (const result of [{ code: 36, stdout: token }, { code: 0, stdout: 'malformed' }]) {
+    const denied = captureHeaders(stdio, result);
+    assert.equal(denied.status, 1);
+    assert.equal(denied.stdout, '');
+    assert.equal(denied.stderr.includes(token), false);
+  }
 });
 
-test('headers refuses terminal output before reading Keychain and fails closed on denial', async () => {
+test('headers rejects redirected file output before accessing Keychain', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'board-header-output-'));
+  const fd = openSync(join(directory, 'capture'), 'wx', 0o600);
+  try {
+    const denied = captureHeaders(['ignore', fd, 'pipe']);
+    assert.equal(denied.status, 1);
+    assert.match(denied.stderr, /private pipe/);
+    assert.equal(fstatSync(fd).size, 0);
+  } finally {
+    closeSync(fd);
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test('headers refuses terminal output before reading Keychain', async () => {
   const { store, calls } = fakeStore([]);
   await assert.rejects(main(['headers', 'service', 'account'], {
     store, stdout: { isTTY: true, write: () => assert.fail('Unexpected secret output') }
   }), /private pipe/);
   assert.equal(calls.length, 0);
-  for (const result of [{ code: 36, stdout: token }, { code: 0, stdout: 'malformed' }]) {
-    const fake = fakeStore([result]);
-    let output = '';
-    await assert.rejects(main(['headers', 'service', 'account'], {
-      store: fake.store, stdout: { isTTY: false, write: text => { output += text; } }
-    }), error => !error.message.includes(token));
-    assert.equal(output, '');
-  }
 });
