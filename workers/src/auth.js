@@ -56,6 +56,9 @@ export function createAuthenticator({ fetch: fetchKeys = (...args) => globalThis
         try { devices = JSON.parse(env.MACHINE_TOKEN_HASHES); } catch { throw new AuthError(503); }
         if (!devices || Array.isArray(devices) || typeof devices !== 'object' || !Object.keys(devices).length
             || Object.entries(devices).some(([id, hash]) => !/^[A-Za-z0-9_-]{1,64}$/.test(id) || typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash))) throw new AuthError(503);
+        // A credential must identify exactly one device before management rights can be resolved.
+        const hashes = Object.values(devices);
+        if (new Set(hashes).size !== hashes.length) throw new AuthError(503);
         const authorization = request.headers.get('Authorization') || '';
         const match = /^Bearer ([A-Za-z0-9_-]{43,512})$/.exec(authorization);
         if (!match) throw new AuthError();
