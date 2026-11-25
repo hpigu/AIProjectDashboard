@@ -359,11 +359,149 @@ async function checkMultipleWorkers(session) {
   }
 }
 
+const liveUpdateFixture = `(() => {
+  const originalFetch = window.fetch;
+  const date = '2026-01-01T00:00:00Z';
+  const task = { id: 1, title: 'Initial task', category: 'BACKEND', assignee: null, waitingFor: [] };
+  const project = { id: 999, name: 'Live fixture', status: 'ACTIVE', total: 1, updatedAt: date,
+    counts: { TODO: 1, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 } };
+  const state = window.liveUpdateFixture = { task, project, requests: [], description: 'Original description' };
+  window.fetch = (input, options) => {
+    const url = new URL(input, window.location.href);
+    state.requests.push(url.pathname + url.search);
+    let body;
+    if (url.pathname === '/api/projects') {
+      const status = url.searchParams.get('status');
+      body = [project, state.otherProject].filter(item => item && (status === 'ALL' || status === item.status));
+    } else if (url.pathname === '/api/projects/999/board') {
+      body = { name: project.name, columns: { TODO: [task], IN_PROGRESS: [], BLOCKED: [], DONE: [] } };
+    } else if (url.pathname === '/api/projects/999/dependencies') {
+      body = { nodes: [{ ...task, status: 'TODO', claimable: true }], edges: [] };
+    } else if (url.pathname === '/api/projects/999/tasks/1') {
+      body = { ...task, status: 'TODO', description: state.description, history: [], prerequisites: [], downstreamTasks: [] };
+    } else if (url.pathname.endsWith('/acceptance')) {
+      body = { canClose: false, passedCases: [], blockers: [], events: [] };
+    } else if (url.pathname.endsWith('/workflow')) {
+      body = { status: 'UNCONFIGURED' };
+    } else {
+      return originalFetch(input, options);
+    }
+    return Promise.resolve(Response.json(body));
+  };
+  window.EventSource = class extends EventTarget {
+    constructor() { super(); state.events = this; }
+    close() {}
+  };
+  state.send = (type, payload = {}) => {
+    const event = new MessageEvent(type, { data: JSON.stringify(payload) });
+    state.events['on' + type]?.(event);
+    state.events.dispatchEvent(event);
+  };
+})();`;
+
+async function withLiveUpdateFixture(session, query, run) {
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source: liveUpdateFixture });
+  try {
+    await session.setViewport(1440, 900);
+    await session.navigate(baseUrl + '/index.html' + query);
+    await run();
+  } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
+async function waitForBrowserState(session, expression, message) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (await session.eval(expression)) return;
+    await sleep(50);
+  }
+  throw new Error(message);
+}
+
+async function checkProjectListReconnect(session) {
+  await withLiveUpdateFixture(session, '?projectSort=NAME', async () => {
+    await waitForBrowserState(session, 'document.querySelector(".project-row")?.textContent.includes("Live fixture")', '缺少初始專案');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.send('open');
+      fixture.requests.length = 0;
+      fixture.send('error');
+      fixture.send('error');
+      fixture.send('error');
+      fixture.project.name = 'Changed while offline';
+      fixture.send('open');
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".project-row")?.textContent.includes("Changed while offline")', '重連後的列表仍是舊資料');
+    const requests = await session.eval('window.liveUpdateFixture.requests');
+    const expected = ['/api/projects?status=ACTIVE&sort=NAME', '/api/projects?status=ALL&sort=UPDATED_DESC'];
+    if (JSON.stringify(requests.sort()) !== JSON.stringify(expected)) {
+      throw new Error('重連應各更新一次篩選與全域清單，實際為 ' + JSON.stringify(requests));
+    }
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.project.status = 'ARCHIVED';
+      fixture.send('project.status_changed', { projectId: 999, from: 'ACTIVE', to: 'ARCHIVED' });
+    })()`);
+    await waitForBrowserState(session, '!document.querySelector(".project-row")', '封存後仍在進行中專案清單');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.project.status = 'ACTIVE';
+      fixture.send('project.status_changed', { projectId: 999, from: 'ARCHIVED', to: 'ACTIVE' });
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".project-row")?.textContent.includes("Changed while offline")', '還原後專案未回到清單');
+  });
+}
+
+async function checkTaskEditRefreshesBoard(session) {
+  await withLiveUpdateFixture(session, '?project=999&view=dependencies', async () => {
+    const click = selector => session.eval(`document.querySelector(${JSON.stringify(selector)}).click()`);
+    await waitForBrowserState(session, 'document.querySelector(".dependency-node")', '缺少初始相依節點');
+    await click('.dependency-node');
+    await waitForBrowserState(session, 'document.querySelector(".detail-description")?.textContent === "Original description"', '缺少初始任務詳情');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.task.title = 'Edited task';
+      fixture.description = 'Edited description';
+      fixture.send('task.updated', { projectId: 999, taskId: 1 });
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".detail-description")?.textContent === "Edited description"', '任務編輯後詳情未更新');
+    await waitForBrowserState(session, 'document.querySelector(".dependency-title")?.textContent === "Edited task"', '任務編輯後相依圖未更新');
+    await click('.detail-close');
+    await waitForBrowserState(session, '!document.querySelector(".detail-drawer")', '任務詳情未關閉');
+    await click('.view-switch button:first-child');
+    await waitForBrowserState(session, 'document.querySelector(".task-card")?.textContent.includes("Edited task")', '任務編輯後看板未更新');
+  });
+}
+
+async function checkDelayedStatusDoesNotDuplicateCounts(session) {
+  await withLiveUpdateFixture(session, '?project=999', async () => {
+    await waitForBrowserState(session, 'document.querySelector(".task-card")', '缺少目前專案的任務');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.otherProject = { ...fixture.project, id: 1000, name: 'Other project', hasBlocked: true,
+        counts: { TODO: 0, IN_PROGRESS: 0, BLOCKED: 1, DONE: 0 } };
+      fixture.send('task.updated', { projectId: 1000, taskId: 2 });
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".blocked-elsewhere")?.textContent.includes("Other project")', '缺少其他專案的阻塞提示');
+    await session.eval(`window.liveUpdateFixture.send('task.status_changed', { projectId: 1000, taskId: 2, from: 'TODO', to: 'BLOCKED' })`);
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.otherProject.hasBlocked = false;
+      fixture.otherProject.counts = { TODO: 0, IN_PROGRESS: 1, BLOCKED: 0, DONE: 0 };
+      fixture.send('task.status_changed', { projectId: 1000, taskId: 2, from: 'BLOCKED', to: 'IN_PROGRESS' });
+    })()`);
+    await waitForBrowserState(session, '!document.querySelector(".blocked-elsewhere")', '延遲事件重複計算阻塞數，提示未消失');
+  });
+}
+
 async function main() {
   console.log(`目標: ${baseUrl}（CDP port ${cdpPort}）\n`);
   const session = await newCdpSession(cdpPort);
   try {
     await check('多 Worker 顯示、篩選與狀態事件', () => checkMultipleWorkers(session));
+    await check('重連、封存與還原刷新專案清單', () => checkProjectListReconnect(session));
+    await check('任務編輯刷新看板、相依圖與已開啟的詳情', () => checkTaskEditRefreshesBoard(session));
+    await check('延遲的狀態事件不會重複計算阻塞數', () => checkDelayedStatusDoesNotDuplicateCounts(session));
     await check('RWD 三尺寸無水平溢出', () => checkNoHorizontalOverflow(session));
     await check('console 無錯誤/未捕捉例外', () => checkNoConsoleErrors(session));
     await check('無 CSP violation', () => checkNoCspViolations(session));

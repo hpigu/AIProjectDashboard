@@ -2,6 +2,8 @@ const { createApp, ref, computed, onMounted, onBeforeUnmount, nextTick } = Vue;
 const { t, setLocale, state: i18nState, SUPPORTED_LOCALES } = window.__i18n;
 
 const STATUS_ORDER = ['DONE', 'IN_PROGRESS', 'BLOCKED', 'TODO'];
+const PROJECT_LIST_EVENTS = ['project.created', 'project.status_changed', 'tasks.created', 'task.updated', 'task.status_changed'];
+const SSE_RECONNECTED = 'sse.reconnected';
 const RAIL_FLASH_CLASS = {
   'TODO': 'flash-todo',
   'IN_PROGRESS': 'flash-progress',
@@ -161,15 +163,14 @@ const LevelOne = {
   },
   created() {
     this.loadProjects();
-    this._unsubscribe = window.__boardBus.on('project.created', () => this.loadProjects());
-    this._unsubscribeTasks = window.__boardBus.on('tasks.created', () => this.loadProjects());
-    this._unsubscribeStatus = window.__boardBus.on('task.status_changed', () => this.loadProjects());
+    this._liveSubscriptions = [...PROJECT_LIST_EVENTS, SSE_RECONNECTED]
+      .map(event => window.__boardBus.on(event, () => this.loadProjects()));
   },
   beforeUnmount() {
     if (this.searchTimer) clearTimeout(this.searchTimer);
     if (this.copyTimer) clearTimeout(this.copyTimer);
     if (this.requestController) this.requestController.abort();
-    [this._unsubscribe, this._unsubscribeTasks, this._unsubscribeStatus].forEach(fn => fn && fn());
+    this._liveSubscriptions.forEach(unsubscribe => unsubscribe());
   },
   watch: {
     'filters.query'() { this.scheduleLoad(); },
@@ -325,7 +326,7 @@ const ProjectWorkflow = {
   created() {
     this.load();
     this.unsubscribe = window.__boardBus.on('project.workflow_changed', payload => { if (payload.projectId === this.projectId) this.load(); });
-    this.unsubscribeReconnect = window.__boardBus.on('tasks.created', payload => { if (payload.projectId === this.projectId) this.load(); });
+    this.unsubscribeReconnect = window.__boardBus.on(SSE_RECONNECTED, () => this.load());
   },
   beforeUnmount() { this.controller?.abort(); this.unsubscribe?.(); this.unsubscribeReconnect?.(); },
   watch: { projectId() { this.workflow = null; this.copyState = ''; this.load(); } },
@@ -564,22 +565,17 @@ const LevelTwo = {
       if (this.detailTaskId !== null) this.dismissDetail();
     };
     window.addEventListener('popstate', this._popstateHandler);
-    this._unsubscribe = window.__boardBus.on('task.status_changed', (payload) => {
-      if (payload.projectId === this.projectId) {
-        this.loadBoard();
-        if (this.graph || this.viewMode === 'dependencies') this.loadGraph();
-        if (payload.taskId === this.detailTaskId) this.loadDetail(payload.taskId, true);
-        this.highlightedTaskId = payload.taskId;
-        setTimeout(() => { this.highlightedTaskId = null; }, 900);
-      }
-    });
-    this._unsubscribeTasks = window.__boardBus.on('tasks.created', (payload) => {
-      if (payload.projectId === this.projectId) {
-        this.loadBoard();
-        if (this.graph || this.viewMode === 'dependencies') this.loadGraph();
-        if (this.detailTaskId !== null) this.loadDetail(this.detailTaskId, true);
-      }
-    });
+    this._liveSubscriptions = ['task.status_changed', 'tasks.created', 'task.updated'].map(type =>
+      window.__boardBus.on(type, (payload) => {
+        if (payload.projectId !== this.projectId) return;
+        this.refreshTaskViews(type === 'task.status_changed' ? payload.taskId : undefined);
+        if (type === 'task.status_changed') {
+          this.highlightedTaskId = payload.taskId;
+          clearTimeout(this._highlightTimer);
+          this._highlightTimer = setTimeout(() => { this.highlightedTaskId = null; }, 900);
+        }
+      }));
+    this._liveSubscriptions.push(window.__boardBus.on(SSE_RECONNECTED, () => this.refreshTaskViews()));
     this._resizeHandler = () => {
       if (window.matchMedia('(min-width: 701px)').matches) this.advancedOpen = true;
       this.graphVertical = window.matchMedia('(max-width: 700px)').matches;
@@ -593,9 +589,10 @@ const LevelTwo = {
     if (this.searchTimer) clearTimeout(this.searchTimer);
     if (this.boardController) this.boardController.abort();
     if (this.graphController) this.graphController.abort();
+    this._detailController?.abort();
     document.body.classList.remove('drawer-open');
-    if (this._unsubscribe) this._unsubscribe();
-    if (this._unsubscribeTasks) this._unsubscribeTasks();
+    this._liveSubscriptions.forEach(unsubscribe => unsubscribe());
+    clearTimeout(this._highlightTimer);
   },
   watch: {
     projectId() {
@@ -617,6 +614,18 @@ const LevelTwo = {
     'filters.claimable'() { this.syncFiltersToUrl(); },
   },
   methods: {
+    refreshTaskViews(statusChangedTaskId) {
+      this.loadBoard();
+      if (this.graph || this.viewMode === 'dependencies') this.loadGraph();
+      if (this.detailTaskId !== null && this.isOpenDetailAffected(statusChangedTaskId)) {
+        this.loadDetail(this.detailTaskId, true);
+      }
+    },
+    isOpenDetailAffected(taskId) {
+      if (taskId === undefined || taskId === this.detailTaskId) return true;
+      const groups = [this.detail?.prerequisites, this.detail?.downstreamTasks, this.detail?.currentBlocker?.blockingTasks];
+      return groups.some(tasks => tasks?.some(task => task.id === taskId));
+    },
     async loadBoard() {
       if (this.boardController) this.boardController.abort();
       const controller = new AbortController();
@@ -752,23 +761,30 @@ const LevelTwo = {
     },
     async loadDetail(taskId, preserveScroll = false) {
       if (taskId === null || taskId === undefined) return;
+      this._detailController?.abort();
+      const controller = new AbortController();
+      this._detailController = controller;
+      const { signal } = controller;
+      const url = `/api/projects/${this.projectId}/tasks/${taskId}`;
       const panel = this.$refs.detailPanel;
       const previousScroll = preserveScroll && panel ? panel.scrollTop : 0;
       if (!preserveScroll) this.detailLoading = true;
       this.detailError = null;
       try {
-        const payload = await fetchJson(`/api/projects/${this.projectId}/tasks/${taskId}`);
-        if (this.detailTaskId !== taskId) return;
-        const acceptance = await fetchJson(`/api/projects/${this.projectId}/tasks/${taskId}/acceptance`)
-          .catch(() => ({ canClose: false, passedCases: [], blockers: [this.t('acceptance.unavailable')], events: [] }));
-        if (this.detailTaskId !== taskId) return;
+        const payload = await fetchJson(url, { signal });
+        if (signal.aborted) return;
+        const acceptance = await fetchJson(url + '/acceptance', { signal }).catch(error => {
+          if (signal.aborted) throw error;
+          return { canClose: false, passedCases: [], blockers: [this.t('acceptance.unavailable')], events: [] };
+        });
+        if (signal.aborted) return;
         this.detail = { ...payload, acceptance };
         await nextTick();
-        if (preserveScroll && this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = previousScroll;
+        if (!signal.aborted && preserveScroll && this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = previousScroll;
       } catch (e) {
-        if (this.detailTaskId === taskId) this.detailError = e.message;
+        if (!signal.aborted) this.detailError = e.message;
       } finally {
-        if (this.detailTaskId === taskId) this.detailLoading = false;
+        if (!signal.aborted) this.detailLoading = false;
       }
     },
     closeDetail() {
@@ -776,6 +792,7 @@ const LevelTwo = {
       else this.dismissDetail();
     },
     dismissDetail() {
+      this._detailController?.abort();
       const opener = this._detailOpener;
       this.detailTaskId = null;
       this.detail = null;
@@ -1161,6 +1178,8 @@ const app = createApp({
     const railFlashClass = ref('');
     let railFlashTimer = null;
     let eventSource = null;
+    let projectsRequest = null;
+    let projectsRefreshPending = false;
 
     const notifySupported = notificationsAvailable();
     const notifyPermission = ref(notifySupported ? Notification.permission : 'unsupported');
@@ -1248,10 +1267,25 @@ const app = createApp({
     }
 
     async function loadProjects() {
+      // Workers may deliver an event after a REST snapshot already includes its change.
+      // Coalesce events during a fetch into one trailing snapshot, without applying deltas.
+      if (projectsRequest) {
+        projectsRefreshPending = true;
+        return;
+      }
+      const controller = new AbortController();
+      projectsRequest = controller;
       try {
-        projects.value = await fetchJson('/api/projects?status=ALL&sort=UPDATED_DESC');
+        const nextProjects = await fetchJson('/api/projects?status=ALL&sort=UPDATED_DESC', { signal: controller.signal });
+        if (!controller.signal.aborted) projects.value = nextProjects;
       } catch (e) {
-        console.error(e);
+        if (!controller.signal.aborted) console.error(e);
+      } finally {
+        projectsRequest = null;
+        if (projectsRefreshPending && !controller.signal.aborted) {
+          projectsRefreshPending = false;
+          loadProjects();
+        }
       }
     }
 
@@ -1285,45 +1319,28 @@ const app = createApp({
       railFlashTimer = setTimeout(() => { railFlashClass.value = ''; }, 600);
     }
 
-    function updateProjectListForEvent(type, payload) {
-      if (type === 'project.created' || type === 'tasks.created') {
-        loadProjects();
-        return;
-      }
-      if (type === 'task.status_changed') {
-        // 更新記憶體中的 counts，讓 Level 2 返回 Level 1 時資料是即時的
-        const project = projects.value.find(p => p.id === payload.projectId);
-        if (project) {
-          if (project.counts[payload.from] > 0) project.counts[payload.from] -= 1;
-          project.counts[payload.to] = (project.counts[payload.to] || 0) + 1;
-          project.hasBlocked = project.counts.BLOCKED > 0;
-          project.updatedAt = payload.at;
-        } else {
-          loadProjects();
-        }
-      }
-    }
-
     function connectSse() {
       eventSource = new EventSource('/api/events');
 
-      eventSource.onopen = () => { sseConnected.value = true; };
+      let resyncOnOpen = false;
+      eventSource.onopen = () => {
+        sseConnected.value = true;
+        if (!resyncOnOpen) return;
+        // EventSource 自動重連，重連成功後只同步一次，補上斷線期間的變更。
+        resyncOnOpen = false;
+        loadProjects();
+        window.__boardBus.emit(SSE_RECONNECTED);
+      };
       eventSource.onerror = () => {
         sseConnected.value = false;
-        // 瀏覽器原生 EventSource 會自動重連；重連後直接重抓一次即可，不做事件重播
-        eventSource.addEventListener('open', () => {
-          loadProjects();
-          if (currentProjectId.value !== null) {
-            window.__boardBus.emit('tasks.created', { projectId: currentProjectId.value });
-          }
-        }, { once: true });
+        resyncOnOpen = true;
       };
 
-      ['project.created', 'tasks.created', 'task.status_changed', 'project.workflow_changed'].forEach((type) => {
+      [...PROJECT_LIST_EVENTS, 'project.workflow_changed'].forEach((type) => {
         eventSource.addEventListener(type, (e) => {
           const payload = JSON.parse(e.data);
           flashRail(payload.to || 'IN_PROGRESS');
-          updateProjectListForEvent(type, payload);
+          if (type !== 'project.workflow_changed') loadProjects();
           if (type === 'task.status_changed' && payload.to === 'BLOCKED') {
             notifyBlocked(payload);
           }
@@ -1351,6 +1368,8 @@ const app = createApp({
 
     onBeforeUnmount(() => {
       if (eventSource) eventSource.close();
+      projectsRequest?.abort();
+      clearTimeout(railFlashTimer);
       window.removeEventListener('popstate', syncProjectFromUrl);
       document.removeEventListener('visibilitychange', syncNotifyPermission);
     });
