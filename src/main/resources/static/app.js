@@ -442,9 +442,15 @@ const LevelTwo = {
     hasTaskFilters() {
       return this.filters.query || this.filters.category || this.filters.assignee || this.filters.waiting || this.filters.claimable;
     },
+    projectArchived() {
+      return (this.board?.status ?? this.projectSummary?.status) === 'ARCHIVED';
+    },
     graphLayout() {
       if (!this.graph) return null;
-      const allNodes = this.graph.nodes || [];
+      const graphNodes = this.graph.nodes || [];
+      const allNodes = this.projectArchived
+        ? graphNodes.map(node => ({ ...node, claimable: false }))
+        : graphNodes;
       const nodesById = new Map(allNodes.map(node => [node.id, node]));
       const allEdges = (this.graph.edges || []).filter(edge =>
         nodesById.has(edge.prerequisiteTaskId) && nodesById.has(edge.taskId));
@@ -606,6 +612,18 @@ const LevelTwo = {
       this.loadBoard();
       if (this.viewMode === 'dependencies') this.loadGraph();
     },
+    'projectSummary.status'(status, previousStatus) {
+      // Live project updates may arrive before the refreshed board.
+      if (status && (previousStatus || (this.board && this.board.status !== status))) {
+        this.loadBoard();
+      }
+    },
+    projectArchived(archived) {
+      // The graph can still be fetching or holding all-false flags after restore.
+      if (!archived && (this.graph || this.graphLoading || this.viewMode === 'dependencies')) {
+        this.loadGraph();
+      }
+    },
     'filters.query'() {
       this.syncFiltersToUrl();
       if (this.searchTimer) clearTimeout(this.searchTimer);
@@ -622,10 +640,12 @@ const LevelTwo = {
       const controller = new AbortController();
       this.boardController = controller;
       try {
-        this.board = await fetchJson(`/api/projects/${this.projectId}/board`, { signal: controller.signal });
+        const board = await fetchJson(`/api/projects/${this.projectId}/board`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        this.board = board;
         this.error = null;
       } catch (e) {
-        if (e.name !== 'AbortError') this.error = e.message;
+        if (!controller.signal.aborted) this.error = e.message;
       }
     },
     async loadGraph() {
@@ -635,9 +655,10 @@ const LevelTwo = {
       this.graphLoading = true;
       this.graphError = null;
       try {
-        this.graph = await fetchJson(`/api/projects/${this.projectId}/dependencies`, { signal: controller.signal });
+        const graph = await fetchJson(`/api/projects/${this.projectId}/dependencies`, { signal: controller.signal });
+        if (!controller.signal.aborted) this.graph = graph;
       } catch (e) {
-        if (e.name !== 'AbortError') this.graphError = e.message;
+        if (!controller.signal.aborted) this.graphError = e.message;
       } finally {
         if (!controller.signal.aborted) this.graphLoading = false;
       }
@@ -713,7 +734,7 @@ const LevelTwo = {
       const assigneeMatches = !this.filters.assignee
         || (this.filters.assignee === '__unassigned__' ? !task.assignee : task.assignee === this.filters.assignee);
       const waiting = task.waitingFor && task.waitingFor.length > 0;
-      const claimable = task.status === 'TODO' && !waiting;
+      const claimable = !this.projectArchived && task.status === 'TODO' && !waiting;
       return titleMatches && categoryMatches && assigneeMatches
         && (!this.filters.waiting || waiting) && (!this.filters.claimable || claimable);
     },
@@ -866,7 +887,7 @@ const LevelTwo = {
       <div class="board-header">
         <button class="back-btn" @click="$emit('back')">{{ t('levelTwo.back') }}</button>
         <h2 class="board-title" v-if="board">{{ board.name }}</h2>
-        <span v-if="projectSummary && projectSummary.status === 'ARCHIVED'" class="archive-badge">{{ t('levelTwo.archivedReadOnly') }}</span>
+        <span v-if="projectArchived" class="archive-badge">{{ t('levelTwo.archivedReadOnly') }}</span>
         <span class="board-progress" v-if="board">{{ doneCount }}/{{ totalCount }}</span>
         <button
           v-for="p in otherBlockedProjects"

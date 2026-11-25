@@ -698,10 +698,10 @@ class BoardService {
       assignee: t.assignee,
       waitingFor: (waiting.get(t.id) ?? []).map((w) => w.id)
     });
-    return { id: p.id, name: p.name, description: p.description, columns };
+    return { id: p.id, name: p.name, description: p.description, status: p.status, columns };
   }
   async getDependencies(projectId) {
-    await this.project(projectId);
+    const project = await this.project(projectId);
     const tasks = await this.tasks(projectId), waiting = await this.waiting(projectId), deps = await this.all("SELECT d.* FROM task_dependency d JOIN task t ON t.id=d.task_id WHERE t.project_id=? ORDER BY d.id", projectId), graph = new Map();
     for (const d of deps) graph.set(d.task_id, [...graph.get(d.task_id) ?? [], d.depends_on_task_id]);
     this.assertAcyclic(graph);
@@ -711,7 +711,7 @@ class BoardService {
       category: t.category,
       status: t.status,
       assignee: t.assignee,
-      claimable: t.status === "TODO" && !waiting.has(t.id)
+      claimable: project.status === "ACTIVE" && t.status === "TODO" && !waiting.has(t.id)
     })), edges: deps.map((d) => ({
       prerequisiteTaskId: d.depends_on_task_id,
       taskId: d.task_id

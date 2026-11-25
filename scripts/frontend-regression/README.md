@@ -59,6 +59,7 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 | Filter URL round trip | - | `checkFilterUrlRoundTrip()` | - |
 | Initial API call counts | - | `checkApiCallCounts()` | - |
 | Dependency graph quality | - | - | Visual review |
+| Claimability of archived projects | Java MCP E2E and Workers service tests | `checkArchivedClaimability()` with isolated fixture | - |
 | i18n dictionary and placeholders | `I18nDictionaryTest` | - | Copy review |
 | Language switching and persistence | - | `checkManualSwitchUpdatesHtmlLangAndPersists()` | - |
 | Unsupported locale fallback | - | `checkUnsupportedStoredLocaleFallsBackToDefault()` | - |
