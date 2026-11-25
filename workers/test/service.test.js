@@ -231,6 +231,26 @@ test("archive confirmation, audit counts, all scoped writes denied and restore r
   assert.equal(db.sql.prepare("SELECT count(*) AS n FROM project_audit").get().n, 2);
   db.sql.close();
 });
+test("archived graph keeps its tasks and dependencies but shows none as claimable", async (t) => {
+  const { db, s } = setup();
+  t.after(() => db.sql.close());
+  const p = await project(s);
+  await tasks(s, p, [{ title: "First task" }, { title: "Dependent task", dependsOnIndexes: [1] }]);
+  const active = await s.getDependencies(p);
+  assert.deepEqual(active.nodes.map(node => node.claimable), [true, false]);
+
+  await s.execute("archive_project", { projectName: "Example", reason: "fixture" });
+  const archived = await s.getDependencies(p);
+  assert.deepEqual(archived.nodes.map(node => node.claimable), [false, false]);
+  assert.deepEqual(archived.edges, active.edges);
+  const archivedBoard = await s.getBoard(p);
+  assert.equal(archivedBoard.status, "ARCHIVED");
+  assert.equal(archivedBoard.columns.TODO.length, 2);
+
+  await s.execute("restore_project", { projectName: "Example", reason: "fixture" });
+  assert.deepEqual(await s.getDependencies(p), active);
+  assert.equal((await s.getBoard(p)).status, "ACTIVE");
+});
 test("archive racing a task mutation aborts rather than using stale confirmation counts", async () => {
   const { db, s } = setup();
   const p = await project(s);

@@ -27,12 +27,12 @@ public class DependencyGraphService {
 
     /**
      * Reads the complete graph with one task query and one project-scoped dependency query.
-     * A task is claimable under precisely the same prerequisite rule used by claim_next_task:
-     * it must be TODO and every direct prerequisite must be DONE.
+     * Claimability describes TODO tasks with all prerequisites done in an active project.
+     * The write path also checks the project's workflow and acceptance rules.
      */
     @Transactional(readOnly = true)
     public DependencyGraph getDependencyGraph(Long projectId) {
-        projectService.assertExists(projectId);
+        boolean projectActive = "ACTIVE".equals(projectService.getById(projectId).status());
         List<Task> tasks = taskRepository.findByProjectIdOrderBySortOrderAsc(projectId);
         List<TaskDependency> dependencies = dependencyRepository.findByProjectId(projectId);
 
@@ -50,7 +50,8 @@ public class DependencyGraphService {
 
         List<DependencyNode> nodes = tasks.stream()
                 .map(task -> new DependencyNode(task.getId(), task.getTitle(), task.getCategory(),
-                        task.getStatus().name(), task.getAssignee(), isClaimable(task, prerequisitesByTask, tasksById)))
+                        task.getStatus().name(), task.getAssignee(),
+                        projectActive && isReadyTodo(task, prerequisitesByTask, tasksById)))
                 .toList();
         List<DependencyEdge> edges = dependencies.stream()
                 .map(dependency -> new DependencyEdge(dependency.getDependsOnTaskId(), dependency.getTaskId()))
@@ -58,7 +59,7 @@ public class DependencyGraphService {
         return new DependencyGraph(nodes, edges);
     }
 
-    private static boolean isClaimable(Task task, Map<Long, List<Long>> prerequisitesByTask,
+    private static boolean isReadyTodo(Task task, Map<Long, List<Long>> prerequisitesByTask,
                                        Map<Long, Task> tasksById) {
         if (task.getStatus() != TaskStatus.TODO) {
             return false;

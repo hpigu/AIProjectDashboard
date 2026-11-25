@@ -167,6 +167,48 @@ class McpProtocolE2ETest {
     }
 
     @Test
+    void archivedProjectKeepsTaskGraphButDisablesClaimabilityUntilRestore() {
+        String projectName = "archive graph fixture";
+        assertThat(callTool("create_project", Map.of("name", projectName)).path("isError").asBoolean()).isFalse();
+        long projectId = readTree(textContent(callTool("get_project_workflow", Map.of("projectName", projectName))))
+                .path("projectId").asLong();
+        var created = callTool("create_tasks", Map.of("projectId", projectId, "tasks", List.of(
+                Map.of("title", "First task", "category", "BACKEND", "description", "Ready",
+                        "dependsOnIndexes", List.of(), "dependsOnTaskIds", List.of()),
+                Map.of("title", "Dependent task", "category", "BACKEND", "description", "Waiting",
+                        "dependsOnIndexes", List.of(1), "dependsOnTaskIds", List.of()))));
+        assertThat(created.path("isError").asBoolean()).isFalse();
+
+        String base = "http://localhost:" + port + "/api/projects/" + projectId;
+        JsonNode active = readTree(restTemplate.getForObject(base + "/dependencies", String.class));
+        assertThat(claimableFlags(active)).containsExactly(true, false);
+
+        var archived = callTool("archive_project", Map.of("projectName", projectName, "reason", "isolated fixture"));
+        assertThat(archived.path("isError").asBoolean()).isFalse();
+        var denied = callTool("claim_next_task", Map.of(
+                "projectName", projectName, "category", "BACKEND", "assignee", "archive fixture"));
+        assertThat(textContent(denied)).contains("封存");
+        JsonNode graph = readTree(restTemplate.getForObject(base + "/dependencies", String.class));
+        assertThat(claimableFlags(graph)).containsExactly(false, false);
+        assertThat(graph.path("edges")).isEqualTo(active.path("edges"));
+        JsonNode board = readTree(restTemplate.getForObject(base + "/board", String.class));
+        assertThat(board.path("status").asText()).isEqualTo("ARCHIVED");
+        assertThat(board.path("columns").path("TODO").size()).isEqualTo(2);
+
+        var restored = callTool("restore_project", Map.of("projectName", projectName, "reason", "isolated fixture"));
+        assertThat(restored.path("isError").asBoolean()).isFalse();
+        assertThat(readTree(restTemplate.getForObject(base + "/dependencies", String.class))).isEqualTo(active);
+        assertThat(readTree(restTemplate.getForObject(base + "/board", String.class)).path("status").asText())
+                .isEqualTo("ACTIVE");
+    }
+
+    private static List<Boolean> claimableFlags(JsonNode graph) {
+        List<Boolean> flags = new ArrayList<>();
+        graph.path("nodes").forEach(node -> flags.add(node.path("claimable").asBoolean()));
+        return flags;
+    }
+
+    @Test
     void toolSchemasPinDownParameterNamesAgentsMustSend() {
         JsonNode tools = rpc("tools/list", Map.of()).path("tools");
 

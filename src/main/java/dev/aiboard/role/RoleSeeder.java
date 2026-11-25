@@ -5,80 +5,34 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
-import dev.aiboard.project.ProjectService;
 
 import java.util.List;
 
 /**
- * 啟動時把五個角色（backend-dev、frontend-dev、qa、infra、docs）的初始工作指引
- * 匯入看板：通用層（project_id = NULL）放跨專案都成立的規則，
- * AgentDashboard 專屬層（project_id = 該專案 id）放寫死本 repo 的路徑所有權、
- * 埠號與 commit 規則。
- *
- * 使用 {@link RoleService#createRoleIfAbsent}：**只在角色尚未存在時建立**，
- * 已存在就原樣保留。看板上的內容才是正本——使用者透過 upsert_role 或未來的
- * 看板 UI 調整過的指引，不該因為重啟就被覆寫回這裡的版本。
- * 因此重啟幾次都不會重複匯入，也不會蓋掉線上調整。
- *
- * 反過來說，改動這個檔案裡的常數只會影響「還沒有該角色的看板」。
- * 要把新版指引推到既有看板，請呼叫 upsert_role。
- *
- * AgentDashboard 專案本身若尚不存在（例如全新的測試資料庫），專屬層會被跳過，
- * 不視為錯誤，通用層仍會照常匯入。
+ * 啟動時只匯入跨專案共用的五個初始角色（project_id = NULL）。
+ * 通用指引只在缺少時建立，既有指引保留於看板；專案覆寫由管理者明確設定。
  */
 @Component
 public class RoleSeeder implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(RoleSeeder.class);
 
-    /** 本 repo 對應看板上的專案名稱；只用來查詢 project id，不寫死數字。 */
-    static final String AGENT_DASHBOARD_PROJECT_NAME = "AgentDashboard";
-
     private final RoleService roleService;
-    private final ProjectService projectService;
 
-    public RoleSeeder(RoleService roleService, ProjectService projectService) {
+    public RoleSeeder(RoleService roleService) {
         this.roleService = roleService;
-        this.projectService = projectService;
     }
 
     @Override
     public void run(ApplicationArguments args) {
-        seedGenericRoles();
-        seedAgentDashboardOverrides();
-    }
-
-    private void seedGenericRoles() {
-        int created = seedAll(GENERIC_SEEDS, null);
-        log.info("通用角色指引：新建 {} 筆，已存在保留 {} 筆",
-                created, GENERIC_SEEDS.size() - created);
-    }
-
-    private void seedAgentDashboardOverrides() {
-        var project = projectService.findByNameIgnoreCase(AGENT_DASHBOARD_PROJECT_NAME);
-        if (project.isEmpty()) {
-            log.info("看板上尚無「{}」專案，略過專屬指引匯入", AGENT_DASHBOARD_PROJECT_NAME);
-            return;
-        }
-        if (!"ACTIVE".equals(project.get().status())) {
-            log.info("「{}」已封存，略過專屬指引匯入以維持唯讀狀態", AGENT_DASHBOARD_PROJECT_NAME);
-            return;
-        }
-        int created = seedAll(AGENT_DASHBOARD_SEEDS, AGENT_DASHBOARD_PROJECT_NAME);
-        log.info("AgentDashboard 專屬角色指引：新建 {} 筆，已存在保留 {} 筆",
-                created, AGENT_DASHBOARD_SEEDS.size() - created);
-    }
-
-    private int seedAll(List<RoleSeed> seeds, String projectName) {
         int created = 0;
-        for (RoleSeed seed : seeds) {
-            var result = roleService.createRoleIfAbsent(
-                    seed.name(), seed.category(), seed.instructions(), projectName);
-            if (result.created()) {
+        for (RoleSeed seed : GENERIC_SEEDS) {
+            if (roleService.createRoleIfAbsent(seed.name(), seed.category(), seed.instructions())) {
                 created++;
             }
         }
-        return created;
+        log.info("通用角色指引：新建 {} 筆，已存在保留 {} 筆",
+                created, GENERIC_SEEDS.size() - created);
     }
 
     private record RoleSeed(String name, String category, String instructions) {
@@ -233,135 +187,4 @@ public class RoleSeeder implements ApplicationRunner {
             new RoleSeed("qa", "TEST", QA_GENERIC),
             new RoleSeed("infra", "INFRA", INFRA_GENERIC),
             new RoleSeed("docs", "DOC", DOCS_GENERIC));
-
-    // ---------------------------------------------------------------
-    // AgentDashboard 專屬層：寫死本 repo 的路徑所有權、開發用埠號與資料庫、
-    // commit 訊息格式、AGENTS.md 規定的分層規則。只在 AgentDashboard 專案下生效，
-    // 不影響通用版，也不影響其他專案。
-    // ---------------------------------------------------------------
-
-    private static final String BACKEND_DEV_AGENT_DASHBOARD = """
-            ## AgentDashboard 專屬規則（本專案覆寫）
-
-            ### 你擁有的路徑（只有你能改）
-            - src/main/java/**
-            - src/main/resources/db/migration/**
-
-            ### 你絕對不能碰的路徑
-            - src/main/resources/static/**（frontend-dev 的）
-            - src/test/**（qa 的）
-            - pom.xml、src/main/resources/application.yml（只有 infra 能改。
-              需要新增依賴或設定時，把任務標記 BLOCKED 並在 note 說明需求，不要自己動手。）
-
-            ### 分層規則（AGENTS.md）
-            - mcp/ 只呼叫 Service，不注入 Repository，不放業務邏輯。
-            - Service 不得出現 MCP 型別；Entity 不外洩到 MCP/web。
-            - migration 使用標準 SQL、BIGINT 主鍵與 TIMESTAMP。
-
-            ### 開發用埠號與資料庫
-            正式看板常駐在 :8080，資料庫 ./data/board，不得佔用或寫入。
-            TASK_PORT 與 TASK_INSTANCE 由 leader 配發非正式埠及唯一標記，設好後啟動應用或跑整合測試一律帶：
-            BOARD_PORT="$TASK_PORT" BOARD_DB_URL="jdbc:h2:file:./data/dev-$TASK_INSTANCE" BOARD_LOG_FILE="./logs/dev-$TASK_INSTANCE.log" ./mvnw test
-
-            ### commit 訊息格式（僅在使用者已授權提交時）
-            `feat(backend): <任務標題> (#taskId)`（只提交本任務檔案）
-            """;
-
-    private static final String FRONTEND_DEV_AGENT_DASHBOARD = """
-            ## AgentDashboard 專屬規則（本專案覆寫）
-
-            ### 你擁有的路徑（只有你能改）
-            - src/main/resources/static/**
-
-            ### 你絕對不能碰的路徑
-            - src/main/java/**、src/test/**、pom.xml、application.yml
-
-            ### 前端限制
-            - 不得引入 npm、Vite、SFC、TypeScript 或任何前端建置步驟，維持零建置、離線 vendor 的 Vue 3 版本。
-            - 遵守 tokens.css 的設計 token，不得自行更換配色或字體。
-            - 動畫僅限 activity rail 與任務移動兩處，不新增其他動效。
-            - 需要後端新端點時，標記 BLOCKED 並描述所需的 API 合約，不要自己改 Java。
-
-            ### 開發用埠號與資料庫
-            正式看板常駐在 :8080，資料庫 ./data/board，不得佔用或寫入。
-            TASK_PORT 與 TASK_INSTANCE 由 leader 配發非正式埠及唯一標記，設好後啟動應用或跑整合測試一律帶：
-            BOARD_PORT="$TASK_PORT" BOARD_DB_URL="jdbc:h2:file:./data/dev-$TASK_INSTANCE" BOARD_LOG_FILE="./logs/dev-$TASK_INSTANCE.log" ./mvnw test
-
-            ### commit 訊息格式（僅在使用者已授權提交時）
-            `feat(frontend): <任務標題> (#taskId)`（只提交本任務檔案）
-            """;
-
-    private static final String QA_AGENT_DASHBOARD = """
-            ## AgentDashboard 專屬規則（本專案覆寫）
-
-            ### 你擁有的路徑（只有你能改）
-            - src/test/**
-
-            ### 你絕對不能碰的路徑
-            - src/main/**（任何檔案）、pom.xml、application.yml
-
-            ### 測試規則
-            - 測試必須能在沒有正式看板執行的情況下通過（用 @SpringBootTest 的隨機 port）。
-            - 每次 ./mvnw test 也要由 leader 配發 TASK_PORT（非正式埠）與 TASK_INSTANCE（唯一標記），帶入：
-              BOARD_PORT="$TASK_PORT" BOARD_DB_URL="jdbc:h2:file:./data/dev-$TASK_INSTANCE" BOARD_LOG_FILE="./logs/dev-$TASK_INSTANCE.log" ./mvnw test
-              不得佔用正式埠號或寫入正式資料庫。
-            - 併發測試必須證明兩個 worker 同時認領時只有一個取得同一任務，且前置未完成的任務
-              在併發下仍不得被發放。
-
-            ### commit 訊息格式（僅在使用者已授權提交時）
-            `test: <任務標題> (#taskId)`（只提交本任務檔案）
-            """;
-
-    private static final String INFRA_AGENT_DASHBOARD = """
-            ## AgentDashboard 專屬規則（本專案覆寫）
-
-            ### 你擁有的路徑（只有你能改）
-            - pom.xml
-            - src/main/resources/application.yml（及其他應用設定檔）
-            - .mvn/**、mvnw、mvnw.cmd
-            - CI/CD 與部署相關設定檔
-
-            ### 你絕對不能碰的路徑
-            - src/main/java/**（backend-dev 的）、src/main/resources/static/**（frontend-dev 的）、src/test/**（qa 的）
-
-            ### 開發用埠號與資料庫
-            正式看板常駐在 :8080，資料庫 ./data/board，不得佔用或寫入。
-            TASK_PORT 與 TASK_INSTANCE 由 leader 配發非正式埠及唯一標記，設好後啟動應用或跑整合測試一律帶：
-            BOARD_PORT="$TASK_PORT" BOARD_DB_URL="jdbc:h2:file:./data/dev-$TASK_INSTANCE" BOARD_LOG_FILE="./logs/dev-$TASK_INSTANCE.log" ./mvnw test
-
-            ### commit 訊息格式（僅在使用者已授權提交時）
-            `chore: <任務標題> (#taskId)`（只提交本任務檔案）
-            """;
-
-    private static final String DOCS_AGENT_DASHBOARD = """
-            ## AgentDashboard 專屬規則（本專案覆寫）
-
-            ### 你擁有的路徑（只有你能改）
-            - README.md
-            - docs/**
-            - AGENTS.md（若任務明確要求同步規則說明）
-
-            ### 你絕對不能碰的路徑
-            - src/main/**、src/test/**、pom.xml、application.yml
-
-            ### commit 訊息格式（僅在使用者已授權提交時）
-            `docs: <任務標題> (#taskId)`（只提交本任務檔案）
-            """;
-
-    /**
-     * get_role 找到專案覆寫版時會整份回傳、不會自動疊加通用版內容，
-     * 所以這裡把「通用內容 + AgentDashboard 專屬覆寫片段」組合成一份完整指引再存入，
-     * 讓 agent 讀到覆寫版時仍有完整的開工流程、邊界與收尾規則，只是額外疊加了本 repo
-     * 寫死的路徑所有權、埠號與 commit 規則。維護時兩份片段仍各自獨立，好分辨改的是哪一層。
-     */
-    private static final List<RoleSeed> AGENT_DASHBOARD_SEEDS = List.of(
-            new RoleSeed("backend-dev", "BACKEND", merge(BACKEND_DEV_GENERIC, BACKEND_DEV_AGENT_DASHBOARD)),
-            new RoleSeed("frontend-dev", "FRONTEND", merge(FRONTEND_DEV_GENERIC, FRONTEND_DEV_AGENT_DASHBOARD)),
-            new RoleSeed("qa", "TEST", merge(QA_GENERIC, QA_AGENT_DASHBOARD)),
-            new RoleSeed("infra", "INFRA", merge(INFRA_GENERIC, INFRA_AGENT_DASHBOARD)),
-            new RoleSeed("docs", "DOC", merge(DOCS_GENERIC, DOCS_AGENT_DASHBOARD)));
-
-    private static String merge(String generic, String agentDashboardOverride) {
-        return generic.stripTrailing() + "\n\n" + agentDashboardOverride.stripTrailing() + "\n";
-    }
 }

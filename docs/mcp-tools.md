@@ -170,7 +170,7 @@ runtime tool list.
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/projects` | Project summaries with name-prefix and status filters |
-| `GET /api/projects/{id}/board` | Tasks grouped for the board view |
+| `GET /api/projects/{id}/board` | Project status and tasks grouped for the board view |
 | `GET /api/projects/{id}/dependencies` | Dependency graph nodes and edges |
 | `GET /api/projects/{id}/tasks/{taskId}` | Task detail |
 | `GET /api/projects/{id}/tasks/{taskId}/history` | Status history, blocker data, and completion evidence |
@@ -181,6 +181,10 @@ runtime tool list.
 | `GET /api/health/live` | Process liveness without a database check |
 | `GET /api/health/ready` | Database, migration, and MCP registration readiness |
 | `GET /api/diagnostics` | Migration, SSE, project/task, backup, and disk-capacity diagnostics |
+
+The dependency graph can only mark a task as `claimable` when the project is
+active, the task is TODO, and its direct prerequisites are DONE. The MCP claim
+call also checks the project's workflow and acceptance requirements.
 
 ## SSE limits
 

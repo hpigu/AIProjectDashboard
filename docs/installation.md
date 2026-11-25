@@ -52,11 +52,8 @@ conflicts. See [Agent roles](agent-roles.md) and the
 [project workflow template](project-workflow-template.md) for Git policy and
 trusted acceptance setup; installing plugins does not update online roles.
 
-Management tools are denied until separately authorized. Configure a leader-only
-Java BOARD_MANAGEMENT_TOKEN (at least 32 characters) or a Workers verified-device
-allowlist; never provide those credentials to workers. Signed acceptance keys
-are separate. See [authorization boundaries](authorization-boundaries.md) before
-using project/task creation, archive preview, or role management.
+Before creating your first project or task, [authorize a dedicated leader
+connection](#authorize-project-and-task-creation).
 
 Useful lifecycle commands:
 
@@ -74,6 +71,13 @@ unless you explicitly pass `--force` or `-Force`.
 
 Use assets from one immutable release tag and verify them against that release's
 `ai-project-board-backend-V-SHA256SUMS.txt`.
+
+The source checkout includes management authorization and project Git workflow
+approval. The published [v3.2.1 release](https://github.com/hpigu/AIProjectDashboard/releases/tag/v3.2.1)
+predates those features. Follow its [server installation instructions](https://github.com/hpigu/AIProjectDashboard/blob/v3.2.1/docs/installation.md#L7-L103), then use the
+[v3.2.1 MCP-only connection](https://github.com/hpigu/AIProjectDashboard/blob/v3.2.1/README.md#L175-L194)
+to create your first card. The current `main` plugin's `claim-tasks` workflow
+requires a server with project Git workflow support.
 
 ### Windows x64
 
@@ -96,7 +100,11 @@ default, not inside the extracted program directory.
 ### macOS or Linux
 
 The published JARs require a matching JDK 21. The installer is currently kept in
-the source tree, so obtain a source checkout before running it:
+the source tree, so obtain a source checkout before running it.
+
+This example uses the current source build version. Run it for that version
+once its release assets are published, or replace both version values with the
+same published release version.
 
 ```bash
 ./install/install.sh \
@@ -206,10 +214,52 @@ Codex, in `~/.codex/config.toml`:
 url = "http://127.0.0.1:8080/mcp"
 ```
 
+## Authorize project and task creation
+
+Use these steps with this checkout or a release that includes management
+authorization. For an older server, use the docs for its release tag. The
+bundled `board` connector already knows the endpoint, but it does not provide a
+management credential. An unconfigured source server denies `create_project`
+and `create_tasks` even if read tools work.
+
+1. Set `BOARD_MANAGEMENT_TOKEN` to a random value of at least 32 characters in
+   the private environment used to run the server launcher. If the server is
+   already running, restart it from that environment with `./bin/board restart`
+   on macOS/Linux or `.\bin\board.ps1 restart` in Windows PowerShell.
+2. Configure a dedicated leader MCP client to send `Authorization: Bearer <token>`
+   using that value. Keep the credential out of worker profiles, shared
+   connectors, chat, repositories, and command history. Use a separate client
+   if your current client shares credentials with worker sessions.
+3. Ask the authorized leader to create the project and one task. Open the
+   read-only board and confirm that the task appears under **TODO**.
+
+For a dedicated Codex CLI leader, add this to the leader environment's private
+`config.toml`. Before launching that CLI, supply the same token value as
+`BOARD_LEADER_TOKEN` in its private process environment. Ask Codex to use the
+`board-leader` MCP connection for the first card.
+
+```toml
+[mcp_servers.board-leader]
+url = "http://127.0.0.1:8080/mcp"
+bearer_token_env_var = "BOARD_LEADER_TOKEN"
+```
+
+Codex uses the variable's value as the bearer token. See the
+[official Codex MCP configuration guide](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+If a management call returns HTTP 403, check the server's configured token and
+the dedicated leader client's header. For Workers, grant management to a
+verified leader device using `MANAGEMENT_DEVICE_IDS`. Git workflow and
+acceptance signatures use credentials separate from management credentials. See the
+[authorization boundaries](authorization-boundaries.md) and
+[Git workflow setup](project-git-workflow.md).
+
 ## Update the server
 
 Server updates are never implied by plugin or marketplace updates. Select an
-exact stable version.
+exact published stable version. The examples use the current source build
+version. Run them for that version once its release assets are published, or
+replace every version value with the same published target version.
 
 macOS/Linux source or installed server:
 
@@ -277,9 +327,10 @@ Common variables:
 | `BOARD_DB_URL` | derived from data root | H2 JDBC URL |
 | `BOARD_ALLOWED_HOSTS` | empty | Additional Host/Origin values; does not add authentication |
 
-Do not expose `/mcp` directly beyond the local machine. It has no server-side
-authentication. Read [`SECURITY.md`](../SECURITY.md) before changing the bind or
-proxy configuration.
+Keep the Java server's `/mcp` on loopback. The management credential covers the
+[management tools](authorization-boundaries.md), while other calls still trust
+the local environment. Read [`SECURITY.md`](../SECURITY.md) before changing the
+bind or proxy configuration.
 
 ## Verify an installation
 

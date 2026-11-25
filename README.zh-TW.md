@@ -129,22 +129,28 @@ url = "http://127.0.0.1:8080/mcp"
 
 ## 建立第一個看板
 
-前端是唯讀觀測介面；寫入由 agent 透過 MCP 執行。連線完成後，可以說：
+以下步驟適用目前的原始碼版本與對應的 plugin。如果使用下載的發行版，請參考
+[對應版本的安裝說明](docs/installation.md#option-2-install-a-stable-release)。
+
+瀏覽器看板是唯讀的。預設 connector 可以讀取看板。`create_project` 和
+`create_tasks` 需要[設定 leader 專用連線](docs/installation.md#authorize-project-and-task-creation)。
+
+向已授權的 leader 說：
 
 ```text
-建立一個叫「結帳穩定性」的專案，拆成後端、前端、測試、基礎設施與文件任務，
-並把前置關係寫進 AI Project Board。
+建立「結帳穩定性」專案，新增一張後端任務卡，記錄結帳請求重試時的行為。
 ```
 
-然後在要開發的 repo 中說：
+在瀏覽器開啟專案，確認任務出現在 **TODO** 欄。使用 `claim-tasks` 派工前請先
+[規劃並核准專案 Git 流程](docs/project-git-workflow.md)。
+接著在要開發的 repo 中說：
 
 ```text
 認領「結帳穩定性」的任務，開始可執行的工作。
 ```
 
-看板會透過 SSE 即時更新，不需重新整理。Leader 可依各專案分類容量派發可執行
-任務，再透過 `dev` 整合並於批次完成後安排 reviewer。容量設定與三個 Claude Code
-Backend Worker 的範例見[角色與派工](docs/agent-roles.md)。
+看板會透過 SSE 即時更新。Leader 依平台的 session 上限、任務相依及檔案或資源
+衝突派工。詳見[角色與派工](docs/agent-roles.md)。
 
 ## 介面
 
@@ -166,7 +172,7 @@ Backend Worker 的範例見[角色與派工](docs/agent-roles.md)。
 | `block_task` | 記錄結構化阻塞原因 |
 | `complete_task` | 以摘要與驗證證據完成任務 |
 
-Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
+完整工具參數與狀態規則見
 [`docs/mcp-tools.md`](docs/mcp-tools.md)。
 
 ## 安全模型
@@ -174,7 +180,8 @@ Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
 這是單機、可信任使用者產品。
 
 - Server 預設只監聽 `127.0.0.1`。
-- `/mcp` **沒有 server-side authentication**，不要直接開放到 LAN 或公開網路。
+- 本機 server 會檢查[管理工具](docs/authorization-boundaries.md)的 leader 憑證。
+  `/mcp` 維持在 loopback。
 - Host 與 Origin 檢查用來阻擋 DNS rebinding。
 - Worker 工具白名單是 client-side 邊界，不是 server 授權。
 - Server 內建啟動前、正常關閉前與執行中排程備份。
@@ -185,8 +192,7 @@ Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
 ## 已知限制
 
 - 只支援單機，沒有帳號、跨裝置同步或經驗證的雲端部署路徑。
-- 容量限制的是每個專案與分類中 `IN_PROGRESS` 任務數；系統無法偵測 session 是否存活，
-  不會自動回收失聯認領。調低上限不會中止既有工作。
+- 看板無法偵測 session 是否存活，會保留失聯的認領讓 leader 查明。
 - macOS／Linux release 需 JDK 21；只有 Windows x64 ZIP 內含 Java runtime。
 - MCP 工具說明、角色指引、CLI 輸出與多數錯誤訊息仍以繁體中文為主。
 - Codex 與 Claude Desktop 的 plugin 頁面更新流程已驗證；桌面版全新圖形安裝仍待
