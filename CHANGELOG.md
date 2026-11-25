@@ -5,7 +5,10 @@ and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-No unreleased user-facing changes.
+### Fixed
+
+- Java startup seeds only shared role defaults and preserves existing instructions.
+  A project named `AgentDashboard` now uses shared defaults when it has no override.
 
 ## [3.3.0] — 2026-11-09
 

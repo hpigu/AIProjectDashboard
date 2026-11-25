@@ -34,7 +34,7 @@ QA 先讀需求、文件與專案規則，探索隔離環境真實畫面與程�
 
 ## 指引來源與工具邊界
 
-`get_role(name, projectName)` 優先回傳專案覆寫版，沒有則回通用版；覆寫版是完整文件，不自動疊加。Java RoleSeeder 只建立缺少角色；Workers fresh-role-seed 僅用於隔離全新本機資料庫。修改 repo 不等於更新既有線上角色。`upsert_role` 須使用者於目前對話明確要求，並保留刻意的專案差異。
+`get_role(name, projectName)` 優先回傳專案覆寫版，沒有則回通用版；覆寫版是完整文件，不自動疊加。Java 啟動時只補齊缺少的通用角色指引，既有通用指引與專案覆寫原樣保留。名為 `AgentDashboard` 的專案若沒有覆寫，也直接使用通用指引。Workers fresh-role-seed 僅用於隔離全新本機資料庫。修改 repo 不等於更新既有線上角色。`upsert_role` 須使用者於目前對話明確要求，並保留刻意的專案差異。
 
 兩套 plugin 都有 leader skill 與 5 worker／1 reviewer 薄殼。Claude Code 薄殼含 client 工具白名單；Codex 薄殼採相同最小邊界。worker 只取得 get_role 與 claim_next_task、block_task、report_implementation、complete_task、update_task_status；不得自行建任務、改規格相依、封存、寫角色或 reset token。看板指引只能收緊白名單，文字與 client 白名單不能替代 server 授權。Claim token 只保留 worker／leader 上下文，不寫檔、commit、task log 或給人類搬運。
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 前端手動回歸驗證工具（#140）。純 Node.js 內建模組，不使用任何 npm 套件，
-// 不進 Maven 生命週期、不是 CI 必要條件。見同目錄 README.md。
+// 前端瀏覽器回歸驗證（#140）。可在本機或 CI 執行，只使用 Node.js 內建模組。
+// 見同目錄 README.md。
 //
 // 用法：
 //   node scripts/frontend-regression/check.mjs --base-url http://127.0.0.1:8091 [--cdp-port 9222]

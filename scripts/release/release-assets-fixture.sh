@@ -76,16 +76,18 @@ assert_workflow_contains 'version: ${{ steps.release_ref.outputs.version }}' 'pr
 assert_workflow_contains 'commit: ${{ steps.release_ref.outputs.commit }}' 'preflight exports canonical peeled commit'
 assert_workflow_contains 'git rev-parse --verify "refs/tags/${tag}^{commit}"' 'preflight verifies the tag peeled commit'
 assert_workflow_contains '[ "$head_commit" = "$tag_commit" ]' 'preflight rejects a checkout that differs from the tag commit'
-assert_workflow_count 'ref: ${{ needs.preflight.outputs.tag }}' 5 'all four builders and publish checkout the preflight tag'
+assert_workflow_count 'ref: ${{ needs.preflight.outputs.commit }}' 5 'all four builders and publish check out the preflight commit'
+assert_workflow_absent 'ref: ${{ needs.preflight.outputs.tag }}' 'downstream jobs never resolve the tag independently'
 assert_workflow_contains 'needs: [preflight, linux-x64, macos-arm64, macos-x64, windows-x64]' 'publish directly depends on preflight and all platform builds'
 assert_workflow_contains 'COMMIT: ${{ needs.preflight.outputs.commit }}' 'release notes receive the preflight commit'
 assert_workflow_contains 'built from ${COMMIT}' 'release notes trace the preflight commit'
 assert_workflow_absent '${GITHUB_SHA}' 'release notes do not use dispatch-dependent GITHUB_SHA'
 assert_workflow_contains 'gh release create "$TAG" --verify-tag --draft' 'draft creation verifies the tag still exists'
+assert_workflow_count '[ "$actual_commit" = "$COMMIT" ]' 2 'draft creation and publication reject a moved tag'
 assert_workflow_count './scripts/release/posix-release-smoke.sh --version "$version" --platform' 3 'all three POSIX builders run the shared real-artifact smoke'
 assert_workflow_count 'Gate portable install and update with the real release JAR' 3 'all three POSIX smoke gates run before artifact upload'
 assert_workflow_count 'scripts\windows-check\update-fixture.ps1' 1 'Windows updater rollback fixture is a required release gate'
-assert_workflow_count 'actions/upload-artifact@v4' 4 'platform artifacts upload only through the four required build jobs'
+assert_workflow_count 'actions/upload-artifact@' 4 'platform artifacts upload only through the four required build jobs'
 
 awk '
   function finish_job() {
@@ -101,7 +103,7 @@ awk '
     finish_job()
   }
   job != "" && /posix-release-smoke\.sh/ { smoke=NR }
-  job != "" && /actions\/upload-artifact@v4/ { upload=NR }
+  job != "" && /actions\/upload-artifact@/ { upload=NR }
   END {
     finish_job()
     if (bad || checked != 3) exit 1
@@ -113,7 +115,7 @@ awk '
   /^  windows-x64:$/ { job=1; next }
   /^  [a-z0-9-]+:$/ && job { job=0 }
   job && /scripts\\windows-check\\update-fixture\.ps1/ { fixture=NR }
-  job && /actions\/upload-artifact@v4/ { upload=NR }
+  job && /actions\/upload-artifact@/ { upload=NR }
   END { if (!fixture || !upload || fixture >= upload) exit 1 }
 ' "$workflow" || fail 'Windows updater rollback fixture precedes artifact upload'
 pass 'Windows updater rollback fixture precedes artifact upload'
