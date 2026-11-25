@@ -57,6 +57,7 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 | Responsive horizontal overflow | - | `checkNoHorizontalOverflow()` | Review extreme content |
 | Browser console errors | - | `checkNoConsoleErrors()` | - |
 | Escape closes drawer and restores focus | - | `checkEscapeReturnsFocus()` | Confirm focus order |
+| Task links, clipboard fallback, history, and mobile drawer | - | `checkTaskLinks()` with isolated fixture | - |
 | Filter URL round trip | - | `checkFilterUrlRoundTrip()` | - |
 | Initial API call counts | - | `checkApiCallCounts()` | - |
 | Dependency graph quality | - | - | Visual review |

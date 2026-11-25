@@ -97,6 +97,11 @@ function loadRuntimeMcpConfig() {
   return runtimeMcpConfigRequest;
 }
 
+function routeId(name) {
+  const id = Number(new URLSearchParams(window.location.search).get(name));
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 async function fetchJson(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -395,6 +400,7 @@ const LevelTwo = {
       detail: null,
       detailLoading: false,
       detailError: null,
+      detailLinkFeedback: '',
       filters: {
         query: new URLSearchParams(window.location.search).get('taskQuery') || '',
         category: new URLSearchParams(window.location.search).get('taskCategory') || '',
@@ -419,6 +425,16 @@ const LevelTwo = {
   computed: {
     locale() {
       return i18nState.locale;
+    },
+    taskShareUrl() {
+      const url = new URL(window.location.href);
+      url.search = '';
+      url.hash = '';
+      url.username = '';
+      url.password = '';
+      url.searchParams.set('project', this.projectId);
+      url.searchParams.set('task', this.detailTaskId);
+      return url.href;
     },
     otherBlockedProjects() {
       return (this.projects || []).filter(p => p.id !== this.projectId && p.hasBlocked);
@@ -568,7 +584,7 @@ const LevelTwo = {
     };
     window.addEventListener('keydown', this._keyHandler);
     this._popstateHandler = () => {
-      if (this.detailTaskId !== null) this.dismissDetail();
+      if (routeId('project') === this.projectId) this.syncDetailFromUrl();
     };
     window.addEventListener('popstate', this._popstateHandler);
     this._liveSubscriptions = ['task.status_changed', 'tasks.created', 'task.updated'].map(type =>
@@ -587,6 +603,9 @@ const LevelTwo = {
       this.graphVertical = window.matchMedia('(max-width: 700px)').matches;
     };
     window.addEventListener('resize', this._resizeHandler);
+  },
+  mounted() {
+    this.syncDetailFromUrl();
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this._keyHandler);
@@ -763,22 +782,46 @@ const LevelTwo = {
       this.filters = { query: '', category: '', assignee: '', waiting: false, claimable: false };
       this.appliedQuery = '';
     },
-    async openDetail(taskId, event) {
-      const switching = this.detailTaskId !== null;
-      if (!switching) {
-        this._detailOpener = event && event.currentTarget;
-        window.history.pushState({ taskDrawer: true, taskId }, '');
+    syncDetailFromUrl() {
+      const taskId = routeId('task');
+      if (taskId === this.detailTaskId) return;
+      if (taskId === null) this.dismissDetail();
+      else this.presentDetail(taskId);
+    },
+    openDetail(taskId, event) {
+      if (taskId === this.detailTaskId) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set('task', taskId);
+      if (this.detailTaskId === null) {
+        this._detailOpener = event?.currentTarget;
+        window.history.pushState({ ...window.history.state, taskDrawer: true }, '', url);
+      } else {
+        window.history.replaceState(window.history.state, '', url);
       }
+      this.presentDetail(taskId);
+    },
+    async presentDetail(taskId) {
       this.detailTaskId = taskId;
       this.detail = null;
       this.detailError = null;
+      this.detailLinkFeedback = '';
       document.body.classList.add('drawer-open');
-      if (switching && window.history.state && window.history.state.taskDrawer) {
-        window.history.replaceState({ taskDrawer: true, taskId }, '');
-      }
       await nextTick();
-      if (this.$refs.detailClose) this.$refs.detailClose.focus();
+      if (this.detailTaskId !== taskId) return;
+      this.$refs.detailClose?.focus();
       this.loadDetail(taskId);
+    },
+    async copyTaskLink() {
+      const taskId = this.detailTaskId;
+      try {
+        await navigator.clipboard.writeText(this.taskShareUrl);
+        if (this.detailTaskId === taskId) this.detailLinkFeedback = 'levelTwo.linkCopied';
+      } catch {
+        if (this.detailTaskId !== taskId) return;
+        this.detailLinkFeedback = 'levelTwo.linkCopyFailed';
+        await nextTick();
+        this.$refs.taskLinkAddress?.focus();
+      }
     },
     async loadDetail(taskId, preserveScroll = false) {
       if (taskId === null || taskId === undefined) return;
@@ -809,8 +852,14 @@ const LevelTwo = {
       }
     },
     closeDetail() {
-      if (window.history.state && window.history.state.taskDrawer) window.history.back();
-      else this.dismissDetail();
+      if (window.history.state?.taskDrawer) {
+        window.history.back();
+        return;
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.delete('task');
+      window.history.replaceState(window.history.state, '', url);
+      this.dismissDetail();
     },
     dismissDetail() {
       this._detailController?.abort();
@@ -821,7 +870,9 @@ const LevelTwo = {
       this.detailLoading = false;
       document.body.classList.remove('drawer-open');
       nextTick(() => {
-        if (opener && document.contains(opener)) opener.focus();
+        if (this.detailTaskId !== null) return;
+        const target = opener && document.contains(opener) ? opener : this.$refs.boardBack;
+        target?.focus();
         this._detailOpener = null;
       });
     },
@@ -829,7 +880,7 @@ const LevelTwo = {
       const panel = this.$refs.detailPanel;
       if (!panel) return;
       const focusable = Array.from(panel.querySelectorAll(
-        'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+        'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
       ));
       if (!focusable.length) return;
       const first = focusable[0];
@@ -902,7 +953,7 @@ const LevelTwo = {
   template: `
     <div>
       <div class="board-header">
-        <button class="back-btn" @click="$emit('back')">{{ t('levelTwo.back') }}</button>
+        <button ref="boardBack" class="back-btn" @click="$emit('back')">{{ t('levelTwo.back') }}</button>
         <h2 class="board-title" v-if="board">{{ board.name }}</h2>
         <span v-if="projectArchived" class="archive-badge">{{ t('levelTwo.archivedReadOnly') }}</span>
         <span class="board-progress" v-if="board">{{ doneCount }}/{{ totalCount }}</span>
@@ -1032,12 +1083,19 @@ const LevelTwo = {
         class="detail-drawer"
         role="dialog"
         aria-modal="true"
-        :aria-labelledby="'task-detail-title-' + detailTaskId"
+        :aria-labelledby="(detail && !detailLoading && !detailError ? 'task-detail-title-' : 'task-detail-label-') + detailTaskId"
       >
         <div class="detail-toolbar">
-          <span class="detail-kicker">{{ t('levelTwo.detailTaskLabel', { id: detailTaskId }) }}</span>
-          <button ref="detailClose" type="button" class="detail-close" @click="closeDetail" :aria-label="t('levelTwo.closeDetail')">×</button>
+          <span class="detail-kicker" :id="'task-detail-label-' + detailTaskId">{{ t('levelTwo.detailTaskLabel', { id: detailTaskId }) }}</span>
+          <div class="detail-toolbar-actions">
+            <button v-if="detail" type="button" class="back-btn detail-copy-link" @click="copyTaskLink">{{ t('levelTwo.copyTaskLink') }}</button>
+            <button ref="detailClose" type="button" class="detail-close" @click="closeDetail" :aria-label="t('levelTwo.closeDetail')">×</button>
+          </div>
         </div>
+        <p class="detail-link-feedback" role="status">{{ detailLinkFeedback ? t(detailLinkFeedback) : '' }}</p>
+        <input v-if="detailLinkFeedback === 'levelTwo.linkCopyFailed'"
+          ref="taskLinkAddress" class="detail-link-address" type="text" readonly
+          :value="taskShareUrl" :aria-label="t('levelTwo.taskLinkAddress')" @focus="$event.target.select()">
 
         <div v-if="detailLoading" class="detail-skeleton" aria-live="polite" :aria-label="t('levelTwo.loadingDetail')">
           <span></span><span></span><span></span><span></span><span></span>
@@ -1192,8 +1250,7 @@ window.__boardBus = createEventBus();
 const app = createApp({
   components: { LevelOne, LevelTwo },
   setup() {
-    const initialProject = Number(new URLSearchParams(window.location.search).get('project'));
-    const currentProjectId = ref(Number.isSafeInteger(initialProject) && initialProject > 0 ? initialProject : null);
+    const currentProjectId = ref(routeId('project'));
     const projects = ref([]);
     const sseConnected = ref(false);
     const railFlashClass = ref('');
@@ -1317,6 +1374,7 @@ const app = createApp({
       if (id === currentProjectId.value) return;
       const url = new URL(window.location.href);
       url.searchParams.set('project', id);
+      url.searchParams.delete('task');
       window.history.pushState({ projectId: id }, '', url);
       currentProjectId.value = id;
     }
@@ -1324,13 +1382,13 @@ const app = createApp({
     function showProjectList() {
       const url = new URL(window.location.href);
       url.searchParams.delete('project');
+      url.searchParams.delete('task');
       window.history.pushState({ projectId: null }, '', url);
       currentProjectId.value = null;
     }
 
     function syncProjectFromUrl() {
-      const id = Number(new URLSearchParams(window.location.search).get('project'));
-      currentProjectId.value = Number.isSafeInteger(id) && id > 0 ? id : null;
+      currentProjectId.value = routeId('project');
     }
 
     function flashRail(statusLike) {
