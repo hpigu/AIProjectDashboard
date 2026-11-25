@@ -16,8 +16,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    name: 判斷 PR 檢查範圍
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      profile: ${{ steps.classify.outputs.profile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: 判斷變更檔案
+        id: classify
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          profile="$(bash scripts/ci/classify-changes.sh "$PR_BASE" HEAD)"
+          printf 'profile=%s\n' "$profile" >> "$GITHUB_OUTPUT"
+      - name: 檢查文件變更和安裝版號
+        if: steps.classify.outputs.profile == 'docs'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --check "$PR_BASE" HEAD --
+          ./scripts/check-versions.sh
+
   test:
     name: 測試（JDK 21）
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && needs.scope.outputs.profile == 'full')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -94,6 +123,8 @@ jobs:
 
   workers:
     name: Workers 測試與隔離備份演練（Node 22）
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && (needs.scope.outputs.profile == 'full' || needs.scope.outputs.profile == 'workers'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -124,6 +155,8 @@ jobs:
 
   scripts:
     name: 啟動腳本靜態檢查
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && needs.scope.outputs.profile == 'full')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -136,6 +169,7 @@ jobs:
         install/install.sh
         scripts/check-versions.sh scripts/shell-check/check.sh
         scripts/check-plugin-parity.sh
+        scripts/ci/classify-changes.sh scripts/ci/classify-changes-test.sh
         scripts/install-check/check.sh scripts/install-check/update-fixture.sh
         scripts/release/posix-release-smoke.sh scripts/release/release-assets-fixture.sh
         scripts/release/release-assets.sh
@@ -172,6 +206,9 @@ jobs:
       - name: bash 函式行為檢查
         run: ./scripts/shell-check/check.sh
 
+      - name: 驗證 PR 檢查分流規則
+        run: ./scripts/ci/classify-changes-test.sh
+
       - name: 驗證安裝、更新與發行資產格式
         run: |
           ./scripts/install-check/check.sh
@@ -194,6 +231,8 @@ jobs:
 
   windows-scripts:
     name: Windows 腳本檢查
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && needs.scope.outputs.profile == 'full')) }}
     runs-on: windows-latest
     timeout-minutes: 10
 
@@ -230,7 +269,7 @@ jobs:
 
   gate:
     name: CI gate
-    needs: [test, workers, scripts, windows-scripts, dependency-review]
+    needs: [scope, test, workers, scripts, windows-scripts, dependency-review]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -238,17 +277,31 @@ jobs:
     steps:
       - name: 確認必要檢查已通過
         env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          PR_PROFILE: ${{ needs.scope.outputs.profile }}
           JAVA_RESULT: ${{ needs.test.result }}
           WORKERS_RESULT: ${{ needs.workers.result }}
           SHELL_RESULT: ${{ needs.scripts.result }}
           WINDOWS_RESULT: ${{ needs.windows-scripts.result }}
           DEPENDENCIES_RESULT: ${{ needs.dependency-review.result }}
         run: |
-          printf 'Java=%s Workers=%s Shell=%s Windows=%s Dependencies=%s\n' \
-            "$JAVA_RESULT" "$WORKERS_RESULT" "$SHELL_RESULT" "$WINDOWS_RESULT" "$DEPENDENCIES_RESULT"
-          for result in "$JAVA_RESULT" "$WORKERS_RESULT" "$SHELL_RESULT" "$WINDOWS_RESULT"; do
-            [[ "$result" = success ]] || exit 1
-          done
+          profile=full
           if [[ "$GITHUB_EVENT_NAME" = pull_request ]]; then
+            [[ "$SCOPE_RESULT" = success ]] || exit 1
             [[ "$DEPENDENCIES_RESULT" = success ]] || exit 1
+            profile="$PR_PROFILE"
           fi
+          printf 'Profile=%s Java=%s Workers=%s Shell=%s Windows=%s Dependencies=%s\n' \
+            "$profile" "$JAVA_RESULT" "$WORKERS_RESULT" "$SHELL_RESULT" "$WINDOWS_RESULT" "$DEPENDENCIES_RESULT"
+          case "$profile" in
+            docs)
+              [[ "$JAVA_RESULT:$WORKERS_RESULT:$SHELL_RESULT:$WINDOWS_RESULT" = skipped:skipped:skipped:skipped ]]
+              ;;
+            workers)
+              [[ "$JAVA_RESULT:$WORKERS_RESULT:$SHELL_RESULT:$WINDOWS_RESULT" = skipped:success:skipped:skipped ]]
+              ;;
+            full)
+              [[ "$JAVA_RESULT:$WORKERS_RESULT:$SHELL_RESULT:$WINDOWS_RESULT" = success:success:success:success ]]
+              ;;
+            *) exit 1 ;;
+          esac
