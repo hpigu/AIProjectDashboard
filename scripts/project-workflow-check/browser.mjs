@@ -150,6 +150,7 @@ try {
   const rowIndex = await evaluate(`Array.from(document.querySelectorAll('.project-row')).findIndex(el=>el.textContent.includes(${JSON.stringify(projectName)}))`);
   assert.ok(rowIndex >= 0); await trueInputClick(`.project-row:nth-child(${rowIndex + 1})`);
   await until("document.querySelector('.workflow-panel')?.textContent.includes('未設定')");
+  await trueInputClick('.workflow-panel:not([open]) > summary');
   assert.ok(await evaluate("document.querySelector('.empty-state')?.textContent.includes('沒有任務') || !document.querySelector('.task-card')"));
   await trueInputClick('.workflow-prompt button');
   await until("document.querySelector('.workflow-panel')?.textContent.includes('已複製')");
@@ -188,7 +189,9 @@ try {
   current = await fixtureApproval(); assert.equal(current.active.confirmedBy, owner.actor);
   await until("document.querySelector('.workflow-panel')?.textContent.includes('已核准') && document.querySelector('.workflow-panel')?.textContent.includes('workflow-owner') && !document.querySelector('.workflow-panel')?.textContent.includes('待確認草稿')");
   await send('Page.reload');
-  await until("document.querySelector('.workflow-panel')?.textContent.includes('workflow-owner')");
+  await until("document.querySelector('.workflow-panel:not([open]) > summary')");
+  await trueInputClick('.workflow-panel:not([open]) > summary');
+  await until("document.querySelector('.workflow-panel[open]')?.innerText.includes('workflow-owner')");
   const displayed = await evaluate("document.querySelector('.workflow-panel').textContent");
   for (const value of Object.values(current.active.gitPolicy)) assert.ok(displayed.includes(value), 'Approved field displayed: ' + value);
   assert.equal((await summary()).revision, current.revision, 'Reading settings reuses active version without re-entering fields');
@@ -209,7 +212,7 @@ try {
   assert.equal(denied.status, 403); assert.equal((await summary()).revision, current.revision);
   record('Authorization / read-only boundary', 'Browser endpoint POST returns 405; prepare without management token returns 403 with unchanged revision');
   await send('Network.setBlockedURLs', { urls: [`*://*/api/projects/${projectId}/workflow`] });
-  await trueInputClick('.workflow-heading button');
+  await trueInputClick('.workflow-body > button');
   await until("document.querySelector('.workflow-panel')?.textContent.includes('設定讀取失敗')");
   await send('Network.setBlockedURLs', { urls: [] });
   await trueInputClick('.workflow-panel [role="alert"] button');

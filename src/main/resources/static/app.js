@@ -1,7 +1,9 @@
-const { createApp, ref, computed, onMounted, onBeforeUnmount, nextTick } = Vue;
+const { createApp, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = Vue;
 const { t, setLocale, state: i18nState, SUPPORTED_LOCALES } = window.__i18n;
 
-const STATUS_ORDER = ['DONE', 'IN_PROGRESS', 'BLOCKED', 'TODO'];
+const STATUS_ORDER = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'DONE'];
+const SEGMENT_ORDER = ['DONE', 'IN_PROGRESS', 'BLOCKED', 'TODO'];
+const PROJECT_STATUSES = ['ACTIVE', 'ARCHIVED', 'ALL'];
 const PROJECT_LIST_EVENTS = ['project.created', 'project.status_changed', 'tasks.created', 'task.updated', 'task.status_changed'];
 const RAIL_FLASH_CLASS = {
   'TODO': 'flash-todo',
@@ -120,18 +122,37 @@ function projectSummariesChanged(changes) {
     PROJECT_LIST_EVENTS.includes(type));
 }
 
+function completionPercent(done, total) {
+  if (!total) return 0;
+  return done === total ? 100 : Math.min(99, Math.round(done * 100 / total));
+}
+
+const StatusBar = {
+  props: ['counts'],
+  data() { return { segmentOrder: SEGMENT_ORDER }; },
+  template: `
+    <span class="segbar" aria-hidden="true">
+      <span v-for="status in segmentOrder" :key="status" :class="'st-' + status"
+        :style="{ flexGrow: counts[status] || 0 }"></span>
+    </span>
+  `,
+};
+
 const LevelOne = {
+  components: { StatusBar },
   props: ['projects', 'projectsLoading', 'projectsError'],
-  emits: ['select'],
+  emits: ['select', 'reload'],
   data() {
     const params = new URLSearchParams(window.location.search);
     return {
       filters: {
         query: params.get('projectQuery') || '',
-        status: params.get('projectStatus') || 'ACTIVE',
+        status: PROJECT_STATUSES.includes(params.get('projectStatus')) ? params.get('projectStatus') : 'ACTIVE',
         blocked: params.get('projectBlocked') === 'true',
         sort: params.get('projectSort') || 'UPDATED_DESC',
       },
+      projectStatuses: PROJECT_STATUSES,
+      statusOrder: STATUS_ORDER,
       filteredProjects: [],
       loading: false,
       error: null,
@@ -151,7 +172,21 @@ const LevelOne = {
         failed: 'levelOne.copyManually',
       }[this.copyState]);
     },
-    activeProjects() {
+    activeSummary() {
+      const summary = { projects: 0, inProgress: 0, blockedProjects: 0, done: 0 };
+      for (const project of this.projects) {
+        if (project.status !== 'ACTIVE') continue;
+        summary.projects += 1;
+        summary.inProgress += project.counts.IN_PROGRESS || 0;
+        summary.blockedProjects += project.hasBlocked ? 1 : 0;
+        summary.done += project.counts.DONE || 0;
+      }
+      return summary;
+    },
+    blockedShortcutOn() {
+      return this.filters.status === 'ACTIVE' && this.filters.blocked;
+    },
+    visibleProjects() {
       return this.hasFilters ? this.filteredProjects : this.projects.filter(p => p.status === 'ACTIVE');
     },
     listLoading() {
@@ -168,7 +203,7 @@ const LevelOne = {
     // 後者只要能清掉條件。projects 是未經篩選的清單，用它判斷才不會把
     // 「篩掉了」誤判成「還沒開始」。
     isFirstRun() {
-      return !this.hasFilters && (this.projects || []).length === 0;
+      return !this.hasFilters && this.projects.length === 0;
     },
     // 不寫死埠號：使用者可能用 BOARD_PORT 換過埠號，寫死會給出錯誤的接線指令。
     mcpEndpoint() {
@@ -198,25 +233,57 @@ const LevelOne = {
     'filters.sort'() { this.loadProjects(); },
   },
   template: `
-    <div>
+    <div class="overview">
+      <div class="page-heading">
+        <h2 class="page-title" tabindex="-1">{{ t('levelOne.overview') }}</h2>
+      </div>
+      <section v-if="projects.length" class="overview-metrics" :aria-label="t('levelOne.activeSummary')">
+        <div class="overview-metric">
+          <span class="metric-label"><span class="status-dot" aria-hidden="true"></span>{{ t('levelOne.activeProjects') }}</span>
+          <strong>{{ activeSummary.projects }}</strong>
+        </div>
+        <div class="overview-metric st-IN_PROGRESS">
+          <span class="metric-label"><span class="status-dot" aria-hidden="true"></span>{{ t('levelOne.inProgressTasks') }}</span>
+          <strong>{{ activeSummary.inProgress }}</strong>
+        </div>
+        <button type="button" class="overview-metric metric-action st-BLOCKED" :aria-pressed="blockedShortcutOn"
+          @click="toggleBlockedProjects">
+          <span class="metric-label"><span class="status-dot" aria-hidden="true"></span>{{ t('levelOne.blockedProjects') }}</span>
+          <strong>{{ activeSummary.blockedProjects }}</strong>
+          <span class="metric-arrow" aria-hidden="true">↗</span>
+        </button>
+        <div class="overview-metric st-DONE">
+          <span class="metric-label"><span class="status-dot" aria-hidden="true"></span>{{ t('levelOne.completedTasks') }}</span>
+          <strong>{{ activeSummary.done }}</strong>
+        </div>
+      </section>
+      <div class="section-heading">
+        <h3>{{ t('levelOne.projects') }}</h3>
+        <span v-if="!listLoading && !listError" class="result-count" role="status">{{ t('levelOne.resultCount', { count: visibleProjects.length }) }}</span>
+      </div>
       <section class="filter-panel project-filters" :aria-label="t('levelOne.filterLabel')">
         <label class="filter-field filter-search"><span>{{ t('levelOne.queryLabel') }}</span>
-          <input v-model="filters.query" type="search" :placeholder="t('levelOne.queryPlaceholder')" autocomplete="off">
+          <span class="search-input"><span class="search-icon" aria-hidden="true"></span>
+            <input v-model="filters.query" type="search" :placeholder="t('levelOne.queryPlaceholder')" autocomplete="off">
+          </span>
         </label>
         <div class="filter-field"><span>{{ t('levelOne.statusLabel') }}</span>
           <div class="filter-choice" role="group" :aria-label="t('levelOne.statusGroupLabel')">
-            <button v-for="status in ['ACTIVE', 'ARCHIVED', 'ALL']" :key="status" type="button"
-              :class="{ selected: filters.status === status }" @click="filters.status = status">{{ status }}</button>
+            <button v-for="status in projectStatuses" :key="status" type="button" :aria-pressed="filters.status === status"
+              :class="{ selected: filters.status === status }" @click="filters.status = status">{{ projectStatusLabel(status) }}</button>
           </div>
         </div>
-        <label class="filter-check"><input v-model="filters.blocked" type="checkbox"> {{ t('levelOne.blockedOnly') }}</label>
         <label class="filter-field filter-sort"><span>{{ t('levelOne.sortLabel') }}</span>
           <select v-model="filters.sort"><option value="UPDATED_DESC">{{ t('levelOne.sortUpdatedDesc') }}</option><option value="NAME">{{ t('levelOne.sortName') }}</option><option value="PROGRESS">{{ t('levelOne.sortProgress') }}</option></select>
         </label>
+        <label class="filter-check"><input v-model="filters.blocked" type="checkbox"> {{ t('levelOne.blockedOnly') }}</label>
         <button type="button" class="filter-clear" @click="clearFilters" :disabled="!hasFilters">{{ t('levelOne.clearFilters') }}</button>
       </section>
-      <div v-if="listError" class="empty-state">{{ listError }}</div>
-      <section v-else-if="!listLoading && activeProjects.length === 0 && isFirstRun" class="onboarding" :aria-label="t('levelOne.onboardingLabel')">
+      <div v-if="listError" class="empty-state" role="alert">
+        {{ listError }} <button type="button" class="filter-clear" @click="hasFilters ? loadProjects() : $emit('reload')">{{ t('levelTwo.reload') }}</button>
+      </div>
+      <div v-else-if="listLoading && !visibleProjects.length" class="empty-state" role="status">{{ t('levelOne.loadingProjects') }}</div>
+      <section v-else-if="isFirstRun" class="onboarding" :aria-label="t('levelOne.onboardingLabel')">
         <h2 class="onboarding-title">{{ t('levelOne.onboardingTitle') }}</h2>
         <p class="onboarding-lead">
           {{ t('levelOne.onboardingLead') }}
@@ -241,35 +308,33 @@ const LevelOne = {
         </ol>
         <p class="onboarding-foot">{{ t('levelOne.onboardingFoot') }}</p>
       </section>
-      <div v-else-if="!listLoading && activeProjects.length === 0" class="empty-state">
+      <div v-else-if="!visibleProjects.length" class="empty-state">
         {{ t('levelOne.noMatch') }}
-        <button type="button" class="filter-clear" @click="clearFilters" :disabled="!hasFilters">{{ t('levelOne.clearFilters') }}</button>
+        <button v-if="hasFilters" type="button" class="filter-clear" @click="clearFilters">{{ t('levelOne.clearFilters') }}</button>
+        <button v-else type="button" class="filter-clear" @click="filters.status = 'ALL'">{{ t('projectStatus.ALL') }}</button>
       </div>
-      <div v-else>
-        <button
-          v-for="p in activeProjects"
-          :key="p.id"
-          class="project-row"
-          :class="{ blocked: p.hasBlocked }"
-          @click="$emit('select', p)"
-        >
-          <div class="project-row-top">
-            <div class="project-name">
-              {{ p.name }}
-              <span v-if="p.hasBlocked" class="blocked-badge">{{ t('levelOne.blockedBadge') }}</span>
-              <span v-if="p.status === 'ARCHIVED'" class="archive-badge">{{ t('levelOne.archived') }}</span>
-            </div>
-            <div class="project-meta">
-              <span>{{ p.counts.DONE }}/{{ p.total }}</span>
-              <span>{{ relTime(p.updatedAt) }}</span>
-            </div>
-          </div>
-          <div class="segbar">
-            <div class="seg-done" :style="segStyle(p, 'DONE')"></div>
-            <div class="seg-progress" :style="segStyle(p, 'IN_PROGRESS')"></div>
-            <div class="seg-blocked" :style="segStyle(p, 'BLOCKED')"></div>
-            <div class="seg-todo" :style="segStyle(p, 'TODO')"></div>
-          </div>
+      <div v-else class="project-grid" :aria-busy="listLoading">
+        <button v-for="p in visibleProjects" :key="p.id" type="button" class="project-row"
+          :class="{ blocked: p.hasBlocked }" @click="$emit('select', p)">
+          <span class="project-row-top">
+            <span class="project-name">{{ p.name }}</span>
+            <span class="project-arrow" aria-hidden="true">↗</span>
+          </span>
+          <span class="project-row-meta">
+            <span v-if="p.status === 'ARCHIVED'" class="archive-badge">{{ t('projectStatus.ARCHIVED') }}</span>
+            <span v-if="p.hasBlocked" class="blocked-badge"><span class="status-dot" aria-hidden="true"></span>{{ t('levelOne.blockedBadge') }}</span>
+            <time class="project-updated" :datetime="p.updatedAt" :title="p.updatedAt">{{ relTime(p.updatedAt) }}</time>
+          </span>
+          <span class="project-progress">
+            <span>{{ t('levelOne.completedCount', { done: p.counts.DONE, total: p.total }) }}</span>
+            <strong>{{ percentDone(p.counts.DONE, p.total) }}%</strong>
+          </span>
+          <status-bar :counts="p.counts"></status-bar>
+          <span class="project-status-counts">
+            <span v-for="status in statusOrder" :key="status" :class="'st-' + status">
+              <span class="status-dot" aria-hidden="true"></span>{{ taskStatusLabel(status) }} <b>{{ p.counts[status] || 0 }}</b>
+            </span>
+          </span>
         </button>
       </div>
     </div>
@@ -292,6 +357,7 @@ const LevelOne = {
       window.history.replaceState(window.history.state, '', url);
     },
     async loadProjects() {
+      clearTimeout(this.searchTimer);
       this.syncFiltersToUrl();
       if (this.requestController) this.requestController.abort();
       if (!this.hasFilters) return;
@@ -303,9 +369,10 @@ const LevelOne = {
       if (this.filters.query) params.set('q', this.filters.query);
       if (this.filters.blocked) params.set('blocked', 'true');
       try {
-        this.filteredProjects = await fetchJson('/api/projects?' + params.toString(), { signal: controller.signal });
+        const projects = await fetchJson('/api/projects?' + params.toString(), { signal: controller.signal });
+        if (!controller.signal.aborted) this.filteredProjects = projects;
       } catch (e) {
-        if (e.name !== 'AbortError') this.error = e.message;
+        if (!controller.signal.aborted) this.error = e.message;
       } finally {
         if (!controller.signal.aborted) this.loading = false;
       }
@@ -326,12 +393,16 @@ const LevelOne = {
       if (this.copyTimer) clearTimeout(this.copyTimer);
       this.copyTimer = setTimeout(() => { this.copyState = 'idle'; }, 2000);
     },
-    relTime(iso) { return relativeTime(iso); },
-    segStyle(p, key) {
-      const total = p.total || 1;
-      const value = p.counts[key] || 0;
-      return { flexGrow: value, flexBasis: '0', width: (value / total * 100) + '%' };
+    toggleBlockedProjects() {
+      if (this.blockedShortcutOn) {
+        this.filters.blocked = false;
+        return;
+      }
+      this.filters = { ...this.filters, query: '', status: 'ACTIVE', blocked: true };
     },
+    projectStatusLabel: status => t(`projectStatus.${status}`),
+    relTime: relativeTime,
+    percentDone: completionPercent,
   },
 };
 
@@ -368,46 +439,50 @@ const ProjectWorkflow = {
     },
   },
   template: `
-    <section class="workflow-panel" :aria-label="t('workflow.title')">
-      <div class="workflow-heading"><h3>{{ t('workflow.title') }}</h3>
+    <details class="workflow-panel">
+      <summary class="workflow-heading">
+        <span>{{ t('workflow.title') }}</span>
         <span v-if="workflow" class="workflow-state">{{ workflowText('status', workflow.status) }}</span>
-        <button type="button" class="back-btn" @click="load" :disabled="loading">{{ t('workflow.refresh') }}</button>
+      </summary>
+      <div class="workflow-body">
+        <button type="button" class="filter-clear" @click="load" :disabled="loading">{{ t('workflow.refresh') }}</button>
+        <p v-if="loading" role="status">{{ t('workflow.loading') }}</p>
+        <p v-if="error" role="alert">{{ t('workflow.loadError') }} {{ error }} <button type="button" @click="load">{{ t('workflow.retry') }}</button></p>
+        <template v-if="workflow && !error">
+          <p v-if="!workflow.active">{{ workflow.status === 'LEGACY' ? t('workflow.legacy') : t('workflow.notConfigured') }}</p>
+          <details v-if="workflow.active" class="workflow-details" open>
+            <summary>{{ t('workflow.active') }} · {{ workflow.active.version }}</summary>
+            <dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.active.gitPolicy[field]) }}</dd></template></dl>
+            <p>{{ t('workflow.approved') }}：{{ workflow.active.confirmedBy }} · {{ workflow.active.confirmedAt }}</p>
+            <p>{{ t('workflow.approvalRef') }}：{{ workflow.active.approvalRef }}</p>
+            <details><summary>{{ t('workflow.sources') }}</summary><ul><li v-for="(source, i) in workflow.active.sources" :key="i">{{ workflowText('fields', source.field) }} · {{ workflowText('sourceKind', source.kind) }} · {{ source.ref }} · {{ source.version }} — {{ source.detail }}</li></ul></details>
+          </details>
+          <details v-if="workflow.draft" class="workflow-details" open>
+            <summary>{{ t('workflow.draft') }} · {{ workflow.draft.version }}</summary>
+            <p>{{ workflow.draft.readyForConfirmation ? t('workflow.ready') : t('workflow.incomplete') }}</p>
+            <p v-if="workflow.active">{{ t('workflow.draftKeepsActive') }}</p>
+            <dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.draft.gitPolicy[field]) }}</dd></template></dl>
+            <p v-if="workflow.draft.missingFields.length">{{ t('workflow.missingFields') }}：{{ workflow.draft.missingFields.map(field => workflowText('fields', field)).join('、') }}</p>
+            <ul v-if="workflow.draft.questions.length"><li v-for="(question, i) in workflow.draft.questions" :key="i">{{ workflowText('fields', question.field) }}：{{ question.question }}</li></ul>
+            <details v-if="workflow.draft.changes.length"><summary>{{ t('workflow.changes') }}</summary><ul><li v-for="change in workflow.draft.changes" :key="change.field">{{ workflowText('fields', change.field) }}：{{ value(change.before) }} → {{ value(change.after) }}</li></ul></details>
+            <details><summary>{{ t('workflow.sources') }}</summary><ul><li v-for="(source, i) in workflow.draft.sources" :key="i">{{ workflowText('fields', source.field) }} · {{ workflowText('sourceKind', source.kind) }} · {{ source.ref }} · {{ source.version }} — {{ source.detail }}</li></ul></details>
+          </details>
+          <details v-if="workflow.legacy"><summary>{{ t('workflow.legacyTitle') }}</summary><dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.legacy.gitPolicy[field]) }}</dd></template></dl></details>
+        </template>
+        <p>{{ t('workflow.dialogHelp') }}</p>
+        <div class="workflow-prompt"><code>{{ prompt }}</code><button type="button" class="back-btn" @click="copyPrompt">{{ t('workflow.copy') }}</button></div>
+        <p v-if="copyState" role="status">{{ workflowText(copyState) }}</p>
       </div>
-      <p v-if="loading" role="status">{{ t('workflow.loading') }}</p>
-      <p v-if="error" role="alert">{{ t('workflow.loadError') }} {{ error }} <button type="button" @click="load">{{ t('workflow.retry') }}</button></p>
-      <template v-if="workflow && !error">
-        <p v-if="!workflow.active">{{ workflow.status === 'LEGACY' ? t('workflow.legacy') : t('workflow.notConfigured') }}</p>
-        <details v-if="workflow.active" class="workflow-details" open>
-          <summary>{{ t('workflow.active') }} · {{ workflow.active.version }}</summary>
-          <dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.active.gitPolicy[field]) }}</dd></template></dl>
-          <p>{{ t('workflow.approved') }}：{{ workflow.active.confirmedBy }} · {{ workflow.active.confirmedAt }}</p>
-          <p>{{ t('workflow.approvalRef') }}：{{ workflow.active.approvalRef }}</p>
-          <details><summary>{{ t('workflow.sources') }}</summary><ul><li v-for="(source, i) in workflow.active.sources" :key="i">{{ workflowText('fields', source.field) }} · {{ workflowText('sourceKind', source.kind) }} · {{ source.ref }} · {{ source.version }} — {{ source.detail }}</li></ul></details>
-        </details>
-        <details v-if="workflow.draft" class="workflow-details" open>
-          <summary>{{ t('workflow.draft') }} · {{ workflow.draft.version }}</summary>
-          <p>{{ workflow.draft.readyForConfirmation ? t('workflow.ready') : t('workflow.incomplete') }}</p>
-          <p v-if="workflow.active">{{ t('workflow.draftKeepsActive') }}</p>
-          <dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.draft.gitPolicy[field]) }}</dd></template></dl>
-          <p v-if="workflow.draft.missingFields.length">{{ t('workflow.missingFields') }}：{{ workflow.draft.missingFields.map(field => workflowText('fields', field)).join('、') }}</p>
-          <ul v-if="workflow.draft.questions.length"><li v-for="(question, i) in workflow.draft.questions" :key="i">{{ workflowText('fields', question.field) }}：{{ question.question }}</li></ul>
-          <details v-if="workflow.draft.changes.length"><summary>{{ t('workflow.changes') }}</summary><ul><li v-for="change in workflow.draft.changes" :key="change.field">{{ workflowText('fields', change.field) }}：{{ value(change.before) }} → {{ value(change.after) }}</li></ul></details>
-          <details><summary>{{ t('workflow.sources') }}</summary><ul><li v-for="(source, i) in workflow.draft.sources" :key="i">{{ workflowText('fields', source.field) }} · {{ workflowText('sourceKind', source.kind) }} · {{ source.ref }} · {{ source.version }} — {{ source.detail }}</li></ul></details>
-        </details>
-        <details v-if="workflow.legacy"><summary>{{ t('workflow.legacyTitle') }}</summary><dl class="workflow-fields"><template v-for="field in fields" :key="field"><dt>{{ workflowText('fields', field) }}</dt><dd>{{ value(workflow.legacy.gitPolicy[field]) }}</dd></template></dl></details>
-      </template>
-      <p>{{ t('workflow.dialogHelp') }}</p>
-      <div class="workflow-prompt"><code>{{ prompt }}</code><button type="button" class="back-btn" @click="copyPrompt">{{ t('workflow.copy') }}</button></div>
-      <p v-if="copyState" role="status">{{ workflowText(copyState) }}</p>
-    </section>
+    </details>
   `,
 };
 
 const LevelTwo = {
-  components: { ProjectWorkflow },
+  components: { ProjectWorkflow, StatusBar },
   props: ['projectId', 'projects', 'projectSummary'],
   emits: ['back', 'jump'],
   data() {
+    const params = new URLSearchParams(window.location.search);
     return {
       board: null,
       error: null,
@@ -417,17 +492,19 @@ const LevelTwo = {
       detailLoading: false,
       detailError: null,
       filters: {
-        query: new URLSearchParams(window.location.search).get('taskQuery') || '',
-        category: new URLSearchParams(window.location.search).get('taskCategory') || '',
-        assignee: new URLSearchParams(window.location.search).get('taskAssignee') || '',
-        waiting: new URLSearchParams(window.location.search).get('taskWaiting') === 'true',
-        claimable: new URLSearchParams(window.location.search).get('taskClaimable') === 'true',
+        query: params.get('taskQuery') || '',
+        category: params.get('taskCategory') || '',
+        assignee: params.get('taskAssignee') || '',
+        waiting: params.get('taskWaiting') === 'true',
+        claimable: params.get('taskClaimable') === 'true',
       },
-      appliedQuery: new URLSearchParams(window.location.search).get('taskQuery') || '',
+      appliedQuery: params.get('taskQuery') || '',
       searchTimer: null,
-      advancedOpen: window.matchMedia('(min-width: 701px)').matches,
+      advancedOpen: false,
+      mobileLane: null,
+      statusOrder: STATUS_ORDER,
       boardController: null,
-      viewMode: new URLSearchParams(window.location.search).get('view') === 'dependencies' ? 'dependencies' : 'kanban',
+      viewMode: params.get('view') === 'dependencies' ? 'dependencies' : 'kanban',
       graph: null,
       graphError: null,
       graphLoading: false,
@@ -442,14 +519,35 @@ const LevelTwo = {
       return i18nState.locale;
     },
     otherBlockedProjects() {
-      return (this.projects || []).filter(p => p.id !== this.projectId && p.hasBlocked);
+      return (this.projects || []).filter(p => p.id !== this.projectId && p.status === 'ACTIVE' && p.hasBlocked);
+    },
+    boardCounts() {
+      return Object.fromEntries(STATUS_ORDER.map(status => [status, this.board?.columns[status]?.length || 0]));
     },
     totalCount() {
-      if (!this.board) return 0;
-      return STATUS_ORDER.reduce((sum, s) => sum + (this.board.columns[s] || []).length, 0);
+      return Object.values(this.boardCounts).reduce((total, count) => total + count, 0);
     },
     doneCount() {
-      return this.board ? (this.board.columns.DONE || []).length : 0;
+      return this.boardCounts.DONE;
+    },
+    progressPercent() {
+      return completionPercent(this.doneCount, this.totalCount);
+    },
+    filteredColumns() {
+      return Object.fromEntries(STATUS_ORDER.map(status => [status, (this.board?.columns[status] || []).filter(task => {
+        const waiting = Boolean(task.waitingFor?.length);
+        const claimable = !this.projectArchived && status === 'TODO' && !waiting;
+        return this.matchesTaskFilters(task, waiting, claimable);
+      })]));
+    },
+    matchedTaskCount() {
+      return Object.values(this.filteredColumns).reduce((total, tasks) => total + tasks.length, 0);
+    },
+    selectedLane() {
+      return this.mobileLane || STATUS_ORDER.find(status => this.filteredColumns[status].length) || STATUS_ORDER[0];
+    },
+    advancedFilterCount() {
+      return Number(Boolean(this.filters.assignee)) + Number(this.filters.waiting) + Number(this.filters.claimable);
     },
     categories() {
       return [...new Set(this.allTasks.map(task => task.category).filter(Boolean))].sort();
@@ -483,16 +581,10 @@ const LevelTwo = {
         downstream.get(edge.prerequisiteTaskId).push(edge.taskId);
       });
 
-      const matches = (node) => {
-        const query = this.appliedQuery.trim().toLocaleLowerCase();
-        const titleMatches = !query || node.title.toLocaleLowerCase().startsWith(query);
-        const categoryMatches = !this.filters.category || node.category === this.filters.category;
-        const assigneeMatches = !this.filters.assignee
-          || (this.filters.assignee === '__unassigned__' ? !node.assignee : node.assignee === this.filters.assignee);
-        const waiting = prerequisites.get(node.id).some(id => nodesById.get(id).status !== 'DONE');
-        return titleMatches && categoryMatches && assigneeMatches
-          && (!this.filters.waiting || waiting) && (!this.filters.claimable || node.claimable);
-      };
+      const boardWaiting = new Map(this.allTasks.map(task => [task.id, task.waitingFor || []]));
+      const waitingFor = node => boardWaiting.get(node.id)
+        ?? prerequisites.get(node.id).filter(id => nodesById.get(id).status !== 'DONE');
+      const matches = node => this.matchesTaskFilters(node, waitingFor(node).length > 0, node.claimable);
       const categoryVisible = (node) => !this.graphHiddenCategories[node.category];
       const filteredNodes = allNodes.filter(node => matches(node) && categoryVisible(node));
       let selectedIds = new Set(filteredNodes.map(node => node.id));
@@ -551,8 +643,7 @@ const LevelTwo = {
       const maxLayer = Math.max(0, layers.length - 1);
       const positioned = [];
       layers.forEach((layer, layerIndex) => (layer || []).forEach((node, rowIndex) => {
-        positioned.push({ ...node, layer: layerIndex, row: rowIndex,
-          waiting: prerequisites.get(node.id).some(id => nodesById.get(id).status !== 'DONE') });
+        positioned.push({ ...node, layer: layerIndex, row: rowIndex, waitingFor: waitingFor(node) });
       }));
       const longestEnd = positioned.length ? positioned.reduce((best, node) =>
         (distanceById.get(node.id) || 1) > (distanceById.get(best.id) || 1) ? node : best, positioned[0]) : null;
@@ -582,7 +673,7 @@ const LevelTwo = {
     this._keyHandler = (e) => {
       if (e.key === 'Escape') {
         if (this.detailTaskId !== null) this.closeDetail();
-        else this.$emit('back');
+        else if (!e.target.closest?.('input, select, textarea')) this.$emit('back');
       } else if (e.key === 'Tab' && this.detailTaskId !== null) {
         this.keepFocusInDrawer(e);
       }
@@ -608,7 +699,6 @@ const LevelTwo = {
       }
     });
     this._resizeHandler = () => {
-      if (window.matchMedia('(min-width: 701px)').matches) this.advancedOpen = true;
       this.graphVertical = window.matchMedia('(max-width: 700px)').matches;
     };
     window.addEventListener('resize', this._resizeHandler);
@@ -748,31 +838,18 @@ const LevelTwo = {
         ? { gridTemplateColumns: `repeat(${layout.maxRows}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${layout.layers}, 144px)` }
         : { gridTemplateColumns: `repeat(${layout.layers}, minmax(220px, 1fr))`, gridTemplateRows: `repeat(${layout.maxRows}, 144px)` };
     },
-    graphWaitingIds(node) {
-      if (!this.graph) return [];
-      const nodesById = new Map(this.graph.nodes.map(item => [item.id, item]));
-      return this.graph.edges
-        .filter(edge => edge.taskId === node.id && nodesById.get(edge.prerequisiteTaskId).status !== 'DONE')
-        .map(edge => edge.prerequisiteTaskId);
-    },
-    column(status) {
-      return this.allTasks.filter(task => task.status === status && this.matchesTaskFilters(task));
-    },
-    columnTotal(status) {
-      return this.board ? (this.board.columns[status] || []).length : 0;
-    },
-    matchesTaskFilters(task) {
+    matchesTaskFilters(task, waiting, claimable) {
       const query = this.appliedQuery.trim().toLocaleLowerCase();
-      const titleMatches = !query || task.title.toLocaleLowerCase().startsWith(query);
+      const id = String(task.id);
+      const queryMatches = !query || query === id || query === '#' + id || task.title.toLocaleLowerCase().includes(query);
       const categoryMatches = !this.filters.category || task.category === this.filters.category;
       const assigneeMatches = !this.filters.assignee
         || (this.filters.assignee === '__unassigned__' ? !task.assignee : task.assignee === this.filters.assignee);
-      const waiting = task.waitingFor && task.waitingFor.length > 0;
-      const claimable = !this.projectArchived && task.status === 'TODO' && !waiting;
-      return titleMatches && categoryMatches && assigneeMatches
+      return queryMatches && categoryMatches && assigneeMatches
         && (!this.filters.waiting || waiting) && (!this.filters.claimable || claimable);
     },
     syncFiltersToUrl() {
+      this.mobileLane = null;
       const url = new URL(window.location.href);
       const values = {
         taskQuery: this.filters.query,
@@ -783,6 +860,11 @@ const LevelTwo = {
       };
       Object.entries(values).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key));
       window.history.replaceState(window.history.state, '', url);
+    },
+    setTaskAvailability(filter) {
+      const other = filter === 'waiting' ? 'claimable' : 'waiting';
+      this.filters[filter] = !this.filters[filter];
+      if (this.filters[filter]) this.filters[other] = false;
     },
     clearTaskFilters() {
       this.filters = { query: '', category: '', assignee: '', waiting: false, claimable: false };
@@ -846,7 +928,8 @@ const LevelTwo = {
       this.detailLoading = false;
       document.body.classList.remove('drawer-open');
       nextTick(() => {
-        if (opener && document.contains(opener)) opener.focus();
+        if (opener?.isConnected && opener.getClientRects().length) opener.focus();
+        else this.$refs.taskSearch?.focus();
         this._detailOpener = null;
       });
     },
@@ -854,12 +937,15 @@ const LevelTwo = {
       const panel = this.$refs.detailPanel;
       if (!panel) return;
       const focusable = Array.from(panel.querySelectorAll(
-        'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+        'button:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])'
       ));
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (!panel.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -925,77 +1011,113 @@ const LevelTwo = {
     },
   },
   template: `
-    <div>
+    <div class="project-board">
+      <div class="board-nav">
+        <button type="button" class="back-btn" @click="$emit('back')">{{ t('levelTwo.back') }}</button>
+      </div>
       <div class="board-header">
-        <button class="back-btn" @click="$emit('back')">{{ t('levelTwo.back') }}</button>
-        <h2 class="board-title" v-if="board">{{ board.name }}</h2>
-        <span v-if="projectArchived" class="archive-badge">{{ t('levelTwo.archivedReadOnly') }}</span>
-        <span class="board-progress" v-if="board">{{ doneCount }}/{{ totalCount }}</span>
-        <button
-          v-for="p in otherBlockedProjects"
-          :key="p.id"
-          class="blocked-elsewhere"
-          @click="$emit('jump', p.id)"
-        >⚠ {{ p.name }}</button>
+        <div class="board-heading">
+          <h2 class="page-title board-title" tabindex="-1">{{ board?.name || projectSummary?.name || t('levelTwo.viewKanban') }}</h2>
+          <span v-if="projectArchived" class="archive-badge">{{ t('levelTwo.archivedReadOnly') }}</span>
+        </div>
+        <div v-if="board" class="board-progress-summary">
+          <div class="board-progress-heading">
+            <span>{{ t('levelTwo.projectProgress') }}</span>
+            <strong>{{ progressPercent }}%</strong>
+          </div>
+          <status-bar :counts="boardCounts"></status-bar>
+          <span class="board-progress">{{ doneCount }}/{{ totalCount }}</span>
+        </div>
       </div>
-      <project-workflow :project-id="projectId" :project-name="board?.name || projectSummary?.name"></project-workflow>
-      <div v-if="board" class="view-switch" role="tablist" :aria-label="t('levelTwo.viewSwitchLabel')">
-        <button type="button" role="tab" :aria-selected="viewMode === 'kanban'" :class="{ selected: viewMode === 'kanban' }" @click="setViewMode('kanban')">{{ t('levelTwo.viewKanban') }}</button>
-        <button type="button" role="tab" :aria-selected="viewMode === 'dependencies'" :class="{ selected: viewMode === 'dependencies' }" @click="setViewMode('dependencies')">{{ t('levelTwo.viewDependencies') }}</button>
+      <div v-if="board || error" class="board-actions">
+        <div v-if="board && totalCount" class="view-switch" role="group" :aria-label="t('levelTwo.viewSwitchLabel')">
+          <button type="button" :aria-pressed="viewMode === 'kanban'" :class="{ selected: viewMode === 'kanban' }" @click="setViewMode('kanban')">
+            <span class="kanban-icon" aria-hidden="true"></span>{{ t('levelTwo.viewKanban') }}
+          </button>
+          <button type="button" :aria-pressed="viewMode === 'dependencies'" :class="{ selected: viewMode === 'dependencies' }" @click="setViewMode('dependencies')">
+            <span class="dependencies-icon" aria-hidden="true"></span>{{ t('levelTwo.viewDependencies') }}
+          </button>
+        </div>
+        <project-workflow :project-id="projectId" :project-name="board?.name || projectSummary?.name"></project-workflow>
       </div>
-      <div v-if="error" class="empty-state">{{ error }}</div>
-      <div v-else-if="board && totalCount === 0" class="empty-state">{{ t('levelTwo.noTasks') }}</div>
-      <div v-else-if="board && viewMode === 'kanban'" class="columns">
+      <div v-if="error" class="empty-state" role="alert">
+        {{ error }} <button type="button" class="filter-clear" @click="loadBoard">{{ t('levelTwo.reload') }}</button>
+      </div>
+      <p v-else-if="!board" class="empty-state" role="status">{{ t('levelTwo.loadingBoard') }}</p>
+      <p v-else-if="totalCount === 0" class="empty-state">{{ t('levelTwo.noTasks') }}</p>
+      <template v-else>
         <section class="filter-panel task-filters" :aria-label="t('levelTwo.filterLabel')">
           <label class="filter-field filter-search"><span>{{ t('levelTwo.taskQueryLabel') }}</span>
-            <input v-model="filters.query" type="search" :placeholder="t('levelTwo.taskQueryPlaceholder')" autocomplete="off">
+            <span class="search-input"><span class="search-icon" aria-hidden="true"></span>
+              <input ref="taskSearch" v-model="filters.query" type="search" :placeholder="t('levelTwo.taskQueryPlaceholder')" autocomplete="off">
+            </span>
           </label>
-          <label class="filter-field"><span>{{ t('levelTwo.categoryLabel') }}</span>
+          <label class="filter-field filter-category"><span>{{ t('levelTwo.categoryLabel') }}</span>
             <select v-model="filters.category"><option value="">{{ t('levelTwo.allCategories') }}</option><option v-for="category in categories" :key="category" :value="category">{{ category }}</option></select>
           </label>
-          <button type="button" class="advanced-trigger" @click="advancedOpen = true">{{ t('levelTwo.advancedTrigger') }}</button>
-          <button type="button" class="filter-clear" @click="clearTaskFilters" :disabled="!hasTaskFilters">{{ t('levelTwo.clearFilters') }}</button>
+          <div class="filter-buttons">
+            <button type="button" class="advanced-trigger" aria-controls="task-advanced-filters" :aria-expanded="advancedOpen"
+              @click="advancedOpen = !advancedOpen">{{ t('levelTwo.advancedTrigger') }}<span v-if="advancedFilterCount" class="filter-count">{{ advancedFilterCount }}</span></button>
+            <button type="button" class="filter-clear" @click="clearTaskFilters" :disabled="!hasTaskFilters">{{ t('levelTwo.clearFilters') }}</button>
+          </div>
         </section>
-        <div v-if="advancedOpen" class="filter-sheet-backdrop" @click="advancedOpen = false"></div>
-        <section v-if="advancedOpen" class="filter-advanced" :aria-label="t('levelTwo.advancedFilterLabel')">
-          <div class="filter-sheet-head"><strong>{{ t('levelTwo.advancedTitle') }}</strong><button type="button" @click="advancedOpen = false" :aria-label="t('levelTwo.closeAdvanced')">×</button></div>
+        <section v-show="advancedOpen" id="task-advanced-filters" class="filter-advanced" :aria-label="t('levelTwo.advancedFilterLabel')">
           <label class="filter-field"><span>{{ t('levelTwo.assigneeLabel') }}</span>
             <select v-model="filters.assignee"><option value="">{{ t('levelTwo.allAssignees') }}</option><option value="__unassigned__">{{ t('levelTwo.unassigned') }}</option><option v-for="assignee in assignees" :key="assignee" :value="assignee">@{{ assignee }}</option></select>
           </label>
-          <label class="filter-check"><input v-model="filters.waiting" type="checkbox"> {{ t('levelTwo.waitingOnly') }}</label>
-          <label class="filter-check"><input v-model="filters.claimable" type="checkbox"> {{ t('levelTwo.claimableOnly') }}</label>
-          <p class="filter-help">{{ t('levelTwo.claimableHelp') }}</p>
+          <button type="button" class="filter-clear availability-filter" :aria-pressed="filters.waiting" @click="setTaskAvailability('waiting')">{{ t('levelTwo.waitingOnly') }}</button>
+          <button type="button" class="filter-clear availability-filter" :aria-pressed="filters.claimable" @click="setTaskAvailability('claimable')" :disabled="projectArchived" :title="t('levelTwo.claimableHelp')">{{ t('levelTwo.claimableOnly') }}</button>
         </section>
-        <div v-for="status in ['TODO','IN_PROGRESS','BLOCKED','DONE']" :key="status">
-          <div class="column-head">{{ status }}</div>
-          <div class="column-count"><span>{{ column(status).length }}</span><small>/ {{ columnTotal(status) }}</small></div>
-          <transition-group name="task" tag="div" class="column-body">
-            <button
-              v-for="task in column(status)"
-              :key="task.id"
-              type="button"
-              class="task-card"
-              :class="['st-' + status, { highlight: task.id === highlightedTaskId }]"
-              @click="openDetail(task.id, $event)"
-              :aria-label="t('levelTwo.viewTaskAria', { id: task.id, title: task.title })"
-            >
-              <div class="task-id">#{{ task.id }}</div>
-              <div>{{ task.title }}</div>
-              <div v-if="task.category" class="task-category">{{ task.category }}</div>
-              <div
-                v-if="task.assignee && ['IN_PROGRESS', 'BLOCKED'].includes(status)"
-                class="task-assignee"
-              >@{{ task.assignee }}</div>
-              <div
-                v-if="task.waitingFor && task.waitingFor.length"
-                class="task-waiting"
-                :title="t('levelTwo.waitingHint')"
-              >{{ t('levelTwo.waitingFor', { ids: task.waitingFor.map(id => '#' + id).join('、') }) }}</div>
-            </button>
-          </transition-group>
+      </template>
+      <div v-if="board && !error && totalCount && viewMode === 'kanban'" class="kanban-view">
+        <div class="board-results" role="status">{{ t('levelTwo.matchCount', { count: matchedTaskCount, total: totalCount }) }}</div>
+        <div class="mobile-lanes" role="group" :aria-label="t('levelTwo.statusNavigation')">
+          <button v-for="status in statusOrder" :key="status" type="button" :class="'st-' + status"
+            :aria-pressed="selectedLane === status" @click="mobileLane = status">
+            <span><span class="status-dot" aria-hidden="true"></span>{{ taskStatusLabel(status) }}</span>
+            <strong>{{ filteredColumns[status].length }}</strong>
+          </button>
+        </div>
+        <div v-if="!matchedTaskCount" class="empty-state">{{ t('levelTwo.noMatchingTasks') }}
+          <button type="button" class="filter-clear" @click="clearTaskFilters">{{ t('levelTwo.clearFilters') }}</button>
+        </div>
+        <div v-else class="columns">
+          <section v-for="status in statusOrder" :key="status" class="kanban-column"
+            :class="['st-' + status, { 'is-mobile-lane': selectedLane === status }]" :aria-labelledby="'lane-' + status">
+            <div class="column-heading">
+              <h3 class="column-head" :id="'lane-' + status"><span class="status-dot" aria-hidden="true"></span>{{ taskStatusLabel(status) }}</h3>
+              <span class="column-count"><span>{{ filteredColumns[status].length }}</span><small v-if="hasTaskFilters">/ {{ boardCounts[status] }}</small></span>
+            </div>
+            <p v-if="!filteredColumns[status].length" class="column-empty">{{ t(hasTaskFilters ? 'levelTwo.noMatchingInLane' : 'levelTwo.emptyLane') }}</p>
+            <transition-group name="task" tag="div" class="column-body">
+              <button
+                v-for="task in filteredColumns[status]"
+                :key="task.id"
+                type="button"
+                class="task-card"
+                :class="['st-' + status, { highlight: task.id === highlightedTaskId }]"
+                @click="openDetail(task.id, $event)"
+                :aria-label="t('levelTwo.viewTaskAria', { id: task.id, title: task.title })"
+              >
+                <span class="task-card-meta"><span class="task-id">#{{ task.id }}</span>
+                  <span v-if="task.category" class="task-category">{{ task.category }}</span>
+                </span>
+                <span class="task-title">{{ task.title }}</span>
+                <div
+                  v-if="task.assignee && ['IN_PROGRESS', 'BLOCKED'].includes(status)"
+                  class="task-assignee"
+                >@{{ task.assignee }}</div>
+                <div
+                  v-if="task.waitingFor && task.waitingFor.length"
+                  class="task-waiting"
+                  :title="t('levelTwo.waitingHint')"
+                >{{ t('levelTwo.waitingFor', { ids: task.waitingFor.map(id => '#' + id).join('、') }) }}</div>
+              </button>
+            </transition-group>
+          </section>
         </div>
       </div>
-      <section v-else-if="board && viewMode === 'dependencies'" class="dependency-view" :aria-label="t('levelTwo.dependencyViewLabel')">
+      <section v-if="board && !error && totalCount && viewMode === 'dependencies'" class="dependency-view" :aria-label="t('levelTwo.dependencyViewLabel')">
         <div class="dependency-toolbar">
           <div>
             <h3>{{ t('levelTwo.dependencyTitle') }}</h3>
@@ -1015,7 +1137,10 @@ const LevelTwo = {
           <p v-if="graphLayout.longestLength > 1" class="graph-chain">{{ t('levelTwo.longestChain', { chain: graphLayout.longestPath.map(id => '#' + id).join(' → ') }) }}</p>
           <p v-if="graphLayout.partial" class="graph-scope">{{ t('levelTwo.partialScope') }}</p>
           <p v-if="graph.edges.length === 0" class="graph-empty">{{ t('levelTwo.noEdges') }}</p>
-          <p v-if="graphLayout.nodes.length === 0" class="graph-empty">{{ t('levelTwo.noVisibleNodes') }}</p>
+          <div v-if="graphLayout.nodes.length === 0" class="graph-empty">
+            {{ t('levelTwo.noVisibleNodes') }}
+            <button v-if="hasTaskFilters" type="button" class="filter-clear" @click="clearTaskFilters">{{ t('levelTwo.clearFilters') }}</button>
+          </div>
           <div v-else class="dependency-scroll">
             <div class="dependency-canvas" :class="{ vertical: graphVertical }" :style="graphCanvasStyle()">
               <svg class="dependency-edges" :viewBox="graphViewBox()" preserveAspectRatio="none" aria-hidden="true">
@@ -1027,23 +1152,33 @@ const LevelTwo = {
                 :key="node.id"
                 type="button"
                 class="dependency-node"
-                :class="['st-' + node.status, { claimable: node.claimable, waiting: node.waiting, 'on-longest-chain': graphLayout.longestPath.includes(node.id) }]"
+                :class="['st-' + node.status, { claimable: node.claimable, waiting: node.waitingFor.length, 'on-longest-chain': graphLayout.longestPath.includes(node.id) }]"
                 :style="graphNodeStyle(node)"
                 @click="openDetail(node.id, $event)"
                 :aria-label="t('levelTwo.viewTaskAria', { id: node.id, title: node.title })"
               >
                 <span class="dependency-id">#{{ node.id }}</span>
                 <span class="dependency-title">{{ node.title }}</span>
-                <span class="dependency-meta">{{ node.category || t('blockerReason.unknown') }} · {{ node.status }}</span>
+                <span class="dependency-meta">{{ node.category || t('blockerReason.unknown') }} · {{ taskStatusLabel(node.status) }}</span>
                 <span v-if="node.claimable" class="dependency-badge claimable-badge">{{ t('levelTwo.claimable') }}</span>
-                <span v-else-if="node.waiting" class="dependency-badge waiting-badge">{{ t('levelTwo.waitingFor', { ids: graphWaitingIds(node).map(id => '#' + id).join('、') }) }}</span>
+                <span v-else-if="node.waitingFor.length" class="dependency-badge waiting-badge">{{ t('levelTwo.waitingFor', { ids: node.waitingFor.map(id => '#' + id).join('、') }) }}</span>
                 <span v-if="graphLayout.longestPath.includes(node.id)" class="dependency-badge longest-badge">{{ t('levelTwo.legendLongest') }}</span>
               </button>
             </div>
           </div>
-          <div class="graph-legend" :aria-label="t('levelTwo.legendLabel')"><span class="claimable-badge">{{ t('levelTwo.claimable') }}</span><span class="waiting-badge">{{ t('levelTwo.legendWaiting') }}</span><span class="longest-badge">{{ t('levelTwo.legendLongest') }}</span></div>
+          <div class="graph-legend" :aria-label="t('levelTwo.legendLabel')">
+            <span v-if="!projectArchived" class="claimable-badge">{{ t('levelTwo.claimable') }}</span>
+            <span class="waiting-badge">{{ t('levelTwo.legendWaiting') }}</span>
+            <span class="longest-badge">{{ t('levelTwo.legendLongest') }}</span>
+          </div>
         </template>
       </section>
+
+      <div v-if="otherBlockedProjects.length" class="blocked-project-links">
+        <span>{{ t('levelTwo.otherBlocked') }}</span>
+        <button v-for="p in otherBlockedProjects" :key="p.id" type="button" class="blocked-elsewhere"
+          @click="$emit('jump', p.id)">{{ p.name }} <span aria-hidden="true">↗</span></button>
+      </div>
 
       <div
         v-if="detailTaskId !== null"
@@ -1057,7 +1192,8 @@ const LevelTwo = {
         class="detail-drawer"
         role="dialog"
         aria-modal="true"
-        :aria-labelledby="'task-detail-title-' + detailTaskId"
+        :aria-labelledby="detail && !detailLoading && !detailError ? 'task-detail-title-' + detailTaskId : undefined"
+        :aria-label="t('levelTwo.detailTaskLabel', { id: detailTaskId })"
       >
         <div class="detail-toolbar">
           <span class="detail-kicker">{{ t('levelTwo.detailTaskLabel', { id: detailTaskId }) }}</span>
@@ -1073,7 +1209,7 @@ const LevelTwo = {
         </div>
         <div v-else-if="detail" class="detail-content">
           <div class="detail-heading">
-            <span class="detail-status" :class="'st-' + detail.status">{{ detail.status }}</span>
+            <span class="detail-status" :class="'st-' + detail.status">{{ taskStatusLabel(detail.status) }}</span>
             <span class="detail-category">{{ detail.category }}</span>
           </div>
           <h2 :id="'task-detail-title-' + detail.id" class="detail-title">{{ detail.title }}</h2>
@@ -1084,12 +1220,6 @@ const LevelTwo = {
             <div><dt>{{ t('levelTwo.updated') }}</dt><dd>{{ formatDate(detail.updatedAt) }}</dd></div>
             <div><dt>{{ t('levelTwo.sort') }}</dt><dd>{{ detail.sortOrder }}</dd></div>
           </dl>
-
-          <section class="detail-section">
-            <h3>{{ t('levelTwo.description') }}</h3>
-            <p v-if="detail.description" class="detail-description">{{ detail.description }}</p>
-            <p v-else class="detail-empty">{{ t('levelTwo.noDescription') }}</p>
-          </section>
 
           <section v-if="detail.currentBlocker" class="detail-section detail-blocker">
             <div class="section-title-row">
@@ -1110,6 +1240,12 @@ const LevelTwo = {
                 </button>
               </div>
             </div>
+          </section>
+
+          <section class="detail-section">
+            <h3>{{ t('levelTwo.description') }}</h3>
+            <p v-if="detail.description" class="detail-description">{{ detail.description }}</p>
+            <p v-else class="detail-empty">{{ t('levelTwo.noDescription') }}</p>
           </section>
 
           <section class="detail-section">
@@ -1219,6 +1355,7 @@ const app = createApp({
   setup() {
     const initialProject = Number(new URLSearchParams(window.location.search).get('project'));
     const currentProjectId = ref(Number.isSafeInteger(initialProject) && initialProject > 0 ? initialProject : null);
+    const mainContent = ref(null);
     const projects = ref([]);
     const projectsLoading = ref(true);
     const projectsError = ref(null);
@@ -1402,11 +1539,16 @@ const app = createApp({
       document.removeEventListener('visibilitychange', syncNotifyPermission);
     });
 
+    watch(currentProjectId, () => {
+      window.scrollTo(0, 0);
+      mainContent.value?.querySelector('.page-title')?.focus({ preventScroll: true });
+    }, { flush: 'post' });
+
     const locale = computed(() => i18nState.locale);
 
     return {
-      currentProjectId, projects, projectsLoading, projectsError, selectedProject, selectProject, showProjectList,
-      connectionState, railFlashClass,
+      mainContent, currentProjectId, projects, projectsLoading, projectsError, selectedProject, selectProject, showProjectList,
+      loadProjects, connectionState, railFlashClass,
       notifySupported, notifyPermission, notifyOn, notifyLabel, notifyHint,
       toggleBlockedNotifications,
       locale, setLocale, supportedLocales: SUPPORTED_LOCALES,
@@ -1415,4 +1557,5 @@ const app = createApp({
 });
 
 app.config.globalProperties.t = t;
+app.config.globalProperties.taskStatusLabel = status => t(`taskStatus.${status}`);
 app.mount('#app');

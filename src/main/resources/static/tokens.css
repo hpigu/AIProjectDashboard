@@ -1,10 +1,17 @@
 :root {
+  color-scheme: dark;
   /* 底色：深靛藍灰，不用純黑（純黑在長時間注視下對比過硬） */
   --ground:   #12151C;
   --surface:  #1B202A;
   --line:     #2C3441;
   --text:     #E4E8EF;
-  --muted:    #8A93A5;
+  --muted:    #A4ADC0;
+  --inset:    #161A23;
+  --accent:   #C4B8FF;
+  --accent-soft: #29243B;
+  --accent-line: #7062A4;
+  --control-hover: #737F94;
+  --blocked-text: #FF8C92;
 
   /* 狀態色：直接取自 andon 燈號慣例，非任意配色 */
   --st-todo:     #6B7A99;  /* 待命，低彩度 */
