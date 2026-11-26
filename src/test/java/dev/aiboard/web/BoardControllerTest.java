@@ -21,6 +21,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(BoardController.class)
 class BoardControllerTest {
 
+    @MockitoBean private dev.aiboard.acceptance.ManagementAuditService managementAudit;
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -42,12 +44,13 @@ class BoardControllerTest {
                 "BLOCKED", List.of(),
                 "DONE", List.of()
         );
-        var board = new BoardQuery.BoardView(12L, "個人記帳 App", "描述", columns);
+        var board = new BoardQuery.BoardView(12L, "個人記帳 App", "描述", "ACTIVE", columns);
         when(boardQuery.getBoard(12L)).thenReturn(board);
 
         mockMvc.perform(get("/api/projects/12/board"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(12))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.columns.TODO").isArray())
                 .andExpect(jsonPath("$.columns.TODO[0].id").value(5))
                 .andExpect(jsonPath("$.columns.IN_PROGRESS").isArray())

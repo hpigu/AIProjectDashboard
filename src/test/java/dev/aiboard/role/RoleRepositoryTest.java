@@ -5,6 +5,7 @@ import dev.aiboard.project.ProjectRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 
@@ -28,10 +29,49 @@ class RoleRepositoryTest {
     @Autowired
     private ProjectRepository projectRepository;
 
+    @Autowired
+    private RoleSeeder roleSeeder;
+
+    @Autowired
+    private RoleService roleService;
+
     @BeforeEach
     void cleanDatabase() {
         roleRepository.deleteAll();
         projectRepository.deleteAll();
+    }
+
+    @Test
+    void seederDoesNotInstallOverridesForAProjectNamedAgentDashboard() {
+        Project project = projectRepository.save(new Project("agentdashboard", null));
+
+        roleSeeder.run(new DefaultApplicationArguments());
+
+        assertThat(roleRepository.findAllByProjectId(project.getId())).isEmpty();
+        assertThat(roleService.listRoles("AgentDashboard").roles())
+                .hasSize(5)
+                .allSatisfy(role -> assertThat(role.isOverride()).isFalse());
+        var generic = roleService.getRole("backend-dev", null);
+        var effective = roleService.getRole("backend-dev", "AgentDashboard");
+        assertThat(effective.role()).isEqualTo(generic.role());
+    }
+
+    @Test
+    void seederKeepsExistingGenericAndProjectInstructionsOnRepeatedStartup() {
+        Project project = projectRepository.save(new Project("AgentDashboard", null));
+        roleService.upsertRole("backend-dev", "BACKEND", "客製通用指引", null);
+        roleService.upsertRole("backend-dev", "BACKEND", "客製專案指引", project.getName());
+
+        roleSeeder.run(new DefaultApplicationArguments());
+        roleSeeder.run(new DefaultApplicationArguments());
+
+        assertThat(roleRepository.findAllByProjectIdIsNull()).extracting(Role::getName)
+                .containsExactlyInAnyOrder("backend-dev", "frontend-dev", "qa", "infra", "docs");
+        assertThat(roleRepository.findAllByProjectId(project.getId())).hasSize(1);
+        assertThat(roleService.getRole("backend-dev", null).role().instructions()).isEqualTo("客製通用指引");
+        var effective = roleService.getRole("backend-dev", project.getName());
+        assertThat(effective.isOverride()).isTrue();
+        assertThat(effective.role().instructions()).isEqualTo("客製專案指引");
     }
 
     @Test

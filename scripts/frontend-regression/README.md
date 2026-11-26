@@ -4,13 +4,13 @@
 
 `check.mjs` drives a local Chrome or Chromium instance through the Chrome DevTools
 Protocol. It uses only Node.js built-in modules: there is no `package.json`, npm
-install, or frontend build step. Run it manually when a change needs real browser
-rendering or interaction.
+install, or frontend build step.
 
 ## Test boundary
 
-The script requires a locally installed browser and a remote-debugging port, so it
-is not part of `./mvnw test` or CI. Server-side checks remain in
+GitHub Actions runs the script with headless Chrome against an isolated Java
+server. For a manual run, use a locally installed browser and a remote-debugging
+port. Server-side checks remain in
 `FrontendStaticAssetsTest`, `SecurityHeadersFilterTest`, and
 `OperationalSafetyConfigurationTest`.
 
@@ -27,7 +27,7 @@ the relevant checks.
 
 ## Run
 
-Requirements: Chrome or Chromium and Node.js 18 or newer.
+Requirements: Chrome or Chromium and Node.js 22 or newer (the script uses the built-in WebSocket API).
 
 ```bash
 # Use an isolated development port and database. Never use 8080 or data/board.
@@ -46,18 +46,21 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 
 ## Coverage
 
-| Check | Server-side JUnit | Manual browser script | Human checklist |
+| Check | Server-side JUnit | Browser script | Human checklist |
 | --- | --- | --- | --- |
 | CSP headers | `SecurityHeadersFilterTest` | - | - |
 | Same-origin vendor assets | `OperationalSafetyConfigurationTest`, `FrontendStaticAssetsTest` | CSP violation listener | - |
 | API and vendor availability | `FrontendStaticAssetsTest` | - | - |
-| SSE content type and access | `SecurityHeadersFilterTest` | Reconnection state | Restart server manually |
+| SSE content type and access | `SecurityHeadersFilterTest` | `checkSseRecovery()` with the real local SSE endpoint and fixture project responses | Restart server manually |
+| Multiple worker cards, assignee filters, status events and counts | - | `checkMultipleWorkers()` with isolated fixture | - |
+| Reconnect, archive/restore, edited task views, and delayed status events | - | Live-update browser fixtures | - |
 | Responsive horizontal overflow | - | `checkNoHorizontalOverflow()` | Review extreme content |
 | Browser console errors | - | `checkNoConsoleErrors()` | - |
-| Escape closes drawer and restores focus | - | `checkEscapeReturnsFocus()` | Confirm focus order |
-| Filter URL round trip | - | `checkFilterUrlRoundTrip()` | - |
-| Initial API call counts | - | `checkApiCallCounts()` | - |
+| Escape closes drawer and restores focus | - | - | Confirm focus order |
+| Filter URL round trip | - | - | Reload the complete filtered URL |
+| Initial API call count and event coalescing | - | `checkSseRecovery()`, `checkMultipleWorkers()` | - |
 | Dependency graph quality | - | - | Visual review |
+| Claimability of archived projects | Java MCP E2E and Workers service tests | `checkArchivedClaimability()` with isolated fixture | - |
 | i18n dictionary and placeholders | `I18nDictionaryTest` | - | Copy review |
 | Language switching and persistence | - | `checkManualSwitchUpdatesHtmlLangAndPersists()` | - |
 | Unsupported locale fallback | - | `checkUnsupportedStoredLocaleFallsBackToDefault()` | - |
@@ -67,5 +70,5 @@ The script prints PASS/FAIL for each check and exits non-zero on failure.
 
 ## Limits
 
+- The multiple-worker and live-update checks mock read responses and EventSource events in the browser. They verify rendered state and reconnect request counts. Live backend SSE delivery and real concurrent claims have separate checks.
 - DAG layout quality and extreme-content rendering still require visual review.
-- The script runs only when invoked manually.

@@ -148,9 +148,11 @@ public class TaskService {
     public TaskStatusChangeResult updateStatus(Long taskId, String targetStatusRaw, String note,
                                                 String claimToken) {
         TaskStatus target = parseStatus(targetStatusRaw);
+        Long projectId = taskRepository.findProjectIdByTaskId(taskId)
+                .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
+        projectService.assertActiveForUpdate(projectId);
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new BoardException("找不到任務：#" + taskId));
-        projectService.assertActiveForUpdate(task.getProjectId());
         TaskStatus current = task.getStatus();
 
         if (!current.canTransitionTo(target)) {
@@ -162,7 +164,7 @@ public class TaskService {
         // 任務）不能用通用的 update_task_status 直接轉 DONE，必須改用
         // complete_task 留下結構化完成證據。既有資料（require_evidence 為
         // false）不受影響，行為與之前完全相同。
-        if (target == TaskStatus.DONE && task.isRequireEvidence()) {
+        if (target == TaskStatus.DONE) {
             throw new BoardException("任務 #" + taskId
                     + " 要求完成證據，請改用 complete_task（需附上 summary 與"
                     + " verificationResults），不能用 update_task_status 直接轉 DONE");
@@ -180,6 +182,12 @@ public class TaskService {
 
         // token 驗證：只有「這筆任務本身有 claimTokenHash」時才強制要求，
         // 讓部署前既有、以舊契約認領（沒有 token）的任務仍可用舊呼叫方式完成。
+        // DONE clears the token hash. A token-bearing completion retry cannot be verified;
+        // reject it instead of accepting an arbitrary token after a concurrent completion.
+        if (current == TaskStatus.DONE && target == TaskStatus.DONE
+                && claimToken != null && !claimToken.isBlank()) {
+            throw new BoardException("任務 #" + taskId + " 已完成，無法驗證已清除的 claim token");
+        }
         boolean operatingOnOwnedClaim = current == TaskStatus.IN_PROGRESS || current == TaskStatus.BLOCKED;
         if (operatingOnOwnedClaim && task.getClaimTokenHash() != null) {
             if (claimToken == null || claimToken.isBlank()) {
@@ -287,8 +295,16 @@ public class TaskService {
         return ProjectTasksResult.found(project, tasks);
     }
 
+    private dev.aiboard.acceptance.AcceptanceService acceptance;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void configureAcceptance(dev.aiboard.acceptance.AcceptanceService acceptance) { this.acceptance=acceptance; }
+
     @Transactional
     public ClaimNextTaskResult claimNextTask(String projectName, String categoryRaw, String assigneeRaw) {
+        return claimNextTaskLocked(projectName, categoryRaw, assigneeRaw);
+    }
+
+    private ClaimNextTaskResult claimNextTaskLocked(String projectName, String categoryRaw, String assigneeRaw) {
         TaskCategory category = parseClaimCategory(categoryRaw);
         String assignee = normalizeAssignee(assigneeRaw);
         var project = projectService.findByNameIgnoreCase(projectName);
@@ -312,16 +328,19 @@ public class TaskService {
             // 同一份查詢結果也用來說明「在等誰」，不必為此再查一次。
             Map<Long, List<TaskDto>> waiting = getUnfinishedPrerequisites(
                     candidates.stream().map(Task::getId).toList());
-            Task candidate = candidates.stream()
-                    .filter(t -> !waiting.containsKey(t.getId()))
-                    .findFirst()
-                    .orElse(null);
+            List<BlockedCandidate> blocked = new ArrayList<>();
+            Task candidate = null;
+            for (Task task : candidates) {
+                List<TaskDto> prerequisites = waiting.getOrDefault(task.getId(), List.of());
+                List<String> issues = acceptance == null ? List.of() : acceptance.workBlockers(task.getId());
+                if (prerequisites.isEmpty() && issues.isEmpty()) {
+                    candidate = task;
+                    break;
+                }
+                blocked.add(new BlockedCandidate(toDto(task), prerequisites, issues));
+            }
             if (candidate == null) {
-                return ClaimNextTaskResult.allBlocked(project.get(), category.name(),
-                        candidates.stream()
-                                .map(t -> new BlockedCandidate(toDto(t),
-                                        waiting.getOrDefault(t.getId(), List.of())))
-                                .toList());
+                return ClaimNextTaskResult.allBlocked(project.get(), category.name(), blocked);
             }
 
             LocalDateTime claimedAt = LocalDateTime.now();
@@ -329,10 +348,11 @@ public class TaskService {
             // task_log 的 note 也只寫認領者名稱，原文不會被任何地方持久化。
             String claimToken = claimTokenService.generateToken();
             String claimTokenHash = claimTokenService.hash(claimToken);
-            int updated = taskRepository.claimIfTodo(candidate.getId(), assignee, claimedAt, claimTokenHash);
+            Long candidateId = candidate.getId();
+            int updated = taskRepository.claimIfTodo(candidateId, assignee, claimedAt, claimTokenHash);
             if (updated == 1) {
-                Task claimed = taskRepository.findById(candidate.getId())
-                        .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidate.getId()));
+                Task claimed = taskRepository.findById(candidateId)
+                        .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidateId));
                 taskLogRepository.save(new TaskLog(claimed.getId(), TaskStatus.TODO.name(),
                         TaskStatus.IN_PROGRESS.name(), "認領者：" + assignee));
                 eventPublisher.publish(BoardEvent.taskStatusChanged(
@@ -367,17 +387,22 @@ public class TaskService {
     }
 
     /**
-     * 一次查出多個任務各自還在等哪些尚未完成的前置任務。
-     * 沒有未完成前置的任務不會出現在結果中，因此空 Map 代表全部可認領。
+     * 批次查出各任務尚未完成或未通過可信驗收的前置任務。
      */
     public Map<Long, List<TaskDto>> getUnfinishedPrerequisites(List<Long> taskIds) {
         if (taskIds == null || taskIds.isEmpty()) {
             return Map.of();
         }
         Map<Long, List<TaskDto>> waiting = new LinkedHashMap<>();
-        for (var row : taskDependencyRepository.findUnfinishedPrerequisites(taskIds)) {
-            waiting.computeIfAbsent(row.getTaskId(), k -> new ArrayList<>())
-                    .add(toDto(row.getPrerequisite()));
+        Map<Long, Boolean> canClose = new java.util.HashMap<>();
+        for (var row : taskDependencyRepository.findPrerequisitesForTasks(taskIds)) {
+            Task prerequisite = row.getPrerequisite();
+            boolean completed = prerequisite.getStatus() == TaskStatus.DONE
+                    && (acceptance == null || canClose.computeIfAbsent(
+                            prerequisite.getId(), id -> acceptance.summary(id).canClose()));
+            if (!completed) {
+                waiting.computeIfAbsent(row.getTaskId(), k -> new ArrayList<>()).add(toDto(prerequisite));
+            }
         }
         return waiting;
     }
@@ -457,7 +482,8 @@ public class TaskService {
     }
 
     /** 被前置卡住的候選任務，以及它還在等哪些未完成的前置。 */
-    public record BlockedCandidate(TaskDto task, List<TaskDto> waitingFor) {
+    public record BlockedCandidate(TaskDto task, List<TaskDto> waitingFor, List<String> requirementIssues) {
+        public BlockedCandidate(TaskDto task, List<TaskDto> waitingFor) { this(task,waitingFor,List.of()); }
     }
 
     public enum ClaimOutcome {

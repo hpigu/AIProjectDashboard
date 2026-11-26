@@ -18,6 +18,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(ProjectListController.class)
 class ProjectListControllerTest {
 
+    @MockitoBean private dev.aiboard.acceptance.ManagementAuditService managementAudit;
+
     @Autowired
     private MockMvc mockMvc;
 

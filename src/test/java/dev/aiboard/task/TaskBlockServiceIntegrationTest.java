@@ -229,17 +229,14 @@ class TaskBlockServiceIntegrationTest {
     }
 
     @Test
-    void completeFromBlocked_clearsCurrentBlockerAndRetainsHistoricalAudit() {
+    void completeFromBlocked_withoutTrustedAcceptanceRetainsBlockerAndAudit() {
         Blocked blocked = createBlockedTask("TECHNICAL", null);
 
-        taskCompleteService.completeTask(blocked.taskId(), blocked.token(), "阻礙已排除並完成",
+        assertThatThrownBy(() -> taskCompleteService.completeTask(blocked.taskId(), blocked.token(), "代理聲明阻礙已排除",
                 List.of(new TaskCompleteService.VerificationInput("回歸測試", "PASSED", null)),
-                "src/main/Foo.java", "abc123", null);
-
-        assertThat(taskRepository.findById(blocked.taskId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
-        assertCleared(blocked);
-        assertThat(taskDetailService.getTaskDetail(blocked.projectId(), blocked.taskId()).currentBlocker())
-                .isNull();
+                "src/main/Foo.java", "abc123", null)).hasMessageContaining("不能結案");
+        assertThat(taskRepository.findById(blocked.taskId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.BLOCKED);
+        assertThat(taskDetailService.getTaskDetail(blocked.projectId(), blocked.taskId()).currentBlocker()).isNotNull();
     }
 
     @Test

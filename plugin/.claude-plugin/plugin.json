@@ -1,7 +1,7 @@
 {
   "name": "ai-project-board",
   "description": "Local AI task board integration for Claude Code: role agents, dependency-aware claiming, blockers, and completion evidence.",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "author": {
     "name": "Daniel Huang"
   },

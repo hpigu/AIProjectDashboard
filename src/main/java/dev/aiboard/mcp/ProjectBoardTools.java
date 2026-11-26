@@ -135,8 +135,8 @@ public class ProjectBoardTools {
             return projectNotFoundMessage(projectName, result.availableProjects());
         }
         if (result.blockedByDependency()) {
-            return ("%s 還有待辦任務，但全部都在等前置任務完成：\n%s\n\n"
-                    + "請等前置任務標記 DONE 後再認領。")
+            return ("%s 還有待辦任務，但有未決需求或前置尚未通過驗收：\n%s\n\n"
+                    + "請先確認需求問題及前置的可信驗收結果；歷史 DONE 未驗證也不會解鎖。")
                     .formatted(result.category(),
                             result.blockedCandidates().stream()
                                     .map(ProjectBoardTools::describeBlockedCandidate)
@@ -238,6 +238,7 @@ public class ProjectBoardTools {
 
     /** 「- #12 標題（等待：#8 設定環境）」，讓認領者知道卡在哪。 */
     private static String describeBlockedCandidate(TaskService.BlockedCandidate candidate) {
+        if (!candidate.requirementIssues().isEmpty()) return "#"+candidate.task().id()+" "+String.join("；",candidate.requirementIssues());
         String waiting = candidate.waitingFor().stream()
                 .map(w -> "#%d %s".formatted(w.id(), w.title()))
                 .collect(Collectors.joining("、"));

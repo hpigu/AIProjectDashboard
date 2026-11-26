@@ -39,9 +39,9 @@
             <span class="notify-dot" aria-hidden="true"></span>
             <span>{{ notifyLabel }}</span>
           </button>
-          <div class="conn-status">
-            <span class="conn-dot" :class="sseConnected ? 'connected' : 'reconnecting'"></span>
-            <span>{{ sseConnected ? t('conn.connected') : t('conn.reconnecting') }}</span>
+          <div class="conn-status" role="status">
+            <span class="conn-dot" :class="connectionState === 'connected' ? 'connected' : 'reconnecting'"></span>
+            <span>{{ t('conn.' + connectionState) }}</span>
           </div>
         </div>
       </header>
@@ -49,6 +49,8 @@
       <level-one
         v-if="currentProjectId === null"
         :projects="projects"
+        :projects-loading="projectsLoading"
+        :projects-error="projectsError"
         @select="selectProject"
       ></level-one>
 
@@ -66,6 +68,7 @@
 
   <script src="/vendor/vue/vue.global.prod.js"></script>
   <script src="/i18n.js"></script>
+  <script src="/live-updates.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

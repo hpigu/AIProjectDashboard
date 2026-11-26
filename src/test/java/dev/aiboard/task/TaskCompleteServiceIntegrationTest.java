@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         "logging.file.name=/tmp/ai-project-board-task-complete-test.log"
 })
 class TaskCompleteServiceIntegrationTest {
+    @Autowired private TaskBlockService blockService;
 
     @Autowired
     private ProjectService projectService;
@@ -48,8 +49,13 @@ class TaskCompleteServiceIntegrationTest {
     @Autowired
     private TaskCompletionVerificationRepository verificationRepository;
 
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate cleanup;
+
     @BeforeEach
     void cleanDatabase() {
+        cleanup.update("UPDATE task SET current_block_event_id=NULL");
+        cleanup.update("DELETE FROM task_block_dependency");
+        cleanup.update("DELETE FROM task_block_event");
         verificationRepository.deleteAll();
         evidenceRepository.deleteAll();
         taskLogRepository.deleteAll();
@@ -58,36 +64,16 @@ class TaskCompleteServiceIntegrationTest {
     }
 
     @Test
-    void completeTask_persistsEvidenceAndVerificationsAndTransitionsToDone() {
-        var project = projectService.createProject("complete_task 整合測試", null).project();
-        taskService.createTasks(project.id(), List.of(
-                new TaskService.TaskInput("實作某功能", null, "BACKEND")));
-        var claimed = taskService.claimNextTask("complete_task 整合測試", "BACKEND", "backend-dev");
+    void completeTask_selfReportedPassedDoesNotCreateTrustedEvidence() {
+        var project = projectService.createProject("signed gate fixture", null).project();
+        taskService.createTasks(project.id(), List.of(new TaskService.TaskInput("任務", null, "BACKEND")));
+        var claimed = taskService.claimNextTask("signed gate fixture", "BACKEND", "backend-dev");
         Long taskId = claimed.task().id();
-
-        var result = taskCompleteService.completeTask(taskId, claimed.claimToken(),
-                "完成功能實作", List.of(
-                        new TaskCompleteService.VerificationInput("./mvnw test", "PASSED", null),
-                        new TaskCompleteService.VerificationInput("手動驗證", "NOT_RUN", "本地無法啟動外部服務")),
-                "Foo.java, Bar.java", "abc123", null);
-
-        assertThat(result.task().status()).isEqualTo("DONE");
-        Task persisted = taskRepository.findById(taskId).orElseThrow();
-        assertThat(persisted.getStatus()).isEqualTo(TaskStatus.DONE);
-        assertThat(persisted.getClaimTokenHash()).isNull();
-
-        List<TaskCompletionEvidence> evidences = evidenceRepository.findByTaskIdOrderByIdAsc(taskId);
-        assertThat(evidences).hasSize(1);
-        TaskCompletionEvidence evidence = evidences.getFirst();
-        assertThat(evidence.getSummary()).isEqualTo("完成功能實作");
-        assertThat(evidence.getCommitRef()).isEqualTo("abc123");
-        assertThat(evidence.getCompletedBy()).isEqualTo("backend-dev");
-
-        List<TaskCompletionVerification> verifications =
-                verificationRepository.findByEvidenceIdOrderByIdAsc(evidence.getId());
-        assertThat(verifications).hasSize(2);
-        assertThat(verifications).extracting(TaskCompletionVerification::getResult)
-                .containsExactly("PASSED", "NOT_RUN");
+        assertThatThrownBy(() -> taskCompleteService.completeTask(taskId, claimed.claimToken(), "代理自行聲明",
+                List.of(new TaskCompleteService.VerificationInput("自測", "PASSED", null)), null, "abc123", null))
+                .hasMessageContaining("不能結案");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
     }
 
     @Test
@@ -110,34 +96,19 @@ class TaskCompleteServiceIntegrationTest {
     }
 
     @Test
-    void completeTask_reopenedTask_appendsNewEvidenceWithoutDeletingOld() {
-        var project = projectService.createProject("重開任務測試", null).project();
-        taskService.createTasks(project.id(), List.of(
-                new TaskService.TaskInput("任務", null, "BACKEND")));
-        var claimed = taskService.claimNextTask("重開任務測試", "BACKEND", "backend-dev");
+    void completeTask_legacyEvidenceRemainsUnverifiedAndUnchanged() {
+        var project = projectService.createProject("signed gate fixture", null).project();
+        taskService.createTasks(project.id(), List.of(new TaskService.TaskInput("任務", null, "BACKEND")));
+        var claimed = taskService.claimNextTask("signed gate fixture", "BACKEND", "backend-dev");
         Long taskId = claimed.task().id();
-        String token = claimed.claimToken();
-
-        taskCompleteService.completeTask(taskId, token, "第一次完成",
-                List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
-                null, null, null);
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
-
-        // DONE -> IN_PROGRESS 是既有合法轉移；重開後沒有 claimTokenHash（DONE 時已清空），
-        // 沿用 #112 相容策略不強制帶 token。
-        taskService.updateStatus(taskId, "IN_PROGRESS", "重新檢視");
-        var reopened = taskRepository.findById(taskId).orElseThrow();
-        assertThat(reopened.getAssignee()).isEqualTo("backend-dev");
-
-        var secondResult = taskCompleteService.completeTask(taskId, null, "第二次完成（修正問題）",
-                List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
-                null, null, null);
-
-        assertThat(secondResult.task().status()).isEqualTo("DONE");
-        List<TaskCompletionEvidence> evidences = evidenceRepository.findByTaskIdOrderByIdAsc(taskId);
-        assertThat(evidences).hasSize(2);
-        assertThat(evidences).extracting(TaskCompletionEvidence::getSummary)
-                .containsExactly("第一次完成", "第二次完成（修正問題）");
+        // 舊版完成聲明保留供查閱，不會自動升級成可信驗收證據。
+        evidenceRepository.save(new TaskCompletionEvidence(taskId, "舊版完成聲明", null, "old", "backend-dev"));
+        assertThatThrownBy(() -> taskCompleteService.completeTask(taskId, claimed.claimToken(), "代理自行聲明",
+                List.of(new TaskCompleteService.VerificationInput("自測", "PASSED", null)), null, "abc123", null))
+                .hasMessageContaining("不能結案");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).hasSize(1);
+        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId).getFirst().getSummary()).isEqualTo("舊版完成聲明");
     }
 
     @Test
@@ -161,24 +132,15 @@ class TaskCompleteServiceIntegrationTest {
     }
 
     @Test
-    void updateTaskStatus_legacyTaskWithoutRequireEvidence_stillWorksDirectlyToDone() {
-        // #131 之後：update_task_status 對 require_evidence=false 的任務
-        // （模擬 migration 前既有資料，行為完全不變）行為與 #114 之前一致——
-        // #112 已確立的 per-task token 策略維持不變，通用工具仍可用於已認領
-        // 任務的既有流程，只是不會產生結構化完成證據
-        // （那是 complete_task 額外提供的能力）。
-        var project = projectService.createProject("相容性測試", null).project();
-        Task legacyTask = new Task(project.id(), "任務", null, "BACKEND", 0);
-        legacyTask.setRequireEvidence(false);
-        taskRepository.save(legacyTask);
-        var claimed = taskService.claimNextTask("相容性測試", "BACKEND", "backend-dev");
+    void updateTaskStatus_legacyTaskAlsoRequiresTrustedAcceptance() {
+        var project = projectService.createProject("signed gate fixture", null).project();
+        taskService.createTasks(project.id(), List.of(new TaskService.TaskInput("任務", null, "BACKEND")));
+        var claimed = taskService.claimNextTask("signed gate fixture", "BACKEND", "backend-dev");
         Long taskId = claimed.task().id();
-
-        var result = taskService.updateStatus(taskId, "DONE", null, claimed.claimToken());
-
-        assertThat(result.changed()).isTrue();
-        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
-        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
+        var legacy = taskRepository.findById(taskId).orElseThrow(); legacy.setRequireEvidence(false); taskRepository.save(legacy);
+        assertThatThrownBy(() -> taskService.updateStatus(taskId, "DONE", null, claimed.claimToken()))
+                .hasMessageContaining("complete_task");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
     }
 
     @Test
@@ -200,39 +162,63 @@ class TaskCompleteServiceIntegrationTest {
     }
 
     @Test
-    void completeTask_worksForBothRequireEvidenceTrueAndFalseTasks() {
-        // #131：complete_task 是不受 require_evidence 影響的完成路徑——不論任務
-        // 是新建（require_evidence=true）還是既有資料（require_evidence=false），
-        // 都必須能透過 complete_task 正常完成。
-        var project = projectService.createProject("complete_task 相容 evidence 測試", null).project();
-
-        // 新建任務：require_evidence=true。
-        taskService.createTasks(project.id(), List.of(
-                new TaskService.TaskInput("新建任務", null, "BACKEND")));
-        var claimedNew = taskService.claimNextTask(
-                "complete_task 相容 evidence 測試", "BACKEND", "backend-dev");
-        Long newTaskId = claimedNew.task().id();
-
-        var resultForNew = taskCompleteService.completeTask(newTaskId, claimedNew.claimToken(),
-                "完成新建任務",
-                List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
-                null, null, null);
-        assertThat(resultForNew.task().status()).isEqualTo("DONE");
-        assertThat(taskRepository.findById(newTaskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
-
-        // 既有資料任務：require_evidence=false（繞過 createTasks）。
-        Task legacyTask = new Task(project.id(), "既有資料任務", null, "BACKEND", 1);
-        legacyTask.setRequireEvidence(false);
-        taskRepository.save(legacyTask);
-        var claimedLegacy = taskService.claimNextTask(
-                "complete_task 相容 evidence 測試", "BACKEND", "backend-dev");
-        Long legacyTaskId = claimedLegacy.task().id();
-
-        var resultForLegacy = taskCompleteService.completeTask(legacyTaskId, claimedLegacy.claimToken(),
-                "完成既有資料任務",
-                List.of(new TaskCompleteService.VerificationInput("測試", "PASSED", null)),
-                null, null, null);
-        assertThat(resultForLegacy.task().status()).isEqualTo("DONE");
-        assertThat(taskRepository.findById(legacyTaskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DONE);
+    void completeTask_gateAppliesToBothNewAndLegacyTasks() {
+        var project = projectService.createProject("signed gate fixture", null).project();
+        taskService.createTasks(project.id(), List.of(new TaskService.TaskInput("任務", null, "BACKEND")));
+        var claimed = taskService.claimNextTask("signed gate fixture", "BACKEND", "backend-dev");
+        Long taskId = claimed.task().id();
+        assertThatThrownBy(() -> taskCompleteService.completeTask(taskId, claimed.claimToken(), "代理自行聲明",
+                List.of(new TaskCompleteService.VerificationInput("自測", "PASSED", null)), null, "abc123", null))
+                .hasMessageContaining("不能結案");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
+        var legacy = taskRepository.findById(taskId).orElseThrow(); legacy.setRequireEvidence(false); taskRepository.save(legacy);
+        assertThatThrownBy(() -> taskCompleteService.completeTask(taskId, claimed.claimToken(), "代理自行聲明",
+                List.of(new TaskCompleteService.VerificationInput("自測", "PASSED", null)), null, "abc123", null))
+                .hasMessageContaining("不能結案");
+        assertThat(taskRepository.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(taskId)).isEmpty();
     }
+
+
+    @Test
+    void implementationReportsAppendDeclarationsAndKeepStateTokenAndVersionProtection() {
+        var project=projectService.createProject("implementation report fixture",null).project();
+        taskService.createTasks(project.id(),List.of(new TaskService.TaskInput("reported implementation",null,"BACKEND")));
+        var claim=taskService.claimNextTask("implementation report fixture","BACKEND","developer");
+        Long id=claim.task().id(); Task before=taskRepository.findById(id).orElseThrow();
+        long version=before.getVersion(); String hash=before.getClaimTokenHash();
+        var passed=List.of(new TaskCompleteService.VerificationInput("self test","PASSED",null));
+        var first=taskCompleteService.reportImplementation(id,claim.claimToken(),"self declaration",passed,"Users.java","untrusted-ref",version);
+        assertThat(first.task().status()).isEqualTo("IN_PROGRESS");
+        Task after=taskRepository.findById(id).orElseThrow();
+        assertThat(after.getVersion()).isEqualTo(version+1);
+        assertThat(after.getClaimTokenHash()).isEqualTo(hash);
+        assertThatThrownBy(() -> taskCompleteService.reportImplementation(id,"wrong-token","bad",passed,null,null,null)).hasMessageContaining("token");
+        assertThatThrownBy(() -> taskCompleteService.reportImplementation(id,claim.claimToken(),"stale",passed,null,null,version)).hasMessageContaining("已被其他操作更新");
+        taskCompleteService.reportImplementation(id,claim.claimToken(),"failure honestly reported",
+            List.of(new TaskCompleteService.VerificationInput("integration","FAILED","fixture assertion failed")),null,null,version+1);
+        assertThat(evidenceRepository.findByTaskIdOrderByIdAsc(id)).extracting(TaskCompletionEvidence::getSummary)
+            .containsExactly("self declaration","failure honestly reported");
+        assertThat(taskRepository.findById(id).orElseThrow().getVersion()).isEqualTo(version+2);
+        assertThatThrownBy(() -> taskCompleteService.completeTask(id,claim.claimToken(),"try close",passed,null,null,null)).hasMessageContaining("不能結案");
+    }
+
+    @Test
+    void implementationReportOnBlockedTaskPreservesCurrentBlocker() {
+        var project=projectService.createProject("blocked implementation fixture",null).project();
+        taskService.createTasks(project.id(),List.of(new TaskService.TaskInput("reported blocked implementation",null,"BACKEND")));
+        var claim=taskService.claimNextTask("blocked implementation fixture","BACKEND","developer");
+        Long id=claim.task().id();
+        blockService.blockTask(id,claim.claimToken(),"TECHNICAL","fixture dependency unavailable",List.of(),null);
+        Task before=taskRepository.findById(id).orElseThrow();
+        taskCompleteService.reportImplementation(id,claim.claimToken(),"partial work",
+            List.of(new TaskCompleteService.VerificationInput("integration","NOT_RUN","fixture service unavailable")),null,null,before.getVersion());
+        Task after=taskRepository.findById(id).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(TaskStatus.BLOCKED);
+        assertThat(after.getCurrentBlockEventId()).isEqualTo(before.getCurrentBlockEventId()).isNotNull();
+        assertThat(after.getClaimTokenHash()).isEqualTo(before.getClaimTokenHash());
+        assertThat(after.getVersion()).isEqualTo(before.getVersion()+1);
+    }
+
 }

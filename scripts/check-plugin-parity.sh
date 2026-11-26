@@ -49,9 +49,9 @@ ok()   { echo "  [OK] $*"; }
 # 意義。工具清單本身以 McpToolConfig 註冊的六個類別為準。
 # ---------------------------------------------------------------------------
 BOARD_TOOLS="create_project create_tasks list_tasks claim_next_task block_task
-complete_task update_task_status reset_task_claim preview_archive_project
+complete_task report_implementation get_acceptance record_acceptance_event update_task_status reset_task_claim preview_archive_project
 archive_project restore_project update_task_details set_task_dependencies
-list_roles get_role upsert_role"
+list_roles get_role upsert_role get_project_workflow prepare_project_workflow confirm_project_workflow"
 
 extract_tools() {
   local file="$1" tool
@@ -159,6 +159,24 @@ else
     ok "工具集合一致（$(printf '%s' "$s_a" | tr '\n' ' ')）"
   fi
 fi
+
+echo
+echo "== plan-project-workflow skill =="
+workflow_a="plugin/skills/plan-project-workflow/SKILL.md"
+workflow_b="plugins/ai-project-board/skills/plan-project-workflow/SKILL.md"
+if [ ! -f "$workflow_a" ] || [ ! -f "$workflow_b" ]; then
+  fail "缺少其中一份 plan-project-workflow skill。"
+elif ! diff -q "$workflow_a" "$workflow_b" >/dev/null; then
+  fail "兩份 plan-project-workflow skill 不一致。"
+else
+  ok "規劃對話流程一致。"
+fi
+for file in "$workflow_a" "$workflow_b"; do
+  [ -f "$file" ] || continue
+  for tool in get_project_workflow prepare_project_workflow confirm_project_workflow; do
+    grep -qw "$tool" "$file" || fail "$file 缺少 $tool。"
+  done
+done
 
 echo
 if [ "$failures" -gt 0 ]; then
