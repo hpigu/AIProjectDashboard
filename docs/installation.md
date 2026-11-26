@@ -46,6 +46,15 @@ cd AIProjectDashboard
 
 Open <http://127.0.0.1:8080> when the launcher reports readiness.
 
+Worker roles have no per-project or cross-project quotas. The leader schedules
+against the platform's actual session limit, dependencies, and file/resource
+conflicts. See [Agent roles](agent-roles.md) and the
+[project workflow template](project-workflow-template.md) for Git policy and
+trusted acceptance setup; installing plugins does not update online roles.
+
+Before creating your first project or task, [authorize a dedicated leader
+connection](#authorize-project-and-task-creation).
+
 Useful lifecycle commands:
 
 | Action | macOS/Linux | Windows |
@@ -62,6 +71,13 @@ unless you explicitly pass `--force` or `-Force`.
 
 Use assets from one immutable release tag and verify them against that release's
 `ai-project-board-backend-V-SHA256SUMS.txt`.
+
+The source checkout includes management authorization and project Git workflow
+approval. The published [v3.2.1 release](https://github.com/hpigu/AIProjectDashboard/releases/tag/v3.2.1)
+predates those features. Follow its [server installation instructions](https://github.com/hpigu/AIProjectDashboard/blob/v3.2.1/docs/installation.md#L7-L103), then use the
+[v3.2.1 MCP-only connection](https://github.com/hpigu/AIProjectDashboard/blob/v3.2.1/README.md#L175-L194)
+to create your first card. The current `main` plugin's `claim-tasks` workflow
+requires a server with project Git workflow support.
 
 ### Windows x64
 
@@ -84,12 +100,16 @@ default, not inside the extracted program directory.
 ### macOS or Linux
 
 The published JARs require a matching JDK 21. The installer is currently kept in
-the source tree, so obtain a source checkout before running it:
+the source tree, so obtain a source checkout before running it.
+
+This example uses the current source build version. Run it for that version
+once its release assets are published, or replace both version values with the
+same published release version.
 
 ```bash
 ./install/install.sh \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1" \
-  --version 3.2.1
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.3.0" \
+  --version 3.3.0
 
 ~/.ai-project-board/bin/board start
 ```
@@ -155,6 +175,21 @@ claude plugin update ai-project-board@ai-board
 
 Restart Claude Code or open a new session after the update.
 
+Claude Code still loads personal skills from
+`~/.claude/skills/<name>/SKILL.md`, project skills from
+`.claude/skills/<name>/SKILL.md`, and plugin skills from
+`skills/<name>/SKILL.md` inside the plugin root. This repository therefore keeps
+its Claude skill at `plugin/skills/claim-tasks/SKILL.md`; no path migration is
+needed. The `~/.claude/skills/synced/` directory is managed by claude.ai skill
+sync and is not an installation target for this plugin. See the official
+[skill locations](https://code.claude.com/docs/en/skills#choose-where-skills-load)
+and [plugin layout](https://code.claude.com/docs/en/plugins-reference#standard-layout).
+
+Update the source checkout before refreshing a local marketplace. Use the
+marketplace/plugin update commands above instead of editing installed caches.
+When publishing a new plugin release, bump its version through the repository's
+release procedure so existing installations discover the changed skills.
+
 Plugin updates only replace the client integration. They do not update or
 restart the board server; use the server update procedure below for that.
 
@@ -179,20 +214,62 @@ Codex, in `~/.codex/config.toml`:
 url = "http://127.0.0.1:8080/mcp"
 ```
 
+## Authorize project and task creation
+
+Use these steps with this checkout or a release that includes management
+authorization. For an older server, use the docs for its release tag. The
+bundled `board` connector already knows the endpoint, but it does not provide a
+management credential. An unconfigured source server denies `create_project`
+and `create_tasks` even if read tools work.
+
+1. Set `BOARD_MANAGEMENT_TOKEN` to a random value of at least 32 characters in
+   the private environment used to run the server launcher. If the server is
+   already running, restart it from that environment with `./bin/board restart`
+   on macOS/Linux or `.\bin\board.ps1 restart` in Windows PowerShell.
+2. Configure a dedicated leader MCP client to send `Authorization: Bearer <token>`
+   using that value. Keep the credential out of worker profiles, shared
+   connectors, chat, repositories, and command history. Use a separate client
+   if your current client shares credentials with worker sessions.
+3. Ask the authorized leader to create the project and one task. Open the
+   read-only board and confirm that the task appears under **TODO**.
+
+For a dedicated Codex CLI leader, add this to the leader environment's private
+`config.toml`. Before launching that CLI, supply the same token value as
+`BOARD_LEADER_TOKEN` in its private process environment. Ask Codex to use the
+`board-leader` MCP connection for the first card.
+
+```toml
+[mcp_servers.board-leader]
+url = "http://127.0.0.1:8080/mcp"
+bearer_token_env_var = "BOARD_LEADER_TOKEN"
+```
+
+Codex uses the variable's value as the bearer token. See the
+[official Codex MCP configuration guide](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+If a management call returns HTTP 403, check the server's configured token and
+the dedicated leader client's header. For Workers, grant management to a
+verified leader device using `MANAGEMENT_DEVICE_IDS`. Git workflow and
+acceptance signatures use credentials separate from management credentials. See the
+[authorization boundaries](authorization-boundaries.md) and
+[Git workflow setup](project-git-workflow.md).
+
 ## Update the server
 
 Server updates are never implied by plugin or marketplace updates. Select an
-exact stable version.
+exact published stable version. The examples use the current source build
+version. Run them for that version once its release assets are published, or
+replace every version value with the same published target version.
 
 macOS/Linux source or installed server:
 
 ```bash
-bin/board update --version 3.2.1 \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1" \
+bin/board update --version 3.3.0 \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.3.0" \
   --check
 
-bin/board update --version 3.2.1 \
-  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.2.1"
+bin/board update --version 3.3.0 \
+  --release-url "https://github.com/hpigu/AIProjectDashboard/releases/download/v3.3.0"
 ```
 
 Use `~/.ai-project-board/bin/board` instead when installed under the default
@@ -202,9 +279,9 @@ server.
 Windows updates use a downloaded ZIP and checksum list:
 
 ```powershell
-<install-root>\bin\board.ps1 update -Version 3.2.1 `
-  -ReleaseZip C:\path\ai-project-board-backend-windows-x64-3.2.1.zip `
-  -Checksums C:\path\ai-project-board-backend-3.2.1-SHA256SUMS.txt -Check
+<install-root>\bin\board.ps1 update -Version 3.3.0 `
+  -ReleaseZip C:\path\ai-project-board-backend-windows-x64-3.3.0.zip `
+  -Checksums C:\path\ai-project-board-backend-3.3.0-SHA256SUMS.txt -Check
 ```
 
 Remove `-Check` to apply the update. The updater verifies the artifact before
@@ -250,9 +327,10 @@ Common variables:
 | `BOARD_DB_URL` | derived from data root | H2 JDBC URL |
 | `BOARD_ALLOWED_HOSTS` | empty | Additional Host/Origin values; does not add authentication |
 
-Do not expose `/mcp` directly beyond the local machine. It has no server-side
-authentication. Read [`SECURITY.md`](../SECURITY.md) before changing the bind or
-proxy configuration.
+Keep the Java server's `/mcp` on loopback. The management credential covers the
+[management tools](authorization-boundaries.md), while other calls still trust
+the local environment. Read [`SECURITY.md`](../SECURITY.md) before changing the
+bind or proxy configuration.
 
 ## Verify an installation
 

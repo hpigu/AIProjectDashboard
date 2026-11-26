@@ -10,7 +10,7 @@
       "name": "ai-project-board",
       "source": "./plugin",
       "description": "Role agents and workflow support for a local dependency-aware MCP task board.",
-      "version": "3.2.1",
+      "version": "3.3.0",
       "author": {
         "name": "Daniel Huang"
       },

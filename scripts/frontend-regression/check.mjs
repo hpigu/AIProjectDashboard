@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 前端手動回歸驗證工具（#140）。純 Node.js 內建模組，不使用任何 npm 套件，
-// 不進 Maven 生命週期、不是 CI 必要條件。見同目錄 README.md。
+// 前端瀏覽器回歸驗證（#140）。可在本機或 CI 執行，只使用 Node.js 內建模組。
+// 見同目錄 README.md。
 //
 // 用法：
 //   node scripts/frontend-regression/check.mjs --base-url http://127.0.0.1:8091 [--cdp-port 9222]
@@ -104,6 +104,15 @@ async function waitForEvent(eventLog, method, timeoutMs) {
     await sleep(50);
   }
   throw new Error(`等待事件逾時: ${method}`);
+}
+
+async function waitForPage(session, expression, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await session.eval(expression)) return;
+    await sleep(50);
+  }
+  throw new Error('等待畫面更新逾時: ' + expression);
 }
 
 const results = [];
@@ -226,8 +235,11 @@ async function checkManualSwitchUpdatesHtmlLangAndPersists(session) {
 async function checkUnsupportedStoredLocaleFallsBackToDefault(session) {
   await session.setViewport(1440, 900);
   await session.navigate(`${baseUrl}/index.html`);
-  // 塞入一個不支援的 locale（例如舊版本存過的值、或人為竄改），reload 後
-  // detectLocale() 必須忽略它並 fallback 到 DEFAULT_LOCALE（'zh-TW'）。
+  // 讓儲存偏好與瀏覽器語言都不受支援，才會落到預設語系。
+  await session.send('Emulation.setUserAgentOverride', {
+    userAgent: await session.eval('navigator.userAgent'),
+    acceptLanguage: 'fr-FR,fr',
+  });
   await session.eval(`window.localStorage.setItem('board.locale', 'fr-FR')`);
   await session.navigate(`${baseUrl}/index.html`);
   const locale = await session.eval('window.__i18n.state.locale');
@@ -288,6 +300,136 @@ async function checkNoRawKeyFallbackVisibleInRenderedDom(session) {
   await session.eval(`window.localStorage.removeItem('board.locale')`);
 }
 
+async function checkArchivedClaimability(session) {
+  const source = `(() => {
+    const originalFetch = window.fetch;
+    const params = new URL(location.href).searchParams;
+    const fixture = window.archiveFixture = {
+      boardStatus: params.get('fixtureStatus'),
+      summaryStatus: params.get('fixtureSummaryStatus'),
+      delayGraph: params.has('delayGraph'),
+      graphRequests: 0,
+      graphAborted: false,
+    };
+    window.EventSource = class extends EventTarget {
+      constructor() { super(); fixture.events = this; }
+      close() {}
+    };
+    fixture.publishSummary = () => {
+      // Use an event understood by the base branch to request a new project summary.
+      fixture.events.dispatchEvent(new MessageEvent('project.created', { data: '{"projectId":1000}' }));
+    };
+    const task = { id: 5, title: 'Ready task', category: 'BACKEND', assignee: null, waitingFor: [] };
+    window.fetch = (input, options) => {
+      const path = new URL(input, location.href).pathname;
+      if (path === '/api/projects') {
+        return Promise.resolve(Response.json(fixture.summaryStatus
+          ? [{ id: 999, name: 'Archive fixture', status: fixture.summaryStatus }]
+          : []));
+      }
+      if (path === '/api/projects/999/board') {
+        const board = {
+          name: 'Archive fixture', status: fixture.boardStatus,
+          columns: { TODO: [task], IN_PROGRESS: [], BLOCKED: [], DONE: [] },
+        };
+        if (fixture.delayBoard) {
+          fixture.delayBoard = false;
+          return new Promise(resolve => {
+            fixture.releaseBoard = () => resolve(Response.json(board));
+            options.signal.addEventListener('abort', () => { fixture.boardAborted = true; }, { once: true });
+          });
+        }
+        return Promise.resolve(Response.json(board));
+      }
+      if (path === '/api/projects/999/dependencies') {
+        fixture.graphRequests++;
+        if (fixture.delayGraph) {
+          fixture.delayGraph = false;
+          return new Promise((resolve, reject) => {
+            options.signal.addEventListener('abort', () => {
+              fixture.graphAborted = true;
+              reject(new DOMException('Canceled in fixture', 'AbortError'));
+            }, { once: true });
+          });
+        }
+        return Promise.resolve(Response.json({ nodes: [{ ...task, status: 'TODO', claimable: true }], edges: [] }));
+      }
+      if (path.endsWith('/workflow')) return Promise.resolve(Response.json({ status: 'UNCONFIGURED' }));
+      return originalFetch(input, options);
+    };
+  })();`;
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  const count = selector => session.eval(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
+  const waitUntil = async (predicate, message) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (await predicate()) return;
+      await sleep(50);
+    }
+    throw new Error(message);
+  };
+  const waitFor = selector => waitUntil(() => count(selector), '看不到預期的畫面元素 ' + selector);
+
+  try {
+    const base = baseUrl + '/index.html?project=999';
+    await session.setViewport(1440, 900);
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&fixtureSummaryStatus=ACTIVE');
+    await waitFor('.task-card');
+    if (await count('.board-header .archive-badge') !== 1) throw new Error('看板回傳封存時不應被過期的進行中摘要蓋過');
+
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&taskClaimable=true');
+    await waitFor('.task-filters');
+    if (await count('.task-card')) throw new Error('可認領篩選包含了封存專案的卡片');
+
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&view=dependencies');
+    await waitFor('.dependency-node');
+    if (await count('.dependency-node .claimable-badge')) throw new Error('相依圖顯示了過期的可認領標章');
+
+    await session.navigate(base + '&fixtureStatus=ACTIVE&taskClaimable=true');
+    await waitFor('.task-card');
+    await session.eval('document.querySelector(".view-switch [role=tab]:last-child").click()');
+    await waitFor('.dependency-node .claimable-badge');
+
+    await session.navigate(base + '&fixtureStatus=ARCHIVED&fixtureSummaryStatus=ARCHIVED&delayGraph&view=dependencies');
+    await waitFor('.view-switch [role=tab]:first-child');
+    await waitUntil(() => session.eval('window.archiveFixture.graphRequests === 1'), '未擱置原始相依圖查詢');
+    await session.eval('document.querySelector(".view-switch [role=tab]:first-child").click()');
+    await session.eval(`(() => {
+      const fixture = window.archiveFixture;
+      fixture.boardStatus = 'ACTIVE';
+      fixture.summaryStatus = 'ACTIVE';
+      fixture.publishSummary();
+    })()`);
+    await waitUntil(() => session.eval('window.archiveFixture.graphAborted && window.archiveFixture.graphRequests === 2'),
+      '專案還原時應取消背景中的舊圖請求並重新載入');
+    await session.eval('document.querySelector(".view-switch [role=tab]:last-child").click()');
+    await waitFor('.dependency-node .claimable-badge');
+
+    await session.navigate(base + '&fixtureStatus=ACTIVE&fixtureSummaryStatus=ACTIVE&taskClaimable=true');
+    await waitFor('.task-card');
+    await session.eval(`(() => {
+      const fixture = window.archiveFixture;
+      fixture.delayBoard = true;
+      fixture.boardStatus = 'ARCHIVED';
+      fixture.summaryStatus = 'ARCHIVED';
+      fixture.publishSummary();
+    })()`);
+    await waitUntil(() => session.eval('Boolean(window.archiveFixture.releaseBoard)'), '未擱置舊的封存看板回應');
+    await session.eval(`(() => {
+      const fixture = window.archiveFixture;
+      fixture.boardStatus = 'ACTIVE';
+      fixture.summaryStatus = 'ACTIVE';
+      fixture.publishSummary();
+    })()`);
+    await waitUntil(() => session.eval('window.archiveFixture.boardAborted'), '快速還原時應取消舊的封存看板請求');
+    await session.eval('window.archiveFixture.releaseBoard(); new Promise(resolve => requestAnimationFrame(resolve));');
+    if (await count('.board-header .archive-badge') || await count('.task-card') !== 1) {
+      throw new Error('較舊的封存回應覆寫了還原後的進行中看板');
+    }
+  } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
 async function checkInterpolationRendersActualValues(session) {
   // conn.connected / conn.reconnecting 不含插值，改驗證有插值語法的
   // relTime 系列在渲染後不殘留 {n} 字面樣板（透過 t() 直接呼叫驗證，
@@ -303,14 +445,272 @@ async function checkInterpolationRendersActualValues(session) {
   }
 }
 
+
+// Isolated browser fixture: the real UI consumes mock GET responses and simulated
+// EventSource events. No task or project is written to the running server.
+async function checkMultipleWorkers(session) {
+  const source = `(() => {
+    const originalFetch = window.fetch;
+    const tasks = [1, 2, 3].map(id => ({ id, title: 'Backend ' + id, category: 'BACKEND', assignee: 'backend-' + id, waitingFor: [] }));
+    window.testBoard = { name: 'Worker fixture', columns: { TODO: [], IN_PROGRESS: tasks, BLOCKED: [], DONE: [] } };
+    window.testBoardReads = 0;
+    window.fetch = (url, options) => {
+      const path = String(url).split('?')[0];
+      if (path === '/api/projects/999/board') {
+        window.testBoardReads++;
+        return Promise.resolve(Response.json(window.testBoard));
+      }
+      if (path === '/api/projects') return Promise.resolve(new Response(JSON.stringify([{ id: 999, name: 'Worker fixture', status: 'ACTIVE', total: 3, counts: { TODO: 0, IN_PROGRESS: 3, BLOCKED: 0, DONE: 0 } }]), { headers: { 'Content-Type': 'application/json' } }));
+      return originalFetch(url, options);
+    };
+    window.EventSource = class extends EventTarget {
+      constructor() { super(); window.testEvents = this; }
+      close() {}
+    };
+  })();`;
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  try {
+    await session.setViewport(1440, 900);
+    await session.navigate(`${baseUrl}/index.html?project=999`);
+    await sleep(500);
+    const snapshot = () => session.eval(`(() => ({
+      cards: [...document.querySelectorAll('.task-card')].map(card => ({ id: card.querySelector('.task-id').textContent, assignee: card.querySelector('.task-assignee')?.textContent.trim(), status: [...card.classList].find(c => c.startsWith('st-')), color: getComputedStyle(card.querySelector('.task-assignee')).color, font: getComputedStyle(card.querySelector('.task-assignee')).fontFamily })),
+      counts: [...document.querySelectorAll('.column-count')].map(el => el.innerText.replace(/\\s+/g, ' ').trim()),
+      progress: document.querySelector('.board-progress')?.textContent.trim(),
+      muted: (() => { const el = document.createElement('span'); el.style.color = 'var(--muted)'; document.body.appendChild(el); const color = getComputedStyle(el).color; el.remove(); return color; })()
+    }))()`);
+    const initial = await snapshot();
+    const expected = ['#1', '#2', '#3'];
+    if (JSON.stringify(initial.cards.map(c => c.id)) !== JSON.stringify(expected) || initial.progress !== '0/3' || initial.counts[1] !== '3/ 3') throw new Error('初始卡片或統計不正確: ' + JSON.stringify(initial));
+    for (let i = 0; i < 3; i++) {
+      const card = initial.cards[i];
+      if (card.assignee !== '@backend-' + (i + 1) || card.status !== 'st-IN_PROGRESS' || card.color !== initial.muted || !card.font.includes('IBM Plex Mono')) throw new Error('工作者顯示或字體不正確: ' + JSON.stringify(card));
+      await session.eval(`(() => { const select = document.querySelector('.filter-advanced select'); select.value = 'backend-${i + 1}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+      await sleep(1200); // wait for filtered cards to leave the transition group
+      const filtered = await snapshot();
+      if (filtered.cards.length !== 1 || filtered.cards[0].id !== expected[i] || filtered.progress !== '0/3' || filtered.counts[1] !== '1/ 3') throw new Error('assignee 篩選或統計不正確: ' + JSON.stringify(filtered));
+    }
+    await session.eval(`(() => { const select = document.querySelector('.filter-advanced select'); select.value = ''; select.dispatchEvent(new Event('change', { bubbles: true })); const task = window.testBoard.columns.IN_PROGRESS.splice(1, 1)[0]; window.testBoard.columns.BLOCKED.push(task); window.testEvents.dispatchEvent(new MessageEvent('task.status_changed', { data: JSON.stringify({ projectId: 999, taskId: 2, from: 'IN_PROGRESS', to: 'BLOCKED' }) })); })()`);
+    await sleep(1200); // allow Vue transition-group removal to finish
+    const updated = await snapshot();
+    if (JSON.stringify(updated.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || updated.progress !== '0/3' || updated.counts[1] !== '2/ 2' || updated.counts[2] !== '1/ 1') throw new Error('狀態事件後卡片或統計不正確: ' + JSON.stringify(updated));
+    const blocked = updated.cards.find(c => c.id === '#2');
+    if (blocked.status !== 'st-BLOCKED' || blocked.assignee !== '@backend-2' || blocked.color !== initial.cards[1].color || blocked.font !== initial.cards[1].font) throw new Error('BLOCKED assignee 樣式或身分不正確: ' + JSON.stringify(blocked));
+    await session.eval(`(() => { const task = window.testBoard.columns.BLOCKED.pop(); window.testBoard.columns.IN_PROGRESS.push(task); window.testEvents.dispatchEvent(new MessageEvent('task.status_changed', { data: JSON.stringify({ projectId: 999, taskId: 2, from: 'BLOCKED', to: 'IN_PROGRESS' }) })); })()`);
+    await sleep(1200);
+    const restored = await snapshot();
+    if (JSON.stringify(restored.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || restored.progress !== '0/3' || restored.counts[1] !== '3/ 3' || restored.counts[2] !== '0/ 0') throw new Error('恢復後卡片或統計不正確: ' + JSON.stringify(restored));
+    const beforeBurst = await session.eval('window.testBoardReads');
+    await session.eval(`(() => {
+      window.testBoard.columns.IN_PROGRESS[0].title = 'Updated through SSE';
+      const data = JSON.stringify({ projectId: 999, taskId: 1 });
+      for (const type of ['tasks.created', 'task.updated', 'task.updated']) {
+        window.testEvents.dispatchEvent(new MessageEvent(type, { data }));
+      }
+    })()`);
+    await waitForPage(session, "document.body.textContent.includes('Updated through SSE')");
+    const afterBurst = await session.eval('window.testBoardReads');
+    if (afterBurst - beforeBurst !== 1) throw new Error('三個連續事件應合併成一個看板查詢');
+  } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
+async function checkSseRecovery(session) {
+  const source = `(() => {
+    const originalFetch = window.fetch;
+    const NativeEventSource = window.EventSource;
+    window.testProjectName = 'Before disconnect';
+    window.projectRequests = [];
+    window.EventSource = class extends NativeEventSource {
+      constructor(url) {
+        super(url);
+        this.addEventListener('open', () => { window.testProjectName = 'After SSE reconnect'; });
+      }
+    };
+    window.fetch = (url, options) => {
+      if (!String(url).startsWith('/api/projects?')) return originalFetch(url, options);
+      window.projectRequests.push(url);
+      return Promise.resolve(Response.json([{ id: 999, status: 'ACTIVE', name: window.testProjectName,
+        total: 1, counts: { TODO: 1, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 } }]));
+    };
+  })();`;
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  const nameIs = value => `document.querySelector('.project-name')?.textContent.trim() === ${JSON.stringify(value)}`;
+  const statusIs = key => `document.querySelector('.conn-status')?.innerText.trim() === window.__i18n.t('conn.${key}')`;
+  try {
+    await session.send('Page.bringToFront');
+    await session.setViewport(375, 812);
+    await session.send('Network.setBlockedURLs', { urls: [new URL('/api/events', baseUrl).href] });
+    await session.navigate(`${baseUrl}/index.html`);
+    await waitForPage(session, nameIs('Before disconnect'));
+    const initial = await session.eval('window.projectRequests');
+    if (initial.length !== 1 || !initial[0].includes('status=ALL')) throw new Error('預設專案清單應共用一次初始查詢');
+    await session.eval("window.testProjectName = 'Updated while disconnected'");
+    await waitForPage(session, statusIs('polling'), 22000);
+    await waitForPage(session, nameIs('Updated while disconnected'));
+    if (await session.eval('document.documentElement.scrollWidth > document.documentElement.clientWidth')) {
+      throw new Error('輪詢狀態在行動尺寸造成水平溢出');
+    }
+    await session.send('Network.setBlockedURLs', { urls: [] });
+    await session.eval("window.dispatchEvent(new Event('online'))");
+    await waitForPage(session, statusIs('connected'), 20000);
+    await waitForPage(session, nameIs('After SSE reconnect'));
+  } finally {
+    await session.send('Network.setBlockedURLs', { urls: [] });
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
+const liveUpdateFixture = `(() => {
+  const originalFetch = window.fetch;
+  const date = '2026-01-01T00:00:00Z';
+  const task = { id: 1, title: 'Initial task', category: 'BACKEND', assignee: null, waitingFor: [] };
+  const project = { id: 999, name: 'Live fixture', status: 'ACTIVE', total: 1, updatedAt: date,
+    counts: { TODO: 1, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 } };
+  const state = window.liveUpdateFixture = { task, project, requests: [], description: 'Original description' };
+  window.fetch = (input, options) => {
+    const url = new URL(input, window.location.href);
+    state.requests.push(url.pathname + url.search);
+    let body;
+    if (url.pathname === '/api/projects') {
+      const status = url.searchParams.get('status');
+      body = [project, state.otherProject].filter(item => item && (status === 'ALL' || status === item.status));
+    } else if (url.pathname === '/api/projects/999/board') {
+      body = { name: project.name, columns: { TODO: [task], IN_PROGRESS: [], BLOCKED: [], DONE: [] } };
+    } else if (url.pathname === '/api/projects/999/dependencies') {
+      body = { nodes: [{ ...task, status: 'TODO', claimable: true }], edges: [] };
+    } else if (url.pathname === '/api/projects/999/tasks/1') {
+      body = { ...task, status: 'TODO', description: state.description, history: [], prerequisites: [], downstreamTasks: [] };
+    } else if (url.pathname.endsWith('/acceptance')) {
+      body = { canClose: false, passedCases: [], blockers: [], events: [] };
+    } else if (url.pathname.endsWith('/workflow')) {
+      body = { status: 'UNCONFIGURED' };
+    } else {
+      return originalFetch(input, options);
+    }
+    return Promise.resolve(Response.json(body));
+  };
+  window.EventSource = class extends EventTarget {
+    constructor() { super(); state.events = this; }
+    close() {}
+  };
+  state.send = (type, payload = {}) => {
+    const event = new MessageEvent(type, { data: JSON.stringify(payload) });
+    state.events['on' + type]?.(event);
+    state.events.dispatchEvent(event);
+  };
+})();`;
+
+async function withLiveUpdateFixture(session, query, run) {
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source: liveUpdateFixture });
+  try {
+    await session.setViewport(1440, 900);
+    await session.navigate(baseUrl + '/index.html' + query);
+    await run();
+  } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
+async function waitForBrowserState(session, expression, message) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (await session.eval(expression)) return;
+    await sleep(50);
+  }
+  throw new Error(message);
+}
+
+async function checkProjectListReconnect(session) {
+  await withLiveUpdateFixture(session, '?projectSort=NAME', async () => {
+    await waitForBrowserState(session, 'document.querySelector(".project-row")?.textContent.includes("Live fixture")', '缺少初始專案');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.send('open');
+      fixture.requests.length = 0;
+      fixture.send('error');
+      fixture.send('error');
+      fixture.send('error');
+      fixture.project.name = 'Changed while offline';
+      fixture.send('open');
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".project-row")?.textContent.includes("Changed while offline")', '重連後的列表仍是舊資料');
+    const requests = await session.eval('window.liveUpdateFixture.requests');
+    const expected = ['/api/projects?status=ACTIVE&sort=NAME', '/api/projects?status=ALL&sort=UPDATED_DESC'];
+    if (JSON.stringify(requests.sort()) !== JSON.stringify(expected)) {
+      throw new Error('重連應各更新一次篩選與全域清單，實際為 ' + JSON.stringify(requests));
+    }
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.project.status = 'ARCHIVED';
+      fixture.send('project.status_changed', { projectId: 999, from: 'ACTIVE', to: 'ARCHIVED' });
+    })()`);
+    await waitForBrowserState(session, '!document.querySelector(".project-row")', '封存後仍在進行中專案清單');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.project.status = 'ACTIVE';
+      fixture.send('project.status_changed', { projectId: 999, from: 'ARCHIVED', to: 'ACTIVE' });
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".project-row")?.textContent.includes("Changed while offline")', '還原後專案未回到清單');
+  });
+}
+
+async function checkTaskEditRefreshesBoard(session) {
+  await withLiveUpdateFixture(session, '?project=999&view=dependencies', async () => {
+    const click = selector => session.eval(`document.querySelector(${JSON.stringify(selector)}).click()`);
+    await waitForBrowserState(session, 'document.querySelector(".dependency-node")', '缺少初始相依節點');
+    await click('.dependency-node');
+    await waitForBrowserState(session, 'document.querySelector(".detail-description")?.textContent === "Original description"', '缺少初始任務詳情');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.task.title = 'Edited task';
+      fixture.description = 'Edited description';
+      fixture.send('task.updated', { projectId: 999, taskId: 1 });
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".detail-description")?.textContent === "Edited description"', '任務編輯後詳情未更新');
+    await waitForBrowserState(session, 'document.querySelector(".dependency-title")?.textContent === "Edited task"', '任務編輯後相依圖未更新');
+    await click('.detail-close');
+    await waitForBrowserState(session, '!document.querySelector(".detail-drawer")', '任務詳情未關閉');
+    await click('.view-switch button:first-child');
+    await waitForBrowserState(session, 'document.querySelector(".task-card")?.textContent.includes("Edited task")', '任務編輯後看板未更新');
+  });
+}
+
+async function checkDelayedStatusDoesNotDuplicateCounts(session) {
+  await withLiveUpdateFixture(session, '?project=999', async () => {
+    await waitForBrowserState(session, 'document.querySelector(".task-card")', '缺少目前專案的任務');
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.otherProject = { ...fixture.project, id: 1000, name: 'Other project', hasBlocked: true,
+        counts: { TODO: 0, IN_PROGRESS: 0, BLOCKED: 1, DONE: 0 } };
+      fixture.send('task.updated', { projectId: 1000, taskId: 2 });
+    })()`);
+    await waitForBrowserState(session, 'document.querySelector(".blocked-elsewhere")?.textContent.includes("Other project")', '缺少其他專案的阻塞提示');
+    await session.eval(`window.liveUpdateFixture.send('task.status_changed', { projectId: 1000, taskId: 2, from: 'TODO', to: 'BLOCKED' })`);
+    await session.eval(`(() => {
+      const fixture = window.liveUpdateFixture;
+      fixture.otherProject.hasBlocked = false;
+      fixture.otherProject.counts = { TODO: 0, IN_PROGRESS: 1, BLOCKED: 0, DONE: 0 };
+      fixture.send('task.status_changed', { projectId: 1000, taskId: 2, from: 'BLOCKED', to: 'IN_PROGRESS' });
+    })()`);
+    await waitForBrowserState(session, '!document.querySelector(".blocked-elsewhere")', '延遲事件重複計算阻塞數，提示未消失');
+  });
+}
+
 async function main() {
   console.log(`目標: ${baseUrl}（CDP port ${cdpPort}）\n`);
   const session = await newCdpSession(cdpPort);
   try {
+    await check('多 Worker 顯示、篩選與事件合併', () => checkMultipleWorkers(session));
+    await check('SSE 中斷時定期更新，重連後重新同步', () => checkSseRecovery(session));
+    await check('重連、封存與還原刷新專案清單', () => checkProjectListReconnect(session));
+    await check('任務編輯刷新看板、相依圖與已開啟的詳情', () => checkTaskEditRefreshesBoard(session));
+    await check('延遲的狀態事件不會重複計算阻塞數', () => checkDelayedStatusDoesNotDuplicateCounts(session));
     await check('RWD 三尺寸無水平溢出', () => checkNoHorizontalOverflow(session));
     await check('console 無錯誤/未捕捉例外', () => checkNoConsoleErrors(session));
     await check('無 CSP violation', () => checkNoCspViolations(session));
     await check('零跨 origin 請求', () => checkNoCrossOriginRequests(session));
+    await check('封存與還原的認領篩選和相依圖', () => checkArchivedClaimability(session));
     await check('i18n: 手動切換更新 html lang 並於 reload 後保留', () => checkManualSwitchUpdatesHtmlLangAndPersists(session));
     await check('i18n: 不支援的 stored locale fallback 到 zh-TW', () => checkUnsupportedStoredLocaleFallsBackToDefault(session));
     await check('i18n: 無 stored 偏好時依瀏覽器語言偵測（含 zh-CN fallback）', () => checkBrowserLanguageDetectionWithoutStoredPreference(session));

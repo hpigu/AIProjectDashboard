@@ -1,12 +1,6 @@
 name: CI
 
-# 每個 push 與 PR 都跑一次完整測試。專案原本沒有任何 CI，223 個測試只在
-# 開發者本機跑過，PR 沒有自動門檻——這個 workflow 就是那道門檻。
-# push 只綁 main：分支上的 push 與該分支的 PR 會各觸發一次，三個 job 就變成六個
-# 檢查，兩兩內容完全相同。concurrency 擋不掉，因為 push 的 github.ref 是
-# refs/heads/<branch>、PR 的是 refs/pull/<n>/merge，屬於兩個不同的 group。
-# 現在：分支開了 PR 就由 pull_request 跑，合進 main 由 push 跑，覆蓋率不變。
-# 還沒開 PR 的分支要臨時跑一輪時，用 workflow_dispatch 手動觸發。
+# PR 驗證合併結果，push 驗證 main。其他分支可手動執行。
 on:
   push:
     branches: [main]
@@ -18,13 +12,42 @@ permissions:
 
 concurrency:
   # 同一分支連續推送時，取消還在跑的舊 run，不佔用 runner 額度。
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  scope:
+    name: 判斷 PR 檢查範圍
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      profile: ${{ steps.classify.outputs.profile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: 判斷變更檔案
+        id: classify
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          profile="$(bash scripts/ci/classify-changes.sh "$PR_BASE" HEAD)"
+          printf 'profile=%s\n' "$profile" >> "$GITHUB_OUTPUT"
+      - name: 檢查文件變更和安裝版號
+        if: steps.classify.outputs.profile == 'docs'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --check "$PR_BASE" HEAD --
+          ./scripts/check-versions.sh
+
   test:
     name: 測試（JDK 21）
-    runs-on: ubuntu-latest
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && needs.scope.outputs.profile == 'full')) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     env:
@@ -35,63 +58,132 @@ jobs:
       BOARD_LOG_FILE: './logs/ci.log'
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: 設定 JDK 21
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '21'
+          problem-matcher: true
           cache: maven
 
-      - name: 執行測試
-        run: ./mvnw -B test
+      - name: 執行測試並組裝 JAR
+        run: ./mvnw -B verify
 
-      - name: 組裝 jar（確認 package 週期同樣可用）
-        run: ./mvnw -B -DskipTests package
-
-      - name: 上傳測試報告（失敗時才需要）
-        if: failure()
-        uses: actions/upload-artifact@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          name: surefire-reports
-          path: target/surefire-reports/
+          node-version: '22'
+
+      - name: 以 Chrome 驗證前端與 Git 流程
+        env:
+          BOARD_HOST: '127.0.0.1'
+          BOARD_PORT: '8093'
+          BOARD_DB_URL: 'jdbc:h2:mem:ci-browser;DB_CLOSE_DELAY=-1'
+          BOARD_MANAGEMENT_TOKEN: workflow-management-fixture-token-at-least-32
+          BOARD_ACCEPTANCE_AUTHORITIES: >-
+            {"workflow-owner":{"secret":"workflow-owner-fixture-credential-at-least-32","projectIds":[1],"permissions":["PROJECT_POLICY"],"runnerProfiles":[]}}
+          BOARD_WORKFLOW_FIXTURE_CONFIRM: isolated
+          BOARD_WORKFLOW_CDP_PORT: '9222'
+        run: |
+          CHROME_BIN="${CHROME_BIN:-$(command -v google-chrome)}"
+          TMPDIR="$RUNNER_TEMP/board-browser"
+          mkdir "$TMPDIR"
+          export CHROME_BIN TMPDIR
+          export BOARD_LOG_FILE="$TMPDIR/board.log"
+          java -jar target/ai-project-board-backend-*.jar > "$TMPDIR/server.log" 2>&1 &
+          board_pid=$!
+          trap 'kill "$board_pid" 2>/dev/null || true' EXIT
+          "$CHROME_BIN" --headless=new --user-data-dir="$TMPDIR/frontend-chrome" \
+            --remote-debugging-port="$BOARD_WORKFLOW_CDP_PORT" --no-first-run about:blank > "$TMPDIR/chrome.log" 2>&1 &
+          chrome_pid=$!
+          trap 'kill "$chrome_pid" "$board_pid" 2>/dev/null || true' EXIT
+
+          base_url=http://127.0.0.1:8093
+          curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-connrefused \
+            --max-time 2 "$base_url/api/health" > /dev/null
+          curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-connrefused \
+            --max-time 2 "http://127.0.0.1:$BOARD_WORKFLOW_CDP_PORT/json/version" > /dev/null
+          node scripts/frontend-regression/check.mjs --base-url "$base_url" --cdp-port "$BOARD_WORKFLOW_CDP_PORT"
+          node scripts/project-workflow-check/browser.mjs --base-url "$base_url"
+
+      - name: 上傳失敗報告
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: java-and-browser-reports
+          path: |
+            target/surefire-reports/
+            ${{ runner.temp }}/board-browser/server.log
+            ${{ runner.temp }}/board-browser/chrome.log
+            ${{ runner.temp }}/board-browser/board-workflow-browser-*/*.json
           retention-days: 7
+
+  workers:
+    name: Workers 測試與隔離備份演練（Node 22）
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && (needs.scope.outputs.profile == 'full' || needs.scope.outputs.profile == 'workers'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+      - name: 安裝鎖定版本（不執行套件安裝腳本）
+        working-directory: workers
+        run: npm ci --ignore-scripts
+      - name: Workers 行為與本機 D1 還原測試
+        working-directory: workers
+        run: npm test
+      - name: 驗證 Web 與 MCP Workers 打包
+        working-directory: workers
+        run: npm run build:local
+      - name: 驗證核准工具、備份與排程模型
+        run: |
+          node --test scripts/project-workflow-check/*.test.mjs \
+            scripts/backup-check/*.test.mjs scripts/worker-scheduling-regression/*.test.js
 
   scripts:
     name: 啟動腳本靜態檢查
-    runs-on: ubuntu-latest
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && needs.scope.outputs.profile == 'full')) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     env:
       # 受檢腳本只列一次。原本語法檢查與 shellcheck 各自維護一份清單，新增腳本
       # 要改兩處，改漏一處就靜靜少一半覆蓋——正是這個 workflow 想擋的那種漏。
       SHELL_SCRIPTS: >-
+        mvnw
         bin/board bin/board-env.sh bin/backup-db.sh bin/restore-db.sh bin/board-update.sh
         install/install.sh
         scripts/check-versions.sh scripts/shell-check/check.sh
         scripts/check-plugin-parity.sh
+        scripts/ci/classify-changes.sh scripts/ci/classify-changes-test.sh
         scripts/install-check/check.sh scripts/install-check/update-fixture.sh
         scripts/release/posix-release-smoke.sh scripts/release/release-assets-fixture.sh
         scripts/release/release-assets.sh
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # 版號散落在三份 plugin manifest 與 README 的安裝指令裡，彼此沒有任何機制
-      # 互相對照。這件事已經出過兩次包：先是 MCP 的 serverInfo.version 寫死，修完
-      # 之後三份 manifest 仍然停在 3.0.0，而 plugin.json 的版號正是陌生人安裝時
-      # 看到的那個數字。放在這個 job 的第一步（它只需要 bash，不必等 JDK 與
-      # Maven 快取），讓「忘記跳版」在十秒內紅燈，而不是跑完整輪測試才發現。
-      # 新增的腳本忘了帶執行權限位元，在 CI 上是 exit 126（「找得到但不可執行」）
-      # ——一個完全不提示原因的離開碼。這已經是第三次：`8c13217` 補過兩支，
-      # `check-plugin-parity.sh` 又中一次。根因是作者在 Windows 上開發，git 的
-      # core.fileMode 預設 false，本機 chmod +x 根本不會進版；在 macOS/Linux 上
-      # 開發則完全不會遇到，所以無法靠「記得」解決。這一步放最前面，十秒內紅燈。
       - name: 確認受檢腳本都有執行權限位元
         run: |
           missing=0
-          for script in ${SHELL_SCRIPTS}; do
+          read -r -a scripts <<< "$SHELL_SCRIPTS"
+          for script in "${scripts[@]}"; do
             mode="$(git ls-files -s "${script}" | cut -d' ' -f1)"
             if [ "${mode}" != "100755" ]; then
               echo "::error file=${script}::${script} 在 git 裡的 mode 是 ${mode}，應為 100755。"
@@ -103,30 +195,29 @@ jobs:
             echo "有 ${missing} 支腳本缺少執行權限位元，CI 執行時會是 exit 126。" >&2
             exit 1
           fi
-          echo "全部 $(echo ${SHELL_SCRIPTS} | wc -w) 支腳本的權限位元正確。"
+          echo "全部 ${#scripts[@]} 支腳本的權限位元正確。"
 
       - name: 確認各 manifest 版號與 pom.xml 一致
         run: ./scripts/check-versions.sh
 
-      # 同一組治理規則被迫存在兩份（plugin/ 與 plugins/ai-project-board/ 有各自的安裝根目錄，
-      # 檔案沒辦法真的合併）。改了一邊忘了另一邊，兩個平台的使用者就會拿到不同的
-      # 工具邊界，而且不會有任何徵兆。比對的是工具名集合與 category，不是逐行 diff
-      # ——兩邊的行文本來就刻意不同，逐行比會每次都紅燈然後被忽略。
       - name: 確認兩套 plugin 沒有漂移
         run: ./scripts/check-plugin-parity.sh
 
-      # 語法檢查與 shellcheck 都看不出「排序鍵算錯」這類邏輯錯誤，而 bin/ 算錯的
-      # 後果是啟動成功卻跑到錯的 jar，完全沒有徵兆。這一步補上行為層的斷言，
-      # 放在 shellcheck 之前，才不用等 apt 裝完才知道邏輯壞了。
       - name: bash 函式行為檢查
         run: ./scripts/shell-check/check.sh
 
-      # bin/ 下的腳本是使用者的第一個接觸點，壞掉等於裝不起來，但它們不在
-      # Maven 測試範圍內（只有部分行為由 JUnit 以 ProcessBuilder 覆蓋）。
-      # 這裡先做語法檢查，再跑 shellcheck 補靜態問題。
+      - name: 驗證 PR 檢查分流規則
+        run: ./scripts/ci/classify-changes-test.sh
+
+      - name: 驗證安裝、更新與發行資產格式
+        run: |
+          ./scripts/install-check/check.sh
+          ./scripts/release/release-assets-fixture.sh
+
       - name: bash 語法檢查
         run: |
-          for script in ${SHELL_SCRIPTS}; do
+          read -r -a scripts <<< "$SHELL_SCRIPTS"
+          for script in "${scripts[@]}"; do
             echo "檢查 ${script}"
             bash -n "${script}"
           done
@@ -135,16 +226,20 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          # shellcheck 吃多個檔名，這裡刻意不加引號讓 SHELL_SCRIPTS 展開成多個參數。
-          shellcheck --severity=warning ${SHELL_SCRIPTS}
+          read -r -a scripts <<< "$SHELL_SCRIPTS"
+          shellcheck --severity=warning "${scripts[@]}"
 
   windows-scripts:
     name: Windows 腳本檢查
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.scope.result == 'success' && needs.scope.outputs.profile == 'full')) }}
     runs-on: windows-latest
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # bin/*.ps1 是 Windows 使用者的唯一入口，而它們碰的是使用者的資料庫檔案。
       # 這個 job 在真正的 Windows 上做語法檢查，並用假的 H2 檔案跑完整的
@@ -158,34 +253,55 @@ jobs:
         shell: pwsh
         run: .\scripts\windows-check\check.ps1
 
-  # ---------------------------------------------------------------------------
-  # 依賴弱點掃描
-  #
-  # Dependabot 回答的是「我的依賴有沒有比較新的版本」，不保證你合併前就知道
-  # 「這次改動引進的依賴有沒有已知漏洞」。dependency-review 補的正是後者：它比對
-  # PR 的 base 與 head，只看**這次新增或升級**的依賴，命中已知漏洞就擋下 PR。
-  #
-  # 為什麼不用 OWASP dependency-check：它要下載並維護整份 NVD 資料庫，2023 年起
-  # 沒有 API key 會被 rate limit 到跑數十分鐘，而 API key 要另外申請與存成 secret。
-  # 對單人專案來說那是一條會持續耗維運心力的路，而它解的問題跟這個 action 高度
-  # 重疊。哪天真的需要「掃描既有依賴而不只是新增的」，再評估把它加成排程 job。
-  #
-  # 只在 PR 上跑：這個 action 的輸入就是「兩個 commit 之間的依賴差異」，push 到
-  # main 沒有可比的 base。
-  # ---------------------------------------------------------------------------
   dependency-review:
     name: 依賴弱點檢查
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     if: github.event_name == 'pull_request'
 
     steps:
-      - uses: actions/checkout@v7
-
       - name: 檢查新增／升級的依賴有無已知漏洞
-        uses: actions/dependency-review-action@v5
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
-          # moderate 以上才擋。單機、只聽 loopback 的服務把 low 也設成阻擋，
-          # 只會製造一堆得手動放行的 PR，最後變成無條件放行的橡皮圖章。
           fail-on-severity: moderate
-          comment-summary-in-pr: on-failure
+          # Wrangler、Miniflare 等 Workers 工具列在 devDependencies。
+          fail-on-scopes: runtime, development, unknown
+
+  gate:
+    name: CI gate
+    needs: [scope, test, workers, scripts, windows-scripts, dependency-review]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: 確認必要檢查已通過
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          PR_PROFILE: ${{ needs.scope.outputs.profile }}
+          JAVA_RESULT: ${{ needs.test.result }}
+          WORKERS_RESULT: ${{ needs.workers.result }}
+          SHELL_RESULT: ${{ needs.scripts.result }}
+          WINDOWS_RESULT: ${{ needs.windows-scripts.result }}
+          DEPENDENCIES_RESULT: ${{ needs.dependency-review.result }}
+        run: |
+          profile=full
+          if [[ "$GITHUB_EVENT_NAME" = pull_request ]]; then
+            [[ "$SCOPE_RESULT" = success ]] || exit 1
+            [[ "$DEPENDENCIES_RESULT" = success ]] || exit 1
+            profile="$PR_PROFILE"
+          fi
+          printf 'Profile=%s Java=%s Workers=%s Shell=%s Windows=%s Dependencies=%s\n' \
+            "$profile" "$JAVA_RESULT" "$WORKERS_RESULT" "$SHELL_RESULT" "$WINDOWS_RESULT" "$DEPENDENCIES_RESULT"
+          case "$profile" in
+            docs)
+              [[ "$JAVA_RESULT:$WORKERS_RESULT:$SHELL_RESULT:$WINDOWS_RESULT" = skipped:skipped:skipped:skipped ]]
+              ;;
+            workers)
+              [[ "$JAVA_RESULT:$WORKERS_RESULT:$SHELL_RESULT:$WINDOWS_RESULT" = skipped:success:skipped:skipped ]]
+              ;;
+            full)
+              [[ "$JAVA_RESULT:$WORKERS_RESULT:$SHELL_RESULT:$WINDOWS_RESULT" = success:success:success:success ]]
+              ;;
+            *) exit 1 ;;
+          esac

@@ -1,12 +1,15 @@
 # AI Project Board
 
 > 讓多個 Claude Code 與 Codex agent 不重複領任務、不跳過前置，並用驗證證據回報完成。
-> 全程本機執行，不需帳號或雲端服務。
+> 預設本機執行，也可選用單人雲端部署。
 
 [英文首頁](README.md) ·
 [最新版本](https://github.com/hpigu/AIProjectDashboard/releases/latest) ·
 [安裝指南](docs/installation.md) ·
-[MCP 工具參考](docs/mcp-tools.md)
+[MCP 工具參考](docs/mcp-tools.md) ·
+[需求驗收協定](docs/acceptance-protocol.md) ·
+[管理授權](docs/authorization-boundaries.md) ·
+[備份與還原](docs/backup-recovery.md)
 
 ![AI Project Board demo](docs/demo.gif)
 
@@ -17,14 +20,40 @@ AI Project Board 透過本機 MCP server 管理這個協作流程。Agent 原子
 任務、記錄結構化阻塞原因，並在完成時附上測試、變更檔案與 commit 證據。
 瀏覽器看板會即時顯示所有專案進度。
 
+若要讓電腦關機後仍能共用看板，可評估獨立的
+[Workers＋D1 免費方案部署版本](docs/workers-deployment.md)。它沿用原本零建置前端，
+瀏覽器採 Access 登入，Codex／Claude Code 使用各裝置的機器憑證；與本機 H2 資料
+分開，雲端資源仍需明確授權後才建立。免費額度與正式客戶端相容性須實際驗收。
+[架構與驗證計畫](docs/workers-architecture.md)記錄了移植範圍；原本的
+[VM＋Tunnel 方案](docs/cloud-deployment.md)保留作替代選項。
+之後的新功能如何同步到雲端、備份與回退，見[雲端更新流程](docs/workers-updates.md)。
+
 ## 核心能力
 
 - **避免重複工作**：並行認領使用 compare-and-swap，同一任務只會發給一個 agent。
 - **強制任務相依**：前置未完成的任務不會被發放，其他無相依工作仍可繼續。
-- **完成證據**：任務可保留驗證結果、變更檔案與 commit reference。
+- **結案閘門**：需求與證據綁定版本，受控執行紀錄、獨立審查及專案 Git policy 共同決定能否結案。
 - **跨 session 進度**：Claude Code 與 Codex 可對不同專案與角色共用同一看板。
+- **角色不限配額**：跨專案依平台實際 session 上限、任務相依、檔案與資源衝突派工，槽位不足時排隊補派。
 - **本機優先**：預設只監聽 `127.0.0.1`，資料存在本機 H2，前端不依賴 CDN。
 - **可追溯歷史**：認領、阻塞、狀態變更與完成證據都會顯示在任務詳情。
+
+## 在對話設定專案 Git 流程
+
+對代理說「請為專案『名稱』規劃 Git 流程」。代理先讀文件、只問待決項，整理七欄與修改差異並保存草稿；你用獨立 owner 工具確認後生效。專案頁即使沒有任務也可查看有效設定、版本、核准紀錄與草稿。後續任務沿用，不必重填。詳見[操作與核准方式](docs/project-git-workflow.md)。
+
+## 驗收升級注意事項
+
+所有新完成操作（包含舊任務）都必須透過 `complete_task` 通過驗收閘門；
+`update_task_status(..., DONE)` 已取消。既有 DONE 保留歷史狀態，沒有新版驗收紀錄時
+仍標示未驗證，不能解鎖新的下游認領。使用前須配置專案範圍與最小權限的獨立簽署身分，並先登錄
+PROJECT_POLICY；代理自填 PASSED 無法結案。HMAC 只證明設定授權的簽署身分，
+不自動證明內容真實；CI 需要受測程式與開發代理都碰不到金鑰的隔離簽署邊界。
+預設沒有啟用任何可信身分。完整流程與相容性見[需求驗收協定](docs/acceptance-protocol.md)。
+
+隔離範例不代表真實公司系統、公司 Git flow 或 Amazon Bedrock 設定已驗證。
+修改 repo 內角色指引也不會同步既有線上角色。[備份與還原](docs/backup-recovery.md)
+提供隔離還原及可設定的加密離機匯出；本次尚未設定目的地或上傳離機備份。
 
 ## 從 source 啟動
 
@@ -100,20 +129,28 @@ url = "http://127.0.0.1:8080/mcp"
 
 ## 建立第一個看板
 
-前端是唯讀觀測介面；寫入由 agent 透過 MCP 執行。連線完成後，可以說：
+以下步驟適用目前的原始碼版本與對應的 plugin。如果使用下載的發行版，請參考
+[對應版本的安裝說明](docs/installation.md#option-2-install-a-stable-release)。
+
+瀏覽器看板是唯讀的。預設 connector 可以讀取看板。`create_project` 和
+`create_tasks` 需要[設定 leader 專用連線](docs/installation.md#authorize-project-and-task-creation)。
+
+向已授權的 leader 說：
 
 ```text
-建立一個叫「結帳穩定性」的專案，拆成後端、前端、測試、基礎設施與文件任務，
-並把前置關係寫進 AI Project Board。
+建立「結帳穩定性」專案，新增一張後端任務卡，記錄結帳請求重試時的行為。
 ```
 
-然後在要開發的 repo 中說：
+在瀏覽器開啟專案，確認任務出現在 **TODO** 欄。使用 `claim-tasks` 派工前請先
+[規劃並核准專案 Git 流程](docs/project-git-workflow.md)。
+接著在要開發的 repo 中說：
 
 ```text
 認領「結帳穩定性」的任務，開始可執行的工作。
 ```
 
-看板會透過 SSE 即時更新，不需重新整理。
+看板會透過 SSE 即時更新。Leader 依平台的 session 上限、任務相依及檔案或資源
+衝突派工。詳見[角色與派工](docs/agent-roles.md)。
 
 ## 介面
 
@@ -135,7 +172,7 @@ url = "http://127.0.0.1:8080/mcp"
 | `block_task` | 記錄結構化阻塞原因 |
 | `complete_task` | 以摘要與驗證證據完成任務 |
 
-Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
+完整工具參數與狀態規則見
 [`docs/mcp-tools.md`](docs/mcp-tools.md)。
 
 ## 安全模型
@@ -143,7 +180,8 @@ Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
 這是單機、可信任使用者產品。
 
 - Server 預設只監聽 `127.0.0.1`。
-- `/mcp` **沒有 server-side authentication**，不要直接開放到 LAN 或公開網路。
+- 本機 server 會檢查[管理工具](docs/authorization-boundaries.md)的 leader 憑證。
+  `/mcp` 維持在 loopback。
 - Host 與 Origin 檢查用來阻擋 DNS rebinding。
 - Worker 工具白名單是 client-side 邊界，不是 server 授權。
 - Server 內建啟動前、正常關閉前與執行中排程備份。
@@ -154,6 +192,7 @@ Server 目前有 16 個 MCP 工具，完整參數與狀態規則見
 ## 已知限制
 
 - 只支援單機，沒有帳號、跨裝置同步或經驗證的雲端部署路徑。
+- 看板無法偵測 session 是否存活，會保留失聯的認領讓 leader 查明。
 - macOS／Linux release 需 JDK 21；只有 Windows x64 ZIP 內含 Java runtime。
 - MCP 工具說明、角色指引、CLI 輸出與多數錯誤訊息仍以繁體中文為主。
 - Codex 與 Claude Desktop 的 plugin 頁面更新流程已驗證；桌面版全新圖形安裝仍待
@@ -185,6 +224,7 @@ BOARD_LOG_FILE='./logs/dev-local.log' \
 ```
 
 本 repo 的 agent 開發規則見 [`AGENTS.md`](AGENTS.md)。
+專案結構、效能基準與腳本評估見 [工程評估](docs/engineering-assessment.md)。
 
 ## License
 

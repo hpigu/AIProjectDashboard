@@ -49,6 +49,8 @@ class TaskServiceTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(taskRepository.findProjectIdByTaskId(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(invocation -> taskRepository.findById(invocation.getArgument(0)).map(Task::getProjectId));
         taskService = new TaskService(taskRepository, taskLogRepository, taskDependencyRepository,
                 projectService, eventPublisher, claimTokenService);
     }
@@ -336,7 +338,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(candidate));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L)))
                 .thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
@@ -365,7 +367,7 @@ class TaskServiceTest {
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO))
                 .thenReturn(List.of(first, second), List.of(second));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(any())).thenReturn(List.of());
+        when(taskDependencyRepository.findPrerequisitesForTasks(any())).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
                 any(String.class)))
@@ -396,7 +398,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(blocked, free));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L, 15L)))
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L, 15L)))
                 .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(15L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
@@ -421,7 +423,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(blocked));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L)))
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L)))
                 .thenReturn(List.of(prerequisiteOf(14L, prerequisite)));
 
         TaskService.ClaimNextTaskResult result =
@@ -488,23 +490,13 @@ class TaskServiceTest {
     }
 
     @Test
-    void updateStatus_whenRequireEvidenceFalse_behavesExactlyLikeLegacyDataAndAllowsDirectDone() {
-        // require_evidence=false 模擬既有資料（migration 後預設值），行為必須
-        // 與 #131 之前完全一致：updateStatus 仍可直接把任務轉 DONE。
-        Long projectId = 12L;
-        Task task = claimedTask(projectId, 4L, "既有資料任務", "BACKEND", 0, "backend-dev");
-        // requireEvidence 預設就是 false，這裡明講出來以強調測試意圖。
+    void updateStatus_legacyDataCannotBypassTrustedAcceptance() {
+        Task task = claimedTask(12L, 4L, "既有資料任務", "BACKEND", 0, "backend-dev");
         task.setRequireEvidence(false);
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
-        when(taskRepository.countByProjectIdAndStatus(projectId, TaskStatus.DONE)).thenReturn(0L);
-        when(taskRepository.countByProjectId(projectId)).thenReturn(1L);
-        when(projectService.getById(projectId))
-                .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
-
-        TaskService.TaskStatusChangeResult result = taskService.updateStatus(4L, "DONE", null);
-
-        assertThat(result.changed()).isTrue();
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "DONE", null)).hasMessageContaining("complete_task");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
+        verify(taskLogRepository, never()).save(any(TaskLog.class));
     }
 
     @Test
@@ -582,7 +574,7 @@ class TaskServiceTest {
     @Test
     void updateStatus_withoutStoredTokenHash_worksWithoutClaimToken_backwardCompatible() {
         // 部署前既有、以舊契約認領（沒有 claimTokenHash）的任務，仍要能用舊呼叫方式
-        // （不帶 claimToken）完成操作，這是 #112 對「舊 server 契約」的相容承諾。
+        // （不帶 claimToken）標成 BLOCKED；這不授權繞過新的 DONE 驗收門檻。
         Long projectId = 12L;
         Task task = claimedTask(projectId, 4L, "舊資料任務", "BACKEND", 0, "backend-dev");
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
@@ -591,10 +583,10 @@ class TaskServiceTest {
         when(projectService.getById(projectId))
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
 
-        TaskService.TaskStatusChangeResult result = taskService.updateStatus(4L, "DONE", null);
+        TaskService.TaskStatusChangeResult result = taskService.updateStatus(4L, "BLOCKED", "等待需求確認");
 
         assertThat(result.changed()).isTrue();
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.DONE);
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.BLOCKED);
     }
 
     @Test
@@ -604,7 +596,7 @@ class TaskServiceTest {
         task.setClaimTokenHash(claimTokenService.hash("正確的token"));
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
 
-        assertThatThrownBy(() -> taskService.updateStatus(4L, "DONE", null))
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "BLOCKED", "等待確認"))
                 .isInstanceOf(BoardException.class)
                 .hasMessageContaining("claimToken");
 
@@ -619,7 +611,7 @@ class TaskServiceTest {
         task.setClaimTokenHash(claimTokenService.hash("正確的token"));
         when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
 
-        assertThatThrownBy(() -> taskService.updateStatus(4L, "DONE", null, "別人猜的token"))
+        assertThatThrownBy(() -> taskService.updateStatus(4L, "BLOCKED", "等待確認", "別人猜的token"))
                 .isInstanceOf(BoardException.class)
                 .hasMessageContaining("不正確");
 
@@ -638,12 +630,12 @@ class TaskServiceTest {
                 .thenReturn(new ProjectService.ProjectDto(projectId, "專案", null, "ACTIVE"));
 
         TaskService.TaskStatusChangeResult result =
-                taskService.updateStatus(4L, "DONE", null, "正確的token");
+                taskService.updateStatus(4L, "BLOCKED", "等待需求確認", "正確的token");
 
         assertThat(result.changed()).isTrue();
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.DONE);
-        // DONE 必須清空 token hash。
-        assertThat(task.getClaimTokenHash()).isNull();
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.BLOCKED);
+        // BLOCKED 保留 token hash 供原認領者接手。
+        assertThat(task.getClaimTokenHash()).isNotNull();
     }
 
     @Test
@@ -691,7 +683,7 @@ class TaskServiceTest {
         when(projectService.findByNameIgnoreCase("個人記帳 App")).thenReturn(Optional.of(project));
         when(taskRepository.findByProjectIdAndCategoryAndStatusOrderBySortOrderAscIdAsc(
                 projectId, "BACKEND", TaskStatus.TODO)).thenReturn(List.of(candidate));
-        when(taskDependencyRepository.findUnfinishedPrerequisites(List.of(14L))).thenReturn(List.of());
+        when(taskDependencyRepository.findPrerequisitesForTasks(List.of(14L))).thenReturn(List.of());
         when(taskRepository.claimIfTodo(org.mockito.ArgumentMatchers.eq(14L),
                 org.mockito.ArgumentMatchers.eq("backend-dev"), any(LocalDateTime.class),
                 any(String.class)))
@@ -784,10 +776,10 @@ class TaskServiceTest {
                 .hasMessageContaining("不能標記為 BLOCKED");
     }
 
-    /** 組出 findUnfinishedPrerequisites 的投影列：taskId 還在等 prerequisite。 */
-    private static TaskDependencyRepository.UnfinishedPrerequisite prerequisiteOf(
+    /** 組出 findPrerequisitesForTasks 的投影列：taskId 還在等 prerequisite。 */
+    private static TaskDependencyRepository.Prerequisite prerequisiteOf(
             Long taskId, Task prerequisite) {
-        return new TaskDependencyRepository.UnfinishedPrerequisite() {
+        return new TaskDependencyRepository.Prerequisite() {
             @Override
             public Long getTaskId() {
                 return taskId;

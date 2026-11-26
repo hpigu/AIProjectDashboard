@@ -26,7 +26,6 @@ It is not intended to replace a general-purpose human project-management suite.
 | P0 | Shorten first-time setup | A new user can install the server, connect one supported agent, and create the first task without reading internal release documentation |
 | P0 | Validate the Windows bundle | Run the `v3.2.1` ZIP in Windows Sandbox and record SmartScreen, non-admin, startup, shutdown, and data-location results |
 | P0 | Observe external users | At least five non-authors attempt the setup; record time-to-first-card and the step where each person stops |
-| P1 | Remove repository-specific role seeds | A user project named `AgentDashboard` must not receive this repository's paths, ports, or commit rules |
 
 Feature work that does not improve one of these outcomes waits until the first
 external setup results are available.
@@ -58,8 +57,6 @@ These items need evidence before implementation.
 
 ## Engineering debt
 
-- `RoleSeeder` contains AgentDashboard-specific overrides that should move to a
-  development fixture or external project configuration.
 - Several services cross package boundaries through repositories. Revisit the
   aggregate boundary before the task and project packages grow further.
 - `TaskEditTools` and `TaskBlockTools` lack direct MCP adapter tests. Add them

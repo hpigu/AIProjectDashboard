@@ -1,13 +1,16 @@
 # AI Project Board
 
 > Coordinate parallel Claude Code and Codex agents without duplicate work,
-> missed prerequisites, or unverifiable "done" claims. Local-first, no account,
-> no cloud.
+> missed prerequisites, or unverifiable "done" claims. Local by default, with
+> optional single-user cloud hosting.
 
 [Traditional Chinese 繁體中文](README.zh-TW.md) ·
 [Latest release](https://github.com/hpigu/AIProjectDashboard/releases/latest) ·
 [Installation guide](docs/installation.md) ·
-[MCP tools](docs/mcp-tools.md)
+[MCP tools](docs/mcp-tools.md) ·
+[Acceptance protocol](docs/acceptance-protocol.md) ·
+[Authorization boundaries](docs/authorization-boundaries.md) ·
+[Backup and recovery](docs/backup-recovery.md)
 
 ![AI Project Board demo](docs/demo.gif)
 
@@ -26,10 +29,12 @@ every project update live in one browser tab.
   agents cannot receive the same task.
 - **Dependencies are enforced.** Blocked tasks are skipped until every prerequisite
   is done; independent work can continue.
-- **Done means evidence.** Completion records can include verification results,
-  changed files, and a commit reference.
+- **Completion is gated.** Versioned requirements, signed execution reports,
+  independent review, and project Git policy determine whether work can close.
 - **Built for parallel sessions.** Claude Code and Codex can work on different
   projects and roles through the same board.
+- **Parallel roles without quotas.** The leader schedules across projects against
+  actual platform session limits, dependencies, and file/resource conflicts.
 - **Local-first.** The server binds to `127.0.0.1`, stores data in local H2, and
   serves a fully offline web UI with vendored Vue and fonts.
 - **Human-readable history.** Every claim, block, status change, and completion is
@@ -47,6 +52,27 @@ every project update live in one browser tab.
 
 This project is deliberately opinionated. It is a coordination layer for coding
 agents, not a general-purpose replacement for a human project-management suite.
+
+## Plan a project Git workflow
+
+Ask the agent to plan the Git workflow for your named project. It reads project rules, asks only unresolved decisions, saves a draft, and presents all seven settings and changes. A human owner approves using the isolated helper. The read-only project page shows active settings and drafts, even before tasks exist. Reuse approved settings for future work. See [planning and approval](docs/project-git-workflow.md).
+
+## Acceptance upgrade
+
+All new completion operations, including legacy tasks, must pass the acceptance
+gate through `complete_task`; direct `update_task_status(..., DONE)` is removed.
+Existing DONE history stays intact but is unverified without current acceptance
+records and cannot unlock new downstream claims. Configure scoped signing identities and a PROJECT_POLICY before
+acceptance; a self-reported PASSED result cannot close a task. HMAC identifies a
+configured signer, not the truth of its claims: CI needs an isolated signing
+boundary that development agents and tested code cannot access. No authorities
+are enabled by default. See the [protocol and compatibility details](docs/acceptance-protocol.md).
+
+This implementation and its isolated example do not verify a company system,
+company Git flow, or Amazon Bedrock settings. Source role changes do not update
+roles already stored in an online board. See [backup and recovery](docs/backup-recovery.md)
+for isolated restore and configurable encrypted offsite export; no destination
+has been configured or uploaded by this change.
 
 ## Quick start from source
 
@@ -135,24 +161,31 @@ The full client setup and update paths are documented in the
 
 ## Create your first board
 
-The UI is read-only by design; agents perform every write through MCP. Once the
-connector is enabled, ask your agent:
+The steps below use the current source server and matching plugin. For a release
+install, see the [version-specific guide](docs/installation.md#option-2-install-a-stable-release).
+
+The browser board is read-only. The default connector can read the board.
+`create_project` and `create_tasks` require a
+[dedicated leader connection](docs/installation.md#authorize-project-and-task-creation).
+
+Ask the authorized leader:
 
 ```text
-Create a project called Checkout Reliability, break it into backend, frontend,
-test, infrastructure, and documentation tasks, and record their prerequisites in
-AI Project Board.
+Create a project called Checkout Reliability and add one backend task to
+document what happens when a checkout request is retried.
 ```
 
-Then, from the repository where the work should happen:
+Open the project in the browser and check that the task appears in **TODO**.
+Before using `claim-tasks`, [plan and approve the project's Git workflow](docs/project-git-workflow.md).
+Then, from the work repository, ask:
 
 ```text
 Claim tasks for Checkout Reliability and start the dependency-ready work.
 ```
 
-The board updates over SSE without a page refresh. The supplied workflow can
-dispatch one task per idle role, integrate results through a `dev` branch, and
-request a reviewer before the batch reaches `main`.
+The board updates over SSE without a page refresh. The leader schedules work
+within the platform session limit, accounting for prerequisites and file or
+resource conflicts. See [Agent roles](docs/agent-roles.md).
 
 ## What you can see
 
@@ -180,11 +213,28 @@ editing, and archive operations. Their schemas and state transitions are in
 
 ## Safety model
 
-This is a trusted-user, single-machine product.
+For a personal cloud board, the separate
+[Workers + D1 backend](docs/workers-deployment.md) targets Cloudflare's Free plans
+and a `workers.dev` address. It shares the existing zero-build frontend, provides
+authenticated web and MCP endpoints, and requires its own deployment acceptance.
+The [architecture and validation plan](docs/workers-architecture.md) records the
+runtime and database differences. No cloud resources are created by local tests.
+The [cloud update guide](docs/workers-updates.md) covers feature parity, maintenance,
+backups, publishing and rollback for subsequent releases.
+
+An alternative VM deployment kit is available in
+[docs/cloud-deployment.md](docs/cloud-deployment.md), with the current client
+authentication findings in [docs/cloud-research.md](docs/cloud-research.md).
+It keeps the origin on loopback and requires Cloudflare Access JWT validation
+in the tunnel. Cloud deployment and real client/edge acceptance remain separate
+steps; this is not a public, unauthenticated hosting mode.
+
+The default Java backend trusts processes on the same machine. Its protections
+and limitations are:
 
 - The server binds to `127.0.0.1` by default.
-- `/mcp` has **no server-side authentication**. Do not expose it directly to a
-  LAN or the public internet.
+- The local server checks a leader credential for
+  [management tools](docs/authorization-boundaries.md). Keep `/mcp` on loopback.
 - Host and Origin validation protects the loopback service against DNS rebinding.
 - Worker tool allowlists are client-side guardrails, not server authorization.
 - Startup, shutdown, and scheduled H2 backups are built in; restore is explicit
@@ -195,7 +245,11 @@ Read [SECURITY.md](SECURITY.md) and the
 
 ## Scope and current limitations
 
-- Single machine only; no account, cloud sync, or validated server deployment.
+- No multi-user tenant isolation or backend leader/worker RBAC. The local/VM
+  backend uses one H2 instance; the personal Workers backend uses shared D1.
+  Both cloud options require deployment-specific acceptance testing.
+- The board cannot detect whether a session is alive and leaves abandoned
+  claims in place for a leader to investigate.
 - macOS/Linux release JARs require JDK 21; only the Windows x64 release bundle
   currently includes a Java runtime.
 - The agent-facing tool descriptions, role instructions, most backend errors, and

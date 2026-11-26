@@ -24,24 +24,7 @@ public class TaskCompleteTools {
         this.taskCompleteService = taskCompleteService;
     }
 
-    @Tool(name = "complete_task",
-            description = "把任務標記為 DONE，同時記錄結構化的完成證據，取代直接呼叫 "
-                    + "update_task_status 轉 DONE（那個舊路徑仍相容既有沒有要求證據的任務，"
-                    + "但不會留下結構化證據，建議所有新完成的任務改用這裡）。"
-                    + "summary 必填，說明實際完成了什麼；verificationResults 至少一筆，"
-                    + "每筆包含 name（驗證的是什麼，例如「./mvnw test」）、"
-                    + "result（PASSED／FAILED／NOT_RUN）、detail（FAILED 或 NOT_RUN 時必填，"
-                    + "說明結果內容或為什麼這個 category 沒有適用的驗證方式，"
-                    + "例如純文件任務可以用 NOT_RUN 加原因）。"
-                    + "只要有一筆 verification 是 FAILED，整個 complete_task 會被拒絕，"
-                    + "請先解決問題或改用 block_task／update_task_status 標記 BLOCKED。"
-                    + "這裡記錄的是你（agent）自行聲明的證據，系統不會、也不能代替你去驗證"
-                    + "commitRef 是否真的存在於外部 repo、changedFiles 是否確實被修改，"
-                    + "請誠實填寫，不要宣稱系統已經驗證過你沒有實際跑過的東西。"
-                    + "只有持有 claim token 的 assignee 能完成自己的任務，"
-                    + "帶入 claimToken 與認領時相同；沒有 token 的舊資料任務沿用舊行為。"
-                    + "帶入 expectedVersion（可從 list_tasks 或前次操作結果取得任務版本）"
-                    + "可避免在你讀取任務之後、實際送出 complete 之前，任務已被別的操作改變。")
+    @Tool(name = "complete_task", description = "正式結案，須通過版本化需求契約、受控執行證據、獨立核准與專案Git流程。verificationResults僅為開發代理自測聲明，不會提升為可信證據。需要認領token，commitRef須符合受測codeRef；未驗收請先report_implementation。")
     public String completeTask(
             @ToolParam(description = "任務 ID") Long taskId,
             @ToolParam(description = "認領該任務時取得的 claim token；任務要求 token 時才需要提供",
@@ -77,6 +60,20 @@ public class TaskCompleteTools {
                 .formatted(task.id(), task.title(), result.project().name(),
                         result.doneCount(), result.totalCount(), result.evidence().summary(),
                         verificationLabel);
+    }
+
+    @Tool(name="report_implementation", description="開發代理提交實作及自測聲明，保留 IN_PROGRESS/BLOCKED，不代表驗收，不解鎖相依。FAILED/NOT_RUN 需理由。")
+    public TaskCompleteService.CompleteResult reportImplementation(
+            @ToolParam(description="任務 ID") Long taskId,
+            @ToolParam(description="認領 token", required=false) String claimToken,
+            @ToolParam(description="實作摘要") String summary,
+            @ToolParam(description="自測聲明，每項 name/result/detail") List<VerificationPayload> verificationResults,
+            @ToolParam(description="變更檔案",required=false) String changedFiles,
+            @ToolParam(description="實作版本",required=false) String commitRef,
+            @ToolParam(description="預期任務版本",required=false) Long expectedVersion) {
+        return taskCompleteService.reportImplementation(taskId,claimToken,summary,
+            verificationResults==null ? List.of() : verificationResults.stream().map(v->new TaskCompleteService.VerificationInput(v.name(),v.result(),v.detail())).toList(),
+            changedFiles,commitRef,expectedVersion);
     }
 
     public record VerificationPayload(String name, String result, String detail) {

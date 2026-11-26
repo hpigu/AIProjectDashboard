@@ -56,12 +56,7 @@ public class Task {
     @Column(name = "claim_token_hash", length = 128)
     private String claimTokenHash;
 
-    /**
-     * #131 方案 B1：這筆任務完成時是否必須經由 complete_task 產生結構化完成
-     * 證據。只在建立當下由 {@link TaskService#createTasks} 決定（一律 true），
-     * 之後不可再變更；既有資料遷移後維持 FALSE，update_task_status 對它們的
-     * 行為不受影響，與 claimTokenHash 是否為 NULL 屬於同一種 per-task 相容模式。
-     */
+    /** 歷史相容欄位，保留原始資料；正式結案一律經完整驗收，不依此欄位放寬。 */
     @Column(name = "require_evidence", nullable = false)
     private boolean requireEvidence = false;
 

@@ -139,8 +139,9 @@ class FrontendStaticAssetsTest {
     @Test
     void appJs_allNetworkCalls_targetRelativeApiPaths() throws Exception {
         String appJs = Files.readString(Path.of("src/main/resources/static/app.js"));
+        String liveUpdates = Files.readString(Path.of("src/main/resources/static/live-updates.js"));
 
-        assertThat(appJs).contains("new EventSource('/api/events')");
+        assertThat(liveUpdates).contains("new EventSource('/api/events')").doesNotContain("http://", "https://");
         assertThat(appJs).doesNotContain("http://", "https://");
 
         Pattern fetchCall = Pattern.compile("fetchJson\\((?:'([^']+)'|`([^`]+)`)");

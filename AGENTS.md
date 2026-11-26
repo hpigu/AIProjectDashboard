@@ -4,7 +4,7 @@
 `http://127.0.0.1:8080/mcp` 提供 Streamable HTTP MCP，並提供唯讀 REST/SSE
 與零建置 Vue 3 前端（完全離線，執行檔與字型皆 vendor 進 repo）。一個服務管理
 所有專案；專案由使用者明示名稱，不做目錄或 git remote 自動偵測。監聽位址
-`BOARD_HOST` 預設 `127.0.0.1`，`/mcp` 目前沒有 server-side 認證，不得改綁公開
+`BOARD_HOST` 預設 `127.0.0.1`，`/mcp` 只有範圍有限的管理憑證與驗收簽章邊界，不得改綁公開
 位址對外暴露；本 repo 也未提供或驗證任何雲端伺服器部署方式（例如 Oracle
 Cloud）。
 
@@ -47,29 +47,49 @@ TODO 的 assignee/claimed_at 必為 NULL，IN_PROGRESS 必有認領者，BLOCKED
 `create_tasks` 以批次內 1-based 序號或既有 task id 指定前置，建立前驗證
 序號範圍、自我依賴與向前依賴。
 
-## 分派模式
+## 分派模式與可信驗收
 
-主 session 擔任 leader，使用事件驅動排程而非同步波次。BACKEND、FRONTEND、TEST、
-INFRA、DOC 各有一把 live-agent 鎖：同角色同時最多一個 agent，每個 agent 只認領
-一件，完成提交與驗證後保持 IN_PROGRESS、回報 leader 並結束，不自行標 DONE 或
-認領下一件。
+主 session 是唯一 leader，依事件驅動排程。角色與專案均不設配額；依平台實際
+session 上限保留 leader 槽，依任務相依、檔案與資源衝突派工，槽位不足時排隊補派。
+同角色可有多個 worker，每個只認領一件，使用 leader 配發且最多 60 字的唯一 assignee。
+leader 合併預留與已認領紀錄避免重派；同專案同 category 的認領握手短暫序列化，等
+實際 taskId 回報再派下一筆。結果與預期不同時停止修改並重新對應工作區。
+保留 CAS、三次重試、claim token 與相依保護；失聯只提示，不自動釋放 claim。
 
-每筆任務從長期 `dev` 建立獨立 `task/<task-id>-<role>` branch/worktree。Leader
-表面驗收通過後以 `--no-ff` 合併 task branch 到 `dev`，成功後才將任務標 DONE；
-相依任務此時才解鎖。任一 agent 結束就重新盤點並填滿空閒角色，不等待其他角色。
-整個 batch 全部完成且無 unresolved BLOCKED 後，既有 reviewer 唯讀審查完整
-`main...dev`；reviewer 只回報，是否建立修正 task 由 leader 決定。Reviewer 無必修
-後才由 leader 以 `--no-ff` 合併 `dev` 到 `main`，不自動 push、部署或重啟服務。
+各專案使用自己的 Git policy（起始分支、整合目標、PR／MR、必要檢查、審查與合併
+權限）；未設定不得猜分支或自動合併。實作、驗收、整合、發布分開記錄。通過後端
+驗收閘門及專案整合要求才 DONE、解鎖相依。未獲授權不得自行 commit、push、PR、
+部署或更新線上角色。工作區、開發埠、DB、log 與 PID 使用 task 或 instance 唯一標記；
+dirty 或失聯工作區保留，接手前盤點 task、版本與最後結果。
+
+需求與驗收必須串起需求來源／版本、條件、案例、實際證據、受測版本與獨立結論。
+先區分已確認規則、待決問題及代理推測；影響行為的未決問題只阻擋相關工作。
+代理 PASSED 是自行聲明，可信證據須由有身分的受控執行器／CI 取得；只用預先核准的
+固定執行方式與隔離環境，不直接執行代理任意 shell 指令。必要項目失敗、未跑、版本
+不符或仍有未決需求不得完成。免驗須理由與人類核准；舊紀錄保留為歷史聲明。
+需求或程式版本變更重查證據適用性，不宣稱測試通過就完全符合需求。
+
+QA 從原始需求、文件與專案規則出發，在隔離環境探索實際畫面及程式，自行整理完整
+業務流程，程式只是線索。流程卡保存於工作專案版本控制並標適用版本；模板見
+[流程卡與 Git policy 範例](docs/project-workflow-template.md)。執行適用正常、錯誤、
+邊界、權限與失敗情境，確認儲存、重新整理、下游使用及禁止請求拒絕，保留可重跑
+步驟與實際紀錄；截圖不能單獨證明正確。QA 不只重跑開發提供的案例，reviewer 獨立
+檢查需求漏驗、測試有效性及安全。Leader 負責協調，人類決定業務歧義、例外與發布。
 
 ## MCP 工具治理與授權
 
-MCP server 目前沒有 caller identity；Claude/Codex 對 worker 的工具白名單只是第一
-階段邊界，不是後端授權，server 必須維持 localhost，未有 server-side 身分驗證前不
-得對外暴露。工具名稱以 server 的 `tools/list`（或 `/api/health` 回傳的 `tools`）為
-準，不得自行發明名稱。
+一般 MCP 工具沒有通用 caller identity。九項管理工具（含 preview）由獨立後端邊界
+預設拒絕：Java 要求至少 32 字元 BOARD_MANAGEMENT_TOKEN 與 leader 專用 Bearer
+header；Workers 以 MANAGEMENT_DEVICE_IDS JSON 陣列比對驗證成功的 deviceId。
+管理憑證與驗收簽署金鑰均不得交給 worker。授權嘗試寫 management_authorization_audit，
+AUTHORIZED_ATTEMPT 不代表業務動作成功；不保存 secret／args。驗收 HMAC 只識別
+授權簽署者，不證明內容真實，也不授權管理工具。可信簽署端隔離於受測程式與開發
+代理。這些有限邊界不是公司 SSO，server 仍維持 localhost，不對外公開。
+詳見 [管理授權](docs/authorization-boundaries.md)與[驗收協定](docs/acceptance-protocol.md)。
+工具名稱以 server tools/list 或 /api/health 為準，client 白名單仍不能代替後端授權。
 
 五個 worker 的白名單只含 `get_role` 與任務生命週期工具
-`claim_next_task`、`block_task`、`complete_task`、`update_task_status`。沒有獨立的
+`claim_next_task`、`block_task`、`report_implementation`、`complete_task`、`update_task_status`。沒有獨立的
 `resume_task`／`release_task`：兩者都用 `update_task_status`（轉為 `IN_PROGRESS`／
 `TODO`）。`reset_task_claim` 是 leader 在確認 worker 遺失 claim token 後才用的
 復原工具，worker 不得取得或用它繞過 token 檢查。
@@ -105,11 +125,11 @@ jar 在主工作區 `target/`。**任何 agent 都不得佔用或寫入這四者
 啟動應用或跑整合測試時一律帶入：
 
 ```bash
-BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-<role>' \
-BOARD_LOG_FILE='./logs/dev-<role>.log' ./mvnw test
+BOARD_PORT=8081 BOARD_DB_URL='jdbc:h2:file:./data/dev-<task-or-instance>' \
+BOARD_LOG_FILE='./logs/dev-<task-or-instance>.log' ./mvnw test
 ```
 
-`<role>` 用自己的角色名（backend/qa/infra…），避免多個 agent 互相覆蓋。
+`<task-or-instance>` 使用 task id 或 instance 唯一標記，不能只用角色名，避免同角色 worker 互相覆蓋。
 `./mvnw test` 會啟動 Spring context 與併發測試，即使不重啟正式看板也會寫入資料庫，
 因此這條規則沒有例外。
 
@@ -124,9 +144,9 @@ BOARD_LOG_FILE='./logs/dev-<role>.log' ./mvnw test
 - 啟動當下就記下確切 PID，之後只用這個 PID 收尾：
 
   ```bash
-  BOARD_PORT=8091 ./mvnw ... & echo $! > /tmp/<role>.pid
+  BOARD_PORT=8091 ./mvnw ... & echo $! > /tmp/<task-or-instance>.pid
   # 清理時
-  kill "$(cat /tmp/<role>.pid)"
+  kill "$(cat /tmp/<task-or-instance>.pid)"
   ```
 
 - 或不確定 PID 時，用自己實際綁定的埠號反查，絕不用行程名稱：

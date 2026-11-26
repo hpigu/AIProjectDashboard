@@ -23,17 +23,11 @@ public interface TaskDependencyRepository extends JpaRepository<TaskDependency, 
 
     void deleteByTaskId(Long taskId);
 
-    /**
-     * 一次查出這批任務各自還在等哪些尚未 DONE 的前置任務。
-     * 沒有未完成前置的任務不會出現在結果中，因此空結果代表全部可認領。
-     * 認領過濾、清單標示與「在等誰」的說明都由這個查詢供應。
-     */
+    /** 批次讀取前置任務，尚未 DONE 的項目先顯示。 */
     @Query("SELECT d.taskId AS taskId, t AS prerequisite FROM TaskDependency d, Task t "
-            + "WHERE d.dependsOnTaskId = t.id "
-            + "AND d.taskId IN :taskIds "
-            + "AND t.status <> 'DONE' "
-            + "ORDER BY d.taskId ASC, t.id ASC")
-    List<UnfinishedPrerequisite> findUnfinishedPrerequisites(@Param("taskIds") List<Long> taskIds);
+            + "WHERE d.dependsOnTaskId = t.id AND d.taskId IN :taskIds "
+            + "ORDER BY d.taskId ASC, CASE WHEN t.status = 'DONE' THEN 1 ELSE 0 END, t.id ASC")
+    List<Prerequisite> findPrerequisitesForTasks(@Param("taskIds") List<Long> taskIds);
 
     @Query("SELECT t.id AS id, t.title AS title, t.status AS status, t.category AS category, "
             + "t.assignee AS assignee FROM TaskDependency d, Task t "
@@ -45,7 +39,7 @@ public interface TaskDependencyRepository extends JpaRepository<TaskDependency, 
             + "WHERE d.taskId = t.id AND d.dependsOnTaskId = :taskId ORDER BY t.id ASC")
     List<RelatedTaskProjection> findDownstreamTasks(@Param("taskId") Long taskId);
 
-    interface UnfinishedPrerequisite {
+    interface Prerequisite {
         Long getTaskId();
 
         Task getPrerequisite();

@@ -5,7 +5,33 @@ and [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-No unreleased user-facing changes.
+## [3.3.0] — 2026-11-26
+
+### Added
+
+- Versioned project Git workflow planning, owner approval, and read-only board summaries.
+- Signed requirement contracts, controlled execution evidence, independent acceptance gates, and management authorization audits for Java and Workers.
+- QA flow-card guidance, browser verification fixtures, recovery tooling, and Workers CI.
+
+### Changed
+
+- Removed per-role and per-project worker quotas while preserving platform capacity, claims, dependencies, and resource conflict checks.
+- Implementation reports no longer imply accepted completion; legacy records remain historical declarations.
+- The board combines rapid updates into a single refresh. If the live connection
+  drops, the board checks for updates periodically and resynchronizes on reconnect.
+- Workers reads fewer rows for project search and uses fewer queries to select a
+  task to claim. Java reads task prerequisites in batches.
+- Pull requests now run browser regressions and packaging checks. Release packages
+  are verified against the same tagged commit across all four supported platforms.
+
+### Fixed
+
+- Archived projects keep their task history and dependency graph, and show tasks
+  as unclaimable until the project is restored.
+- Java startup seeds only shared role defaults and preserves existing instructions.
+  A project named `AgentDashboard` now uses shared defaults when it has no override.
+- The first-task setup guide explains how to configure leader credentials and
+  diagnose authorization errors.
 
 ## [3.2.1] — 2026-08-13
 
@@ -74,7 +100,8 @@ This version was not tagged and has no release assets.
 - Fixed backup retention ordering, Java detection with `JAVA_TOOL_OPTIONS`, paths
   containing spaces, and terminal hangup handling.
 
-[Unreleased]: https://github.com/hpigu/AIProjectDashboard/compare/v3.2.1...HEAD
+[Unreleased]: https://github.com/hpigu/AIProjectDashboard/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/hpigu/AIProjectDashboard/compare/v3.2.1...v3.3.0
 [3.2.1]: https://github.com/hpigu/AIProjectDashboard/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/hpigu/AIProjectDashboard/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/hpigu/AIProjectDashboard/releases/tag/v3.1.0
