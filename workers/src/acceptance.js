@@ -86,7 +86,9 @@ export async function recordAcceptance(s, { actor, payload, signature }) {
     require(text(b,'codeRef') === contract.body.codeRef, '受測程式版本不符');
     if (e.kind === 'RUN') {
       require(actor !== contract.body.implementationActor, '開發代理不能自行簽署執行證據');
-      require(key.runnerProfiles?.includes(text(b,'runnerProfile')), '未核准的執行器');
+      const profile = text(b, 'runnerProfile');
+      require(Array.isArray(key.runnerProfiles) && key.runnerProfiles.every(p => typeof p === 'string' && p.trim())
+        && key.runnerProfiles.includes(profile), '未核准的執行器');
       for (const f of ['caseId','runId','result','artifactUri','artifactSha256','steps','actual','environment']) text(b,f);
       require(/^[a-f0-9]{64}$/.test(b.artifactSha256), '證據必須有 SHA-256');
       require(['PASSED','FAILED','NOT_RUN'].includes(b.result), '未知執行結果'); require(b.environment === 'ISOLATED', '僅接受隔離測試環境');
@@ -99,7 +101,13 @@ export async function recordAcceptance(s, { actor, payload, signature }) {
     else text(b,'ref');
   } else for (const f of ['sessionId','worktree','branch','baseRef','lastSeen','handoff']) text(b,f);
   const eventId = text(e,'eventId'); require(eventId.length <= 100 && !(await s.first('SELECT event_id FROM acceptance_event WHERE event_id=?',eventId)), '重複驗收事件');
-  await s.commit([s.stmt('UPDATE task SET version=version+1 WHERE id=? AND version=?',t.id,t.version), ...s.assertChanged(), s.stmt('INSERT INTO acceptance_event(event_id,project_id,task_id,actor,kind,payload) VALUES(?,?,?,?,?,?)',eventId,t.project_id,t.id,actor,e.kind,payload)]);
+  await s.commit([
+    s.stmt('UPDATE task SET version=version+1 WHERE id=? AND version=?',t.id,t.version),
+    ...s.assertChanged(),
+    s.stmt('INSERT INTO acceptance_event(event_id,project_id,task_id,actor,kind,payload) VALUES(?,?,?,?,?,?)',
+      eventId,t.project_id,t.id,actor,e.kind,payload),
+    s.event('task.acceptance_changed', { projectId: t.project_id, taskId: t.id }),
+  ]);
   return acceptanceSummary(s,t.id);
 }
 export async function assertCompletable(s, taskId, codeRef) {

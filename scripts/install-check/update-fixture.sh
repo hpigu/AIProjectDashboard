@@ -20,14 +20,28 @@ chmod 700 "$root/bin/board"
 # can model a correctly named target artifact without pretending that it is a real release JAR.
 printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in tf) exit 0 ;; xf) mkdir -p META-INF; printf "Main-Class: org.springframework.boot.loader.launch.JarLauncher\n" > META-INF/MANIFEST.MF; printf "build.version=3.1.2\n" > META-INF/build-info.properties ;; *) exit 1 ;; esac' > "$work/bin/jar"
 chmod 700 "$work/bin/jar"
-target="$work/assets/ai-project-board-backend-macos-arm64-3.1.2.jar"
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64|Darwin:aarch64) platform=macos-arm64 ;;
+  Darwin:x86_64|Darwin:amd64) platform=macos-x64 ;;
+  Linux:x86_64|Linux:amd64) platform=linux-x64 ;;
+  *) echo "unsupported host for update fixture: $(uname -s) $(uname -m)" >&2; exit 1 ;;
+esac
+target="$work/assets/ai-project-board-backend-${platform}-3.1.2.jar"
 printf 'fixture target\n' > "$target"
-hash="$(shasum -a 256 "$target" | awk '{print $1}')"
+target_name="$(basename "$target")"
 checksums="$work/assets/ai-project-board-backend-3.1.2-SHA256SUMS.txt"
-printf '%064d  ai-project-board-backend-linux-x64-3.1.2.jar\n' 0 > "$checksums"
-printf '%s  ai-project-board-backend-macos-arm64-3.1.2.jar\n' "$hash" >> "$checksums"
-printf '%064d  ai-project-board-backend-macos-x64-3.1.2.jar\n' 0 >> "$checksums"
-printf '%064d  ai-project-board-backend-windows-x64-3.1.2.zip\n' 0 >> "$checksums"
+for name in \
+  ai-project-board-backend-linux-x64-3.1.2.jar \
+  ai-project-board-backend-macos-arm64-3.1.2.jar \
+  ai-project-board-backend-macos-x64-3.1.2.jar \
+  ai-project-board-backend-windows-x64-3.1.2.zip; do
+  if [ "$name" = "$target_name" ]; then
+    hash="$(shasum -a 256 "$target" | awk '{print $1}')"
+  else
+    hash="$(printf '%064d' 0)"
+  fi
+  printf '%s  %s\n' "$hash" "$name" >> "$checksums"
+done
 
 before_hash="$(shasum -a 256 "$root/data/board.mv.db" | awk '{print $1}')"
 

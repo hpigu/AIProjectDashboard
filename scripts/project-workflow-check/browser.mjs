@@ -32,7 +32,11 @@ const output = mkdtempSync(join(tmpdir(), 'board-workflow-browser-'));
 const hash = value => createHash('sha256').update(value).digest('hex');
 const results = [];
 const record = (name, actual) => { results.push({ name, actual, at: new Date().toISOString() }); console.log(name + ': ' + actual); };
-let chrome, ws, send, evaluate;
+const sharedCdpPort = process.env.BOARD_WORKFLOW_CDP_PORT;
+if (sharedCdpPort !== undefined) {
+  assert.ok(/^[1-9]\d{0,4}$/.test(sharedCdpPort) && Number(sharedCdpPort) <= 65535, 'Invalid fixture CDP port');
+}
+let chrome, target, ws, send, evaluate;
 const network = [], browserErrors = [];
 async function readJson(path) {
   const res = await fetch(baseUrl + path, { signal: AbortSignal.timeout(10000), redirect: 'error' });
@@ -102,14 +106,17 @@ try {
   assert.equal(Object.values(board.columns).flat().length, 0, 'Fixture has no tasks');
   const servedApp = await (await fetch(baseUrl + '/app.js')).text();
   assert.equal(hash(servedApp), hash(readFileSync(join(root, 'src/main/resources/static/app.js'))), 'Jar must serve current front-end code');
-  const executable = process.env.CHROME_BIN || '/Users/daniel/Library/Caches/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell';
-  assert.ok(existsSync(executable), 'Set CHROME_BIN to an installed Chrome/Chromium executable');
-  chrome = spawn(executable, ['--headless=new', `--user-data-dir=${join(output, 'chrome')}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--no-proxy-server', 'about:blank'], { env: { PATH: process.env.PATH, HOME: output, TMPDIR: tmpdir() }, stdio: 'ignore' });
-  const portFile = join(output, 'chrome/DevToolsActivePort');
-  for (let i = 0; i < 150 && !existsSync(portFile); i++) await sleep(100);
-  assert.ok(existsSync(portFile), 'Browser started');
-  const port = readFileSync(portFile, 'utf8').split('\n')[0];
-  const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
+  let port = sharedCdpPort;
+  if (port === undefined) {
+    const executable = process.env.CHROME_BIN || '/Users/daniel/Library/Caches/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell';
+    assert.ok(existsSync(executable), 'Set CHROME_BIN to an installed Chrome/Chromium executable');
+    chrome = spawn(executable, ['--headless=new', `--user-data-dir=${join(output, 'chrome')}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--no-proxy-server', 'about:blank'], { env: { PATH: process.env.PATH, HOME: output, TMPDIR: tmpdir() }, stdio: 'ignore' });
+    const portFile = join(output, 'chrome/DevToolsActivePort');
+    for (let i = 0; i < 150 && !existsSync(portFile); i++) await sleep(100);
+    assert.ok(existsSync(portFile), 'Browser started');
+    port = readFileSync(portFile, 'utf8').split('\n')[0];
+  }
+  target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT', signal: AbortSignal.timeout(5000) })).json();
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
   let sequence = 0; const pending = new Map();
@@ -138,11 +145,12 @@ try {
   await send('Browser.grantPermissions', { origin: baseUrl, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] });
   await send('Page.addScriptToEvaluateOnNewDocument', { source: "localStorage.setItem('board.locale','zh-TW');" });
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
-  await send('Page.navigate', { url: baseUrl });
+  await send('Page.navigate', { url: baseUrl + '/index.html' });
   await until("!!document.querySelector('.project-row')");
   const rowIndex = await evaluate(`Array.from(document.querySelectorAll('.project-row')).findIndex(el=>el.textContent.includes(${JSON.stringify(projectName)}))`);
   assert.ok(rowIndex >= 0); await trueInputClick(`.project-row:nth-child(${rowIndex + 1})`);
   await until("document.querySelector('.workflow-panel')?.textContent.includes('未設定')");
+  await trueInputClick('.workflow-panel:not([open]) > summary');
   assert.ok(await evaluate("document.querySelector('.empty-state')?.textContent.includes('沒有任務') || !document.querySelector('.task-card')"));
   await trueInputClick('.workflow-prompt button');
   await until("document.querySelector('.workflow-panel')?.textContent.includes('已複製')");
@@ -181,7 +189,9 @@ try {
   current = await fixtureApproval(); assert.equal(current.active.confirmedBy, owner.actor);
   await until("document.querySelector('.workflow-panel')?.textContent.includes('已核准') && document.querySelector('.workflow-panel')?.textContent.includes('workflow-owner') && !document.querySelector('.workflow-panel')?.textContent.includes('待確認草稿')");
   await send('Page.reload');
-  await until("document.querySelector('.workflow-panel')?.textContent.includes('workflow-owner')");
+  await until("document.querySelector('.workflow-panel:not([open]) > summary')");
+  await trueInputClick('.workflow-panel:not([open]) > summary');
+  await until("document.querySelector('.workflow-panel[open]')?.innerText.includes('workflow-owner')");
   const displayed = await evaluate("document.querySelector('.workflow-panel').textContent");
   for (const value of Object.values(current.active.gitPolicy)) assert.ok(displayed.includes(value), 'Approved field displayed: ' + value);
   assert.equal((await summary()).revision, current.revision, 'Reading settings reuses active version without re-entering fields');
@@ -202,7 +212,7 @@ try {
   assert.equal(denied.status, 403); assert.equal((await summary()).revision, current.revision);
   record('Authorization / read-only boundary', 'Browser endpoint POST returns 405; prepare without management token returns 403 with unchanged revision');
   await send('Network.setBlockedURLs', { urls: [`*://*/api/projects/${projectId}/workflow`] });
-  await trueInputClick('.workflow-heading button');
+  await trueInputClick('.workflow-body > button');
   await until("document.querySelector('.workflow-panel')?.textContent.includes('設定讀取失敗')");
   await send('Network.setBlockedURLs', { urls: [] });
   await trueInputClick('.workflow-panel [role="alert"] button');
@@ -222,5 +232,8 @@ try {
   throw error;
 } finally {
   ws?.close();
+  if (sharedCdpPort && target?.id) {
+    await fetch(`http://127.0.0.1:${sharedCdpPort}/json/close/${target.id}`, { signal: AbortSignal.timeout(5000) }).catch(() => {});
+  }
   if (chrome?.pid && chrome.exitCode === null) chrome.kill('SIGTERM'); // Only this browser's exact child PID.
 }

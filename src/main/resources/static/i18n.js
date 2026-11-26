@@ -88,6 +88,7 @@
       conn: {
         connected: '連線中',
         reconnecting: '重新連線中',
+        polling: '即時連線中斷，定期重新整理',
       },
       notify: {
         blocked: '阻塞通知：已封鎖',
@@ -116,6 +117,7 @@
       },
       error: {
         apiError: 'API 錯誤 {status}：{url}',
+        apiTimeout: '看板回應逾時，請稍後再試。',
       },
       projectStatus: {
         ACTIVE: '啟用中',
@@ -319,6 +321,7 @@
       conn: {
         connected: 'Connected',
         reconnecting: 'Reconnecting',
+        polling: 'Live connection lost, refreshing periodically',
       },
       notify: {
         blocked: 'BLOCKED alerts: blocked',
@@ -347,6 +350,7 @@
       },
       error: {
         apiError: 'API error {status}: {url}',
+        apiTimeout: 'The board took too long to respond. Please try again.',
       },
       projectStatus: {
         ACTIVE: 'Active',

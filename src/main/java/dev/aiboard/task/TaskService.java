@@ -328,20 +328,19 @@ public class TaskService {
             // 同一份查詢結果也用來說明「在等誰」，不必為此再查一次。
             Map<Long, List<TaskDto>> waiting = getUnfinishedPrerequisites(
                     candidates.stream().map(Task::getId).toList());
-            Map<Long, List<String>> requirementIssues = new java.util.HashMap<>();
-            if (acceptance != null) for (Task t : candidates) {
-                var issues=acceptance.workBlockers(t.getId()); if(!issues.isEmpty()) requirementIssues.put(t.getId(),issues);
+            List<BlockedCandidate> blocked = new ArrayList<>();
+            Task candidate = null;
+            for (Task task : candidates) {
+                List<TaskDto> prerequisites = waiting.getOrDefault(task.getId(), List.of());
+                List<String> issues = acceptance == null ? List.of() : acceptance.workBlockers(task.getId());
+                if (prerequisites.isEmpty() && issues.isEmpty()) {
+                    candidate = task;
+                    break;
+                }
+                blocked.add(new BlockedCandidate(toDto(task), prerequisites, issues));
             }
-            Task candidate = candidates.stream()
-                    .filter(t -> !waiting.containsKey(t.getId()) && !requirementIssues.containsKey(t.getId()))
-                    .findFirst()
-                    .orElse(null);
             if (candidate == null) {
-                return ClaimNextTaskResult.allBlocked(project.get(), category.name(),
-                        candidates.stream()
-                                .map(t -> new BlockedCandidate(toDto(t),
-                                        waiting.getOrDefault(t.getId(), List.of()), requirementIssues.getOrDefault(t.getId(), List.of())))
-                                .toList());
+                return ClaimNextTaskResult.allBlocked(project.get(), category.name(), blocked);
             }
 
             LocalDateTime claimedAt = LocalDateTime.now();
@@ -349,10 +348,11 @@ public class TaskService {
             // task_log 的 note 也只寫認領者名稱，原文不會被任何地方持久化。
             String claimToken = claimTokenService.generateToken();
             String claimTokenHash = claimTokenService.hash(claimToken);
-            int updated = taskRepository.claimIfTodo(candidate.getId(), assignee, claimedAt, claimTokenHash);
+            Long candidateId = candidate.getId();
+            int updated = taskRepository.claimIfTodo(candidateId, assignee, claimedAt, claimTokenHash);
             if (updated == 1) {
-                Task claimed = taskRepository.findById(candidate.getId())
-                        .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidate.getId()));
+                Task claimed = taskRepository.findById(candidateId)
+                        .orElseThrow(() -> new BoardException("認領後找不到任務：#" + candidateId));
                 taskLogRepository.save(new TaskLog(claimed.getId(), TaskStatus.TODO.name(),
                         TaskStatus.IN_PROGRESS.name(), "認領者：" + assignee));
                 eventPublisher.publish(BoardEvent.taskStatusChanged(
@@ -387,24 +387,21 @@ public class TaskService {
     }
 
     /**
-     * 一次查出多個任務各自還在等哪些尚未完成的前置任務。
-     * 沒有未完成前置的任務不會出現在結果中，因此空 Map 代表全部可認領。
+     * 批次查出各任務尚未完成或未通過可信驗收的前置任務。
      */
     public Map<Long, List<TaskDto>> getUnfinishedPrerequisites(List<Long> taskIds) {
         if (taskIds == null || taskIds.isEmpty()) {
             return Map.of();
         }
         Map<Long, List<TaskDto>> waiting = new LinkedHashMap<>();
-        for (var row : taskDependencyRepository.findUnfinishedPrerequisites(taskIds)) {
-            waiting.computeIfAbsent(row.getTaskId(), k -> new ArrayList<>())
-                    .add(toDto(row.getPrerequisite()));
-        }
-        if(acceptance != null) {
-            var checked=new java.util.HashMap<Long,Boolean>();
-            for(var dep:taskDependencyRepository.findByTaskIdIn(taskIds)) {
-                Task prerequisite=taskRepository.findById(dep.getDependsOnTaskId()).orElseThrow();
-                if(prerequisite.getStatus()==TaskStatus.DONE && !checked.computeIfAbsent(prerequisite.getId(), id->acceptance.summary(id).canClose()))
-                    waiting.computeIfAbsent(dep.getTaskId(), k->new ArrayList<>()).add(toDto(prerequisite));
+        Map<Long, Boolean> canClose = new java.util.HashMap<>();
+        for (var row : taskDependencyRepository.findPrerequisitesForTasks(taskIds)) {
+            Task prerequisite = row.getPrerequisite();
+            boolean completed = prerequisite.getStatus() == TaskStatus.DONE
+                    && (acceptance == null || canClose.computeIfAbsent(
+                            prerequisite.getId(), id -> acceptance.summary(id).canClose()));
+            if (!completed) {
+                waiting.computeIfAbsent(row.getTaskId(), k -> new ArrayList<>()).add(toDto(prerequisite));
             }
         }
         return waiting;

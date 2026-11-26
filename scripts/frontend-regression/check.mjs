@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 前端手動回歸驗證工具（#140）。純 Node.js 內建模組，不使用任何 npm 套件，
-// 不進 Maven 生命週期、不是 CI 必要條件。見同目錄 README.md。
+// 前端瀏覽器回歸驗證（#140）。可在本機或 CI 執行，只使用 Node.js 內建模組。
+// 見同目錄 README.md。
 //
 // 用法：
 //   node scripts/frontend-regression/check.mjs --base-url http://127.0.0.1:8091 [--cdp-port 9222]
@@ -104,6 +104,15 @@ async function waitForEvent(eventLog, method, timeoutMs) {
     await sleep(50);
   }
   throw new Error(`等待事件逾時: ${method}`);
+}
+
+async function waitForPage(session, expression, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await session.eval(expression)) return;
+    await sleep(50);
+  }
+  throw new Error('等待畫面更新逾時: ' + expression);
 }
 
 const results = [];
@@ -226,8 +235,11 @@ async function checkManualSwitchUpdatesHtmlLangAndPersists(session) {
 async function checkUnsupportedStoredLocaleFallsBackToDefault(session) {
   await session.setViewport(1440, 900);
   await session.navigate(`${baseUrl}/index.html`);
-  // 塞入一個不支援的 locale（例如舊版本存過的值、或人為竄改），reload 後
-  // detectLocale() 必須忽略它並 fallback 到 DEFAULT_LOCALE（'zh-TW'）。
+  // 讓儲存偏好與瀏覽器語言都不受支援，才會落到預設語系。
+  await session.send('Emulation.setUserAgentOverride', {
+    userAgent: await session.eval('navigator.userAgent'),
+    acceptLanguage: 'fr-FR,fr',
+  });
   await session.eval(`window.localStorage.setItem('board.locale', 'fr-FR')`);
   await session.navigate(`${baseUrl}/index.html`);
   const locale = await session.eval('window.__i18n.state.locale');
@@ -441,9 +453,13 @@ async function checkMultipleWorkers(session) {
     const originalFetch = window.fetch;
     const tasks = [1, 2, 3].map(id => ({ id, title: 'Backend ' + id, category: 'BACKEND', assignee: 'backend-' + id, waitingFor: [] }));
     window.testBoard = { name: 'Worker fixture', columns: { TODO: [], IN_PROGRESS: tasks, BLOCKED: [], DONE: [] } };
+    window.testBoardReads = 0;
     window.fetch = (url, options) => {
       const path = String(url).split('?')[0];
-      if (path === '/api/projects/999/board') return Promise.resolve(new Response(JSON.stringify(window.testBoard), { headers: { 'Content-Type': 'application/json' } }));
+      if (path === '/api/projects/999/board') {
+        window.testBoardReads++;
+        return Promise.resolve(Response.json(window.testBoard));
+      }
       if (path === '/api/projects') return Promise.resolve(new Response(JSON.stringify([{ id: 999, name: 'Worker fixture', status: 'ACTIVE', total: 3, counts: { TODO: 0, IN_PROGRESS: 3, BLOCKED: 0, DONE: 0 } }]), { headers: { 'Content-Type': 'application/json' } }));
       return originalFetch(url, options);
     };
@@ -486,7 +502,64 @@ async function checkMultipleWorkers(session) {
     await sleep(1200);
     const restored = await snapshot();
     if (JSON.stringify(restored.cards.map(c => c.id).sort()) !== JSON.stringify(expected) || restored.progress !== '0/3' || restored.counts[1] !== '3' || restored.counts[2] !== '0') throw new Error('恢復後卡片或統計不正確: ' + JSON.stringify(restored));
+    const beforeBurst = await session.eval('window.testBoardReads');
+    await session.eval(`(() => {
+      window.testBoard.columns.IN_PROGRESS[0].title = 'Updated through SSE';
+      const data = JSON.stringify({ projectId: 999, taskId: 1 });
+      for (const type of ['tasks.created', 'task.updated', 'task.updated']) {
+        window.testEvents.dispatchEvent(new MessageEvent(type, { data }));
+      }
+    })()`);
+    await waitForPage(session, "document.body.textContent.includes('Updated through SSE')");
+    const afterBurst = await session.eval('window.testBoardReads');
+    if (afterBurst - beforeBurst !== 1) throw new Error('三個連續事件應合併成一個看板查詢');
   } finally {
+    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+}
+
+async function checkSseRecovery(session) {
+  const source = `(() => {
+    const originalFetch = window.fetch;
+    const NativeEventSource = window.EventSource;
+    window.testProjectName = 'Before disconnect';
+    window.projectRequests = [];
+    window.EventSource = class extends NativeEventSource {
+      constructor(url) {
+        super(url);
+        this.addEventListener('open', () => { window.testProjectName = 'After SSE reconnect'; });
+      }
+    };
+    window.fetch = (url, options) => {
+      if (!String(url).startsWith('/api/projects?')) return originalFetch(url, options);
+      window.projectRequests.push(url);
+      return Promise.resolve(Response.json([{ id: 999, status: 'ACTIVE', name: window.testProjectName,
+        total: 1, counts: { TODO: 1, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 } }]));
+    };
+  })();`;
+  const { identifier } = await session.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  const nameIs = value => `document.querySelector('.project-name')?.textContent.trim() === ${JSON.stringify(value)}`;
+  const statusIs = key => `document.querySelector('.conn-status')?.innerText.trim() === window.__i18n.t('conn.${key}')`;
+  try {
+    await session.send('Page.bringToFront');
+    await session.setViewport(375, 812);
+    await session.send('Network.setBlockedURLs', { urls: [new URL('/api/events', baseUrl).href] });
+    await session.navigate(`${baseUrl}/index.html`);
+    await waitForPage(session, nameIs('Before disconnect'));
+    const initial = await session.eval('window.projectRequests');
+    if (initial.length !== 1 || !initial[0].includes('status=ALL')) throw new Error('預設專案清單應共用一次初始查詢');
+    await session.eval("window.testProjectName = 'Updated while disconnected'");
+    await waitForPage(session, statusIs('polling'), 22000);
+    await waitForPage(session, nameIs('Updated while disconnected'));
+    if (await session.eval('document.documentElement.scrollWidth > document.documentElement.clientWidth')) {
+      throw new Error('輪詢狀態在行動尺寸造成水平溢出');
+    }
+    await session.send('Network.setBlockedURLs', { urls: [] });
+    await session.eval("window.dispatchEvent(new Event('online'))");
+    await waitForPage(session, statusIs('connected'), 20000);
+    await waitForPage(session, nameIs('After SSE reconnect'));
+  } finally {
+    await session.send('Network.setBlockedURLs', { urls: [] });
     await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
   }
 }
@@ -630,7 +703,8 @@ async function main() {
   console.log(`目標: ${baseUrl}（CDP port ${cdpPort}）\n`);
   const session = await newCdpSession(cdpPort);
   try {
-    await check('多 Worker 顯示、篩選與狀態事件', () => checkMultipleWorkers(session));
+    await check('多 Worker 顯示、篩選與事件合併', () => checkMultipleWorkers(session));
+    await check('SSE 中斷時定期更新，重連後重新同步', () => checkSseRecovery(session));
     await check('重連、封存與還原刷新專案清單', () => checkProjectListReconnect(session));
     await check('任務編輯刷新看板、相依圖與已開啟的詳情', () => checkTaskEditRefreshesBoard(session));
     await check('延遲的狀態事件不會重複計算阻塞數', () => checkDelayedStatusDoesNotDuplicateCounts(session));

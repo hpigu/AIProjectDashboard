@@ -81,6 +81,27 @@ test("projects deduplicate full names case-insensitively and seeded full roles p
   assert.equal(await s.latestEventId(), 1);
   db.sql.close();
 });
+test("project search matches literal normalized prefixes and aggregates selected projects", async (t) => {
+  const { db, s } = setup();
+  t.after(() => db.sql.close());
+  const create = async (name) => (await s.execute("create_project", { name })).project.id;
+  const archived = await create("看板 Queue_% Archived");
+  const active = await create("看板 Queue_% Active");
+  const empty = await create("看板 Queue_% Empty");
+  const excluded = await create("看板 Queue_X Different");
+  await tasks(s, archived, [{ title: "archived task" }]);
+  await tasks(s, active, [{ title: "active task" }]);
+  await tasks(s, excluded, [{ title: "different task" }, { title: "another task" }]);
+  await s.execute("archive_project", { projectName: "看板 Queue_% Archived", reason: "fixture" });
+
+  const find = (status, q = "  看板 QUEUE_%  ") => s.listProjects(new URLSearchParams({ status, q, sort: "NAME" }));
+  const matching = await find("ACTIVE");
+  assert.deepEqual(matching.map(row => [row.id, row.total, row.counts.TODO]), [[active, 1, 1], [empty, 0, 0]]);
+  assert.deepEqual((await find("ARCHIVED")).map(row => row.id), [archived]);
+  assert.deepEqual((await find("ALL")).map(row => row.id), [active, archived, empty]);
+  assert.deepEqual(await find("ALL", "not a match"), []);
+  assert.deepEqual(await s.listProjects(new URLSearchParams({ status: "ALL", q: "看板 Queue_%", blocked: "true" })), []);
+});
 test("batch validation is atomic, enforces earlier indexes/same project, 50 tasks and dependency skip", async () => {
   const { db, s } = setup();
   const p = await project(s);
@@ -402,6 +423,22 @@ test('handoff to a different implementation actor invalidates prior acceptance e
  const summary=await s.execute('get_acceptance',{taskId:c.task.id});
  assert.equal(summary.canClose,false); assert.ok(summary.blockers.some(b=>b.includes('認領者與契約原作者不符')));
  await assert.rejects(complete(s,replacement,{commitRef:CODE_REF}),/不能結案/); db.sql.close();
+});
+
+test('signed run requires a well-formed allowlist of exact runner profile names', async () => {
+  const { s, db } = setup(), p = await project(s);
+  await tasks(s, p, [{ title: 'profile check', category: 'BACKEND' }]);
+  const claimed = await claim(s);
+  const { send, summary } = await attest((name, args) => s.execute(name, args), claimed.task);
+  const run = summary.events.find(event => event.kind === 'RUN').body;
+  for (const profiles of ['isolated-browser', { name: 'isolated-browser' }, ['isolated-browser', 1], ['isolated-browser', ' ']]) {
+    const config = structuredClone(authorities);
+    config['fixture-runner'].runnerProfiles = profiles;
+    s.env = { BOARD_ACCEPTANCE_AUTHORITIES: JSON.stringify(config) };
+    await assert.rejects(send('fixture-runner', 'RUN', run), /未核准的執行器/);
+  }
+  assert.equal((await s.execute('get_acceptance', { taskId: claimed.task.id })).revision, summary.revision);
+  db.sql.close();
 });
 
 test('mutable code refs and shared signing secrets are rejected; task field delimiters cannot collide',async()=>{

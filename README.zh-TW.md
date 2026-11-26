@@ -224,6 +224,7 @@ BOARD_LOG_FILE='./logs/dev-local.log' \
 ```
 
 本 repo 的 agent 開發規則見 [`AGENTS.md`](AGENTS.md)。
+專案結構、效能基準與腳本評估見 [工程評估](docs/engineering-assessment.md)。
 
 ## License
 

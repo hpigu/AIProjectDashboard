@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <h2>慢客戶端的處理：踢掉，而不是默默丟事件</h2>
  * 每個客戶端有自己的有界佇列。佇列滿代表它已經跟不上，此時<b>結束該連線</b>而不是
  * 丟棄事件——前端在 SSE 斷線重連後本來就會整批重抓（見 {@code app.js} 的
- * {@code connectSse}），踢掉它反而讓它自我修復到正確狀態；默默丟事件則會讓畫面
+ * {@code live-updates.js}），關閉連線後瀏覽器就能重新同步；默默丟事件則會讓畫面
  * 停在一個沒人知道是錯的狀態。
  *
  * <p>每個客戶端同時間只會有一個抽取任務在跑（{@code draining} 旗標），因此事件
