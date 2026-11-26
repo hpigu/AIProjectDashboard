@@ -425,6 +425,22 @@ test('handoff to a different implementation actor invalidates prior acceptance e
  await assert.rejects(complete(s,replacement,{commitRef:CODE_REF}),/不能結案/); db.sql.close();
 });
 
+test('signed run requires a well-formed allowlist of exact runner profile names', async () => {
+  const { s, db } = setup(), p = await project(s);
+  await tasks(s, p, [{ title: 'profile check', category: 'BACKEND' }]);
+  const claimed = await claim(s);
+  const { send, summary } = await attest((name, args) => s.execute(name, args), claimed.task);
+  const run = summary.events.find(event => event.kind === 'RUN').body;
+  for (const profiles of ['isolated-browser', { name: 'isolated-browser' }, ['isolated-browser', 1], ['isolated-browser', ' ']]) {
+    const config = structuredClone(authorities);
+    config['fixture-runner'].runnerProfiles = profiles;
+    s.env = { BOARD_ACCEPTANCE_AUTHORITIES: JSON.stringify(config) };
+    await assert.rejects(send('fixture-runner', 'RUN', run), /未核准的執行器/);
+  }
+  assert.equal((await s.execute('get_acceptance', { taskId: claimed.task.id })).revision, summary.revision);
+  db.sql.close();
+});
+
 test('mutable code refs and shared signing secrets are rejected; task field delimiters cannot collide',async()=>{
  const {s,db}=setup(),p=await project(s); await tasks(s,p,[{title:'a\nb',description:'c',category:'BACKEND'}]); const c=await claim(s);
  const fixture=await attest((n,a)=>s.execute(n,a),c.task);

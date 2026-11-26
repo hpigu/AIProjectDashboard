@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile, chmod, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, chmod, symlink, link, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -170,4 +170,13 @@ test('repo 外 parent symlink 指向 repo 內的 0600 憑證仍拒絕', async t 
   const parentLink = join(outside, 'indirect-owner');
   await symlink(inside, parentLink, 'dir');
   await assert.rejects(loadCredentials(join(parentLink, 'owner.json')), error => /實際位置必須放在 repo 外/.test(error.message) && !error.message.includes(secret));
+});
+
+test('owner 憑證有其他硬連結時，讀取內容前即拒絕', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'board-owner-links-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const credential = join(directory, 'owner.json');
+  await writeFile(credential, '{}', { mode: 0o600 });
+  await link(credential, join(directory, 'alias.json'));
+  await assert.rejects(loadCredentials(credential), /硬連結/);
 });

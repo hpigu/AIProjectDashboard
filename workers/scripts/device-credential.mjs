@@ -2,6 +2,7 @@
 // Apple security.c: non-TTY -i reads stdin without echo; never enable -v or a PTY.
 import { spawn } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
+import { fstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -107,7 +108,10 @@ export async function main(argv, { store = createCredentialStore(), stdout = pro
   }
   if (operation === 'headers' && rest.length === 0) {
     // Credentials may only flow to a capturing transport helper, never a terminal.
-    if (stdout.isTTY) throw new Error('Headers must be consumed by a private pipe, not displayed in a terminal.');
+    const destination = Number.isInteger(stdout.fd) && fstatSync(stdout.fd);
+    if (stdout.isTTY || !(destination && (destination.isFIFO() || destination.isSocket()))) {
+      throw new Error('Headers must be consumed by a private pipe.');
+    }
     stdout.write(`${await store.headers(service, account)}\n`);
     return 0;
   }

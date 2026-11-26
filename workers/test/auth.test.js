@@ -84,3 +84,13 @@ test('machine bearer hashes identify devices, rotate/revoke immediately, and nev
   await assert.rejects(() => auth(machine(token), {}, 'mcp'), { status: 503 });
   await assert.rejects(() => auth(machine(token), { MACHINE_TOKEN_HASHES: '{"device":"invalid"}' }, 'mcp'), { status: 503 });
 });
+
+test('duplicate device hashes invalidate the configuration regardless of device order', async () => {
+  const auth = createAuthenticator();
+  const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+  const hash = await tokenHash(token);
+  const req = new Request('https://mcp.example.com/mcp', { headers: { Authorization: `Bearer ${token}` } });
+  for (const devices of [{ worker: hash, leader: hash }, { leader: hash, worker: hash }]) {
+    await assert.rejects(() => auth(req, { MACHINE_TOKEN_HASHES: JSON.stringify(devices) }, 'mcp'), { status: 503 });
+  }
+});
