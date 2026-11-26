@@ -39,6 +39,7 @@ export async function loadCredentials(path) {
     file = await open(actualPath, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = await file.stat();
     requireValue(stat.isFile() && (stat.mode & 0o777) === 0o600 && stat.size <= 32768, '憑證必須是 mode 0600 一般檔案（最多 32 KiB）');
+    requireValue(stat.nlink === 1, 'owner 憑證檔不能有其他硬連結');
     requireValue(typeof process.getuid !== 'function' || stat.uid === process.getuid(), '憑證擁有者必須是目前操作者');
     const config = JSON.parse(await file.readFile('utf8'));
     requireValue(object(config) && text(config.actor) && text(config.secret) && config.secret.length >= 32, '憑證須含 actor 與至少 32 字元 secret');
